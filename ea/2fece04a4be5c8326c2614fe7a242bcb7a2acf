@@ -1,0 +1,19 @@
+src/cmd/try_cmd.rs
+  s_2b89eaf48e0bf9::t_6c802f11e469ce 126-130,469-472
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "ea2fece04a4be5c8326c2614fe7a242bcb7a2acf",
+  "prompts": {},
+  "sessions": {
+    "s_2b89eaf48e0bf9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0c938dcd-4797-4f21-84dc-089f6a387dca",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}
