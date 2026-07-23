@@ -1,0 +1,35 @@
+tests/doctor_test.rs
+  s_2b89eaf48e0bf9::t_57f395ce54f30a 125
+  s_2b89eaf48e0bf9::t_146014e3ea7220 166
+  s_2b89eaf48e0bf9::t_62eaf414c377b6 197
+  s_2b89eaf48e0bf9::t_74575c0d414d8d 499
+  s_2b89eaf48e0bf9::t_854cbc4991c000 100
+  s_2b89eaf48e0bf9::t_e98fa0637b10ce 429-437
+  s_2b89eaf48e0bf9::t_8c9e3271e2a743 228,276,342,379,414,457
+  s_2b89eaf48e0bf9::t_d361690a230e44 520-522
+src/cmd/doctor.rs
+  s_2b89eaf48e0bf9::t_d745ae26d40d1d 1649
+  s_2b89eaf48e0bf9::t_a27a21eb9feecb 2140
+  s_2b89eaf48e0bf9::t_f1282eb40d190f 1665,1673
+  s_2b89eaf48e0bf9::t_b0c2d68497cb81 1521,1539
+  s_2b89eaf48e0bf9::t_80d593e19429c0 1702,1767,1837,1923
+  s_2b89eaf48e0bf9::t_e6d55f9386c664 1944-1952
+  s_2b89eaf48e0bf9::t_8fe2f7f511aa46 1623,1967,2044-2046,2086-2088,2108,2148,2192
+  s_2b89eaf48e0bf9::t_c96d8354da3758 1615
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "e776220270b64fb6061ce410ffd5982c747e65e0",
+  "prompts": {},
+  "sessions": {
+    "s_2b89eaf48e0bf9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0c938dcd-4797-4f21-84dc-089f6a387dca",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}
