@@ -116,6 +116,8 @@ Checks run in order below. Implementation should call existing validators (`NuPa
 |----|----------|-----------|
 | `nu.binary.missing_on_path` | `error` | Nu not on PATH and not under `$NUMAN_ROOT/tools/nushell/` → fix: `numan setup nu` |
 | `nu.binary.found_off_path` | `warn` | Nu exists in a known install root (e.g. `~/.cargo/bin`, `%LOCALAPPDATA%\Programs\nushell`) but not on PATH → fix: `numan setup nu --use-existing <path> --yes` |
+| `nu.path.version` | `info` | PATH-only Nu version (`PATH Nu: 0.114.1`), `PATH Nu: not found`, or `PATH Nu: found at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Does not treat managed Nu as PATH. Report-only (no `--fix`). |
+| `nu.managed.version` | `info` | Managed binary under `$NUMAN_ROOT/tools/nushell/` with version, `Managed Nu: not installed`, or `Managed Nu: present at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Report-only (no `--fix`). |
 | `nu_paths.missing` | `error` | `paths.json` absent → fix: `numan init` |
 | `nu_paths.drift` | `error` | `NuPaths::validate_drift()` fails → fix: `numan init --refresh` |
 | `nu_paths.vendor_drift` | `error` | `validate_vendor_drift()` fails when `data_dir` cached → fix: `numan init --refresh` |
@@ -163,6 +165,7 @@ No re-hash or revision recompute in v1 (too expensive for doctor).
 |----|----------|-----------|
 | `registry.none` | `warn` | `config.toml` has no registries → fix: `numan init` before first init; `numan doctor --fix` after init (production trust root); `numan registry add …` for custom/placeholder builds |
 | `registry.index_missing` | `info` | Enabled registry has no cached index under `registries/` → fix: `numan registry sync` |
+| `registry.trust_root` | `info` | Enabled `official` registry: reports built-in key id (e.g. `official-2026-07-01`). Placeholder builds note that the key is not production. Report-only (no `--fix`). |
 
 ### 7. nupm coexistence (optional section)
 

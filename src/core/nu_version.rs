@@ -12,14 +12,19 @@ pub struct NuVersion {
 
 impl NuVersion {
     pub fn detect() -> Result<Self> {
-        let output = Command::new("nu")
+        Self::from_binary(Path::new("nu"))
+    }
+
+    /// Run `path --version` and parse the Nu version string.
+    pub fn from_binary(path: &Path) -> Result<Self> {
+        let output = Command::new(path)
             .arg("--version")
             .output()
-            .map_err(|e| anyhow::anyhow!("Failed to run 'nu --version': {e}"))?;
+            .map_err(|e| anyhow::anyhow!("Failed to run '{} --version': {e}", path.display()))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("'nu --version' failed: {stderr}");
+            bail!("'{} --version' failed: {stderr}", path.display());
         }
 
         let stdout = String::from_utf8(output.stdout)?;
@@ -197,5 +202,15 @@ mod tests {
         let v = NuVersion::parse("0.113.1").unwrap();
         assert!(v.matches_constraint("=0.113.x"));
         assert!(!v.matches_constraint("=0.112.x"));
+    }
+
+    #[test]
+    fn from_binary_errors_when_executable_missing() {
+        let err =
+            NuVersion::from_binary(Path::new("/nonexistent/numan-test-nu-binary")).unwrap_err();
+        assert!(
+            err.to_string().contains("--version"),
+            "unexpected error: {err}"
+        );
     }
 }

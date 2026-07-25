@@ -97,7 +97,7 @@ fn doctor_report_only_leaves_root_unchanged() {
         json: false,
         nupm_home: None,
     };
-    execute_with_options(&args, root, DoctorOptions::default()).unwrap();
+    execute_with_options(&args, root, test_doctor_options()).unwrap();
     assert!(!root.join("nu_state/paths.json").exists());
 }
 
@@ -121,12 +121,8 @@ fn doctor_fix_auto_creates_layout_without_network() {
         &args,
         root,
         DoctorOptions {
-            skip_network: true,
             init_repair: Some(fake_init),
-            activate_repair: None,
-            deactivate_repair: None,
-            nu_setup_repair: None,
-            discover_off_path: None,
+            ..test_doctor_options()
         },
     )
     .unwrap();
@@ -167,7 +163,7 @@ fn doctor_reports_pending_plugin_journal() {
         json: false,
         nupm_home: None,
     };
-    let report = run_checks_with_options(&args, root, &DoctorOptions::default()).unwrap();
+    let report = run_checks_with_options(&args, root, &test_doctor_options()).unwrap();
     assert!(report
         .findings
         .iter()
@@ -198,7 +194,7 @@ fn doctor_detects_nu_path_drift() {
         json: false,
         nupm_home: None,
     };
-    let report = run_checks_with_options(&args, root, &DoctorOptions::default()).unwrap();
+    let report = run_checks_with_options(&args, root, &test_doctor_options()).unwrap();
     assert!(report
         .findings
         .iter()
@@ -229,7 +225,7 @@ fn doctor_reports_off_path_nu_without_download() {
         root,
         &DoctorOptions {
             discover_off_path: Some(discover_off_path_test),
-            ..DoctorOptions::default()
+            ..test_doctor_options()
         },
     )
     .unwrap();
@@ -277,7 +273,7 @@ fn doctor_fix_registers_off_path_nu_without_network() {
             skip_network: true,
             nu_setup_repair: Some(nu_setup_repair_test),
             discover_off_path: Some(discover_off_path_test),
-            ..DoctorOptions::default()
+            ..test_doctor_options()
         },
     )
     .unwrap();
@@ -343,7 +339,7 @@ fn doctor_fix_reconciles_pending_plugin_deactivate_journal() {
             skip_network: true,
             init_repair: Some(fake_init),
             deactivate_repair: Some(fake_deactivate_repair),
-            ..DoctorOptions::default()
+            ..test_doctor_options()
         },
     )
     .unwrap();
@@ -380,7 +376,7 @@ fn doctor_fix_stale_plugin_deactivate_runs_refresh_then_deactivate() {
             skip_network: true,
             init_repair: Some(fake_init),
             deactivate_repair: Some(fake_deactivate_repair),
-            ..DoctorOptions::default()
+            ..test_doctor_options()
         },
     )
     .unwrap();
@@ -415,7 +411,7 @@ fn doctor_fix_reports_deactivate_repair_failure() {
             skip_network: true,
             init_repair: Some(fake_init),
             deactivate_repair: Some(fake_deactivate_repair),
-            ..DoctorOptions::default()
+            ..test_doctor_options()
         },
     )
     .unwrap();
@@ -424,4 +420,112 @@ fn doctor_fix_reports_deactivate_repair_failure() {
     assert!(PendingPluginDeactivate::load(root).unwrap().is_some());
     // Pending journal remains a warning after failed repair.
     assert_eq!(code, 0);
+}
+
+fn probe_fixed_version(_path: &Path) -> anyhow::Result<String> {
+    Ok("0.99.9".to_string())
+}
+
+/// Skip network and never exec a real `nu` during doctor integration tests.
+fn test_doctor_options() -> DoctorOptions {
+    DoctorOptions {
+        skip_network: true,
+        nu_version_probe: Some(probe_fixed_version),
+        ..DoctorOptions::default()
+    }
+}
+
+#[test]
+fn doctor_reports_path_nu_not_found_when_path_cleared() {
+    let _path_guard = TEST_PATH_GUARD.lock().unwrap();
+    let _cleared_path = ClearedPath::new();
+
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root).unwrap();
+
+    let report = run_checks_with_options(
+        &DoctorArgs {
+            fix: false,
+            yes: false,
+            json: true,
+            nupm_home: None,
+        },
+        root,
+        &DoctorOptions {
+            discover_off_path: Some(|| None),
+            ..test_doctor_options()
+        },
+    )
+    .unwrap();
+
+    let path_finding = report
+        .findings
+        .iter()
+        .find(|f| f.id == "nu.path.version")
+        .expect("nu.path.version");
+    assert_eq!(path_finding.message, "PATH Nu: not found");
+    assert_eq!(path_finding.severity, Severity::Info);
+}
+
+#[test]
+fn doctor_reports_managed_and_trust_root_findings() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let managed = managed_nu_binary(root);
+    std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+    std::fs::write(&managed, b"nu").unwrap();
+
+    let mut config = numan_cli::config::Config::default();
+    config.registries.insert(
+        "official".to_string(),
+        numan_cli::config::RegistryConfig {
+            url: "https://example.invalid/registry".to_string(),
+            sync_interval: "24h".to_string(),
+            enabled: true,
+            trust_key: None,
+        },
+    );
+    config.save(root).unwrap();
+
+    let report = run_checks_with_options(
+        &DoctorArgs {
+            fix: false,
+            yes: false,
+            json: true,
+            nupm_home: None,
+        },
+        root,
+        &test_doctor_options(),
+    )
+    .unwrap();
+
+    let managed_finding = report
+        .findings
+        .iter()
+        .find(|f| f.id == "nu.managed.version")
+        .expect("nu.managed.version");
+    assert!(
+        managed_finding.message.starts_with("Managed Nu: 0.99.9"),
+        "unexpected: {}",
+        managed_finding.message
+    );
+
+    let trust = report
+        .findings
+        .iter()
+        .find(|f| f.id == "registry.trust_root")
+        .expect("registry.trust_root");
+    assert!(
+        trust
+            .message
+            .contains(numan_cli::core::official_registry::OFFICIAL_REGISTRY.key_id),
+        "unexpected: {}",
+        trust.message
+    );
+
+    let json = serde_json::to_string(&report).unwrap();
+    assert!(json.contains("nu.path.version"));
+    assert!(json.contains("nu.managed.version"));
+    assert!(json.contains("registry.trust_root"));
 }
