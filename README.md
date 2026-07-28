@@ -127,8 +127,6 @@ See [packaging/homebrew/README.md](packaging/homebrew/README.md).
 
 ### winget (Windows)
 
-After the package is listed in [winget-pkgs](https://github.com/microsoft/winget-pkgs):
-
 ```powershell
 winget install tonythethompson.numan
 ```
