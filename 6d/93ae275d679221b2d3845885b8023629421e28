@@ -1,0 +1,19 @@
+src/cmd/doctor.rs
+  s_345367441ade45::t_cc3b19a883aabb 2036
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "6d93ae275d679221b2d3845885b8023629421e28",
+  "prompts": {},
+  "sessions": {
+    "s_345367441ade45": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fab03-92ea-7d80-a30b-5ffb8137037f",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}
