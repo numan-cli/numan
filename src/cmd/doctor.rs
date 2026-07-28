@@ -2033,7 +2033,7 @@ mod tests {
         // out to `which`/`where.exe`, which must remain resolvable.
         let mut path_entries = vec![path_dir];
         if let Some(existing) = std::env::var_os("PATH") {
-            path_entries.push(PathBuf::from(existing));
+            path_entries.extend(std::env::split_paths(&existing));
         }
         let joined = std::env::join_paths(&path_entries).expect("join PATH for test");
         std::env::set_var("PATH", &joined);
