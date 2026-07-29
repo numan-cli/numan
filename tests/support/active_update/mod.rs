@@ -131,24 +131,24 @@ impl ActiveUpdateRun {
             signing_key.verifying_key().to_bytes(),
         );
 
-        let zip_dest = fixture_dir.join("plugin.zip");
+        let archive_dest = fixture_dir.join(format!("plugin{}", artifact.archive_suffix));
         std::fs::create_dir_all(&fixture_dir)?;
-        std::fs::copy(&artifact.zip_path, &zip_dest).with_context(|| {
+        std::fs::copy(&artifact.archive_path, &archive_dest).with_context(|| {
             format!(
                 "failed to copy artifact {} → {}",
-                artifact.zip_path.display(),
-                zip_dest.display()
+                artifact.archive_path.display(),
+                archive_dest.display()
             )
         })?;
-        let zip_url = absolute_path(&zip_dest)?.to_string_lossy().into_owned();
-        let zip_sha = artifact.sha256.clone();
+        let archive_url = absolute_path(&archive_dest)?.to_string_lossy().into_owned();
+        let archive_sha = artifact.sha256.clone();
 
         write_dual_version_registry(
             &fixture_dir,
             &config.package_id,
             &platform.triple,
-            &zip_url,
-            &zip_sha,
+            &archive_url,
+            &archive_sha,
             &artifact.executable_path,
             &signing_key,
         )?;
@@ -318,9 +318,24 @@ enabled = true
 }
 
 struct OfficialArtifact {
-    zip_path: PathBuf,
+    archive_path: PathBuf,
+    archive_suffix: &'static str,
     sha256: String,
     executable_path: String,
+}
+
+fn artifact_suffix(url: &str) -> Result<&'static str> {
+    let without_query = url.split_once('?').map_or(url, |(path, _)| path);
+    let path = without_query
+        .split_once('#')
+        .map_or(without_query, |(path, _)| path)
+        .to_ascii_lowercase();
+    for suffix in [".tar.gz", ".tgz", ".tar.xz", ".txz", ".zip", ".tar"] {
+        if path.ends_with(suffix) {
+            return Ok(suffix);
+        }
+    }
+    bail!("unsupported archive format in artifact URL: {url}")
 }
 
 fn require_nu_0_113() -> Result<NuVersion> {
@@ -420,15 +435,17 @@ fn fetch_official_artifact(
                 platform.triple
             )
         })?;
+    let archive_suffix = artifact_suffix(&target.url)?;
 
     let cache_name = format!(
-        "{}-{}-{}.zip",
+        "{}-{}-{}{}",
         package_id.replace('/', "_"),
         version.version,
-        platform.triple
+        platform.triple,
+        archive_suffix
     );
-    let zip_path = cache_dir.join(&cache_name);
-    if !zip_path.exists() {
+    let archive_path = cache_dir.join(&cache_name);
+    if !archive_path.exists() {
         let bytes = client
             .get(&target.url)
             .send()
@@ -436,7 +453,7 @@ fn fetch_official_artifact(
             .with_context(|| format!("failed to download {}", target.url))?
             .bytes()
             .context("failed to read artifact bytes")?;
-        let tmp = zip_path.with_extension("part");
+        let tmp = archive_path.with_extension("part");
         std::fs::write(&tmp, &bytes)?;
         let sha = integrity::compute_sha256(&bytes);
         anyhow::ensure!(
@@ -446,9 +463,9 @@ fn fetch_official_artifact(
             target.sha256,
             sha
         );
-        std::fs::rename(&tmp, &zip_path)?;
+        std::fs::rename(&tmp, &archive_path)?;
     }
-    let bytes = std::fs::read(&zip_path)?;
+    let bytes = std::fs::read(&archive_path)?;
     let sha = integrity::compute_sha256(&bytes);
     anyhow::ensure!(
         sha == target.sha256,
@@ -457,7 +474,8 @@ fn fetch_official_artifact(
         sha
     );
     Ok(OfficialArtifact {
-        zip_path,
+        archive_path,
+        archive_suffix,
         sha256: sha,
         executable_path: target.executable_path.clone(),
     })
@@ -467,8 +485,8 @@ fn write_dual_version_registry(
     fixture_dir: &Path,
     package_id: &str,
     triple: &str,
-    zip_url: &str,
-    zip_sha: &str,
+    archive_url: &str,
+    archive_sha: &str,
     executable_path: &str,
     signing_key: &SigningKey,
 ) -> Result<()> {
@@ -478,8 +496,8 @@ fn write_dual_version_registry(
         targets.insert(
             triple.to_string(),
             TargetArtifact {
-                url: zip_url.to_string(),
-                sha256: zip_sha.to_string(),
+                url: archive_url.to_string(),
+                sha256: archive_sha.to_string(),
                 executable_path: executable_path.to_string(),
             },
         );
@@ -539,36 +557,30 @@ fn write_dual_version_registry(
 }
 
 fn write_nu_shim(shim_dir: &Path, real_nu: &Path) -> Result<()> {
-    let real = real_nu.to_string_lossy();
     #[cfg(windows)]
     {
-        // `nu.cmd` is found by CreateProcess when PATHEXT includes .CMD.
-        let script = shim_dir.join("nu.cmd");
-        let body = format!(
-            r#"@echo off
-setlocal EnableExtensions
-set "REAL_NU=%NUMAN_TEST_REAL_NU%"
-if "%REAL_NU%"=="" set "REAL_NU={real}"
-set "ARGS=%*"
-echo.%ARGS% | findstr /I /C:"plugin rm" >NUL
-if not errorlevel 1 (
-  if /I "%NUMAN_TEST_FAIL_PLUGIN_RM%"=="1" exit /b 1
-)
-echo.%ARGS% | findstr /I /C:"plugin add" >NUL
-if not errorlevel 1 (
-  if /I "%NUMAN_TEST_FAIL_PLUGIN_ADD%"=="1" exit /b 1
-)
-"%REAL_NU%" %*
-exit /b %ERRORLEVEL%
-"#
+        let _ = real_nu;
+        let source = shim_dir.join("nu-forwarder.rs");
+        let executable = shim_dir.join("nu.exe");
+        std::fs::write(&source, include_str!("../../fixtures/nu_forwarder.rs"))?;
+        let output = Command::new("rustc")
+            .args(["--edition", "2021"])
+            .arg(&source)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .context("failed to compile native Windows Nu forwarder")?;
+        std::fs::remove_file(&source)?;
+        anyhow::ensure!(
+            output.status.success(),
+            "failed to compile native Windows Nu forwarder:\n{}",
+            String::from_utf8_lossy(&output.stderr)
         );
-        std::fs::write(&script, body)?;
-        // Also write nu.ps1-less path: some lookups want `nu.exe`. Create a tiny
-        // redirected copy is impractical; rely on PATHEXT `.CMD`.
         Ok(())
     }
     #[cfg(not(windows))]
     {
+        let real = real_nu.to_string_lossy();
         let script = shim_dir.join("nu");
         let body = format!(
             r#"#!/bin/sh
@@ -674,4 +686,41 @@ pub fn resolve_numan_binary() -> Result<PathBuf> {
         "numan binary not found at {} (run `cargo build` first)",
         path.display()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{artifact_suffix, write_nu_shim};
+
+    #[test]
+    fn artifact_suffix_preserves_supported_release_formats() {
+        assert_eq!(
+            artifact_suffix("https://example.invalid/plugin.zip").unwrap(),
+            ".zip"
+        );
+        assert_eq!(
+            artifact_suffix("https://example.invalid/plugin.tar.gz").unwrap(),
+            ".tar.gz"
+        );
+        assert_eq!(
+            artifact_suffix("https://example.invalid/plugin.tar.xz?download=1").unwrap(),
+            ".tar.xz"
+        );
+    }
+
+    #[test]
+    fn artifact_suffix_rejects_unknown_formats() {
+        let error = artifact_suffix("https://example.invalid/plugin.bin").unwrap_err();
+        assert!(error.to_string().contains("unsupported archive format"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_nu_shim_is_a_native_executable() {
+        let temp = tempfile::tempdir().unwrap();
+        write_nu_shim(temp.path(), std::path::Path::new("ignored.exe")).unwrap();
+        let bytes = std::fs::read(temp.path().join("nu.exe")).unwrap();
+        assert_eq!(&bytes[..2], b"MZ");
+        assert!(!temp.path().join("nu.cmd").exists());
+    }
 }
