@@ -35,7 +35,7 @@ jobs:
           command -v gh >/dev/null || { echo "::error::GitHub CLI is required"; exit 1; }
           command -v jq >/dev/null || { echo "::error::jq is required"; exit 1; }
 
-      - name: Verify originating release job
+      - name: Verify originating release marker
         if: github.event_name == 'workflow_run'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -43,8 +43,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_RUN_ID}/jobs?per_page=100" \
-            --jq 'any(.jobs[]; .name == "Publish GitHub Release" and .conclusion == "success")' \
+          # Contract with release.yml: successful publication uploads artifact
+          # winget-release-ready (stable name; independent of job display names).
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_RUN_ID}/artifacts?per_page=100" \
+            --jq 'any(.artifacts[]; .name == "winget-release-ready" and .expired == false)' \
             | grep -Fx true
 
       - name: Verify published Windows release asset

@@ -201,6 +201,18 @@ jobs:
           body_path: release-notes.md
           files: dist/*
 
+      # Stable producer/consumer contract for winget.yml (do not rename this artifact).
+      - name: Emit WinGet release marker
+        run: |
+          mkdir -p winget-marker
+          printf '%s\n' "${{ steps.meta.outputs.tag }}" > winget-marker/release-tag.txt
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: winget-release-ready
+          path: winget-marker/
+          retention-days: 3
+
   publish-crate:
     name: Publish to crates.io
     needs: [preflight, release]
