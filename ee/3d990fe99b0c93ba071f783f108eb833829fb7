@@ -1,0 +1,25 @@
+docs/registry-intake-roadmap.md
+  s_6c58868655aae2::t_15d3c26cfe5e15 3,71
+README.md
+  s_6c58868655aae2::t_15d3c26cfe5e15 28,111,387,410
+scripts/release-notes-from-changelog.sh
+  s_6c58868655aae2::t_15d3c26cfe5e15 7-8
+docs/RELEASING.md
+  s_6c58868655aae2::t_15d3c26cfe5e15 15,20,38-40,43-44,46,49-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "ee3d990fe99b0c93ba071f783f108eb833829fb7",
+  "prompts": {},
+  "sessions": {
+    "s_6c58868655aae2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fab11-b45b-76c0-9653-39aece85b698",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}
