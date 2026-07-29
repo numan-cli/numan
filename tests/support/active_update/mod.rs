@@ -556,14 +556,11 @@ fn write_nu_shim(shim_dir: &Path, real_nu: &Path) -> Result<()> {
         // acceptance suite needs a native PE forwarder. Building it requires `rustc`
         // on PATH (normal for `cargo test`; fail loudly if a stripped environment
         // omits the compiler).
-        let rustc_probe = Command::new("rustc")
-            .arg("--version")
-            .output()
-            .context(
-                "Windows active-update acceptance requires `rustc` on PATH to build \
+        let rustc_probe = Command::new("rustc").arg("--version").output().context(
+            "Windows active-update acceptance requires `rustc` on PATH to build \
                  the native Nu forwarder (nu.exe); install the Rust toolchain or ensure \
                  rustup's bin directory is on PATH",
-            )?;
+        )?;
         anyhow::ensure!(
             rustc_probe.status.success(),
             "Windows active-update acceptance requires a working `rustc` to build the \
@@ -580,9 +577,7 @@ fn write_nu_shim(shim_dir: &Path, real_nu: &Path) -> Result<()> {
             .arg("-o")
             .arg(&executable)
             .output()
-            .context(
-                "failed to invoke `rustc` while compiling the native Windows Nu forwarder",
-            )?;
+            .context("failed to invoke `rustc` while compiling the native Windows Nu forwarder")?;
         let _ = std::fs::remove_file(&source);
         anyhow::ensure!(
             output.status.success(),

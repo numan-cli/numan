@@ -698,9 +698,9 @@ fn check_plugin_mutation_gates(lockfile: &Lockfile, findings: &mut Vec<Finding>)
                 Severity::Info,
                 format!(
                     "Plugin '{id}' has an activation record (Issue #22). Deactivate is available; \
-                     active remove stays gated (deactivate first). Active update is \
-                     enabled by default: deactivate→upgrade→activate. \
-                     NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=0 is the emergency kill switch \
+                     active remove stays gated (deactivate first). Active update is opt-in via \
+                     NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 exactly (default off): \
+                     deactivate→upgrade→activate \
                      (https://github.com/tonythethompson/numan/issues/22)."
                 ),
                 Some(ACTIVE_PLUGIN_MUTATION_GATED_FIX),
@@ -1870,16 +1870,16 @@ mod tests {
         assert!(gated.message.contains("remove stays gated"));
         assert!(gated
             .message
-            .contains("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=0"));
-        assert!(gated.message.contains("enabled by default"));
+            .contains("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1"));
+        assert!(gated.message.contains("default off"));
         assert!(gated.message.contains("deactivate→upgrade→activate"));
         assert_eq!(gated.fix.as_deref(), Some(ACTIVE_PLUGIN_MUTATION_GATED_FIX));
         assert!(gated
             .fix
             .as_deref()
             .unwrap()
-            .contains("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=0"));
-        assert!(gated.fix.as_deref().unwrap().contains("by default"));
+            .contains("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1"));
+        assert!(gated.fix.as_deref().unwrap().contains("default off"));
         assert!(report
             .findings
             .iter()

@@ -3,9 +3,7 @@ use clap::Parser;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::cmd::plugin_lifecycle::{
-    activate_one_plugin, deactivate_one_plugin, run_plugin_add, run_plugin_rm,
-};
+use crate::cmd::plugin_lifecycle::{CommandPluginLifecycle, PluginLifecycle};
 use crate::core::nu_version::NuVersion;
 use crate::core::package::RegistryIndex;
 use crate::core::platform::Platform;
@@ -57,26 +55,23 @@ enum ActiveUpdatePlan {
 /// Injectable install seam for update tests (production uses `transaction::install_package`).
 pub type UpdateInstallFn = dyn Fn(&str, Option<&str>, &InstallOptions<'_>) -> Result<InstallResult>;
 
-/// Injectable seams for active-plugin update orchestration (tests inject fakes).
+/// Injectable seams for update orchestration (tests inject fakes).
 pub struct UpdateHooks<'a> {
-    pub unregistrar: &'a dyn Fn(&str, &str, &str) -> Result<()>,
-    pub registrar: &'a dyn Fn(&str, &str, &str) -> Result<()>,
+    pub lifecycle: &'a dyn PluginLifecycle,
     /// When `None`, uses [`transaction::install_package`].
     pub install: Option<&'a UpdateInstallFn>,
 }
 
-impl Default for UpdateHooks<'static> {
-    fn default() -> Self {
-        Self {
-            unregistrar: &run_plugin_rm,
-            registrar: &run_plugin_add,
-            install: None,
-        }
-    }
-}
-
 pub fn execute(args: &UpdateArgs, root: &PathBuf) -> Result<()> {
-    execute_with_hooks(args, root, &UpdateHooks::default())
+    let lifecycle = CommandPluginLifecycle;
+    execute_with_hooks(
+        args,
+        root,
+        &UpdateHooks {
+            lifecycle: &lifecycle,
+            install: None,
+        },
+    )
 }
 
 /// Testability entry: inject deactivate/activate/install seams.
@@ -267,7 +262,7 @@ pub fn execute_with_hooks(
                     update.package_id
                 );
             }
-            if let Err(e) = deactivate_one_plugin(root, &update.package_id, hooks.unregistrar) {
+            if let Err(e) = hooks.lifecycle.deactivate(root, &update.package_id) {
                 eprintln!("Failed to deactivate {}: {}", update.package_id, e);
                 // Leave PendingLifecycle at Prepared + deactivate journal for recovery.
                 failures.push(update.package_id.clone());
@@ -311,7 +306,7 @@ pub fn execute_with_hooks(
                             update.package_id
                         );
                     }
-                    if let Err(e) = activate_one_plugin(root, &update.package_id, hooks.registrar) {
+                    if let Err(e) = hooks.lifecycle.activate(root, &update.package_id) {
                         eprintln!(
                             "Failed to reactivate {} after upgrade: {}",
                             update.package_id, e
@@ -344,9 +339,7 @@ pub fn execute_with_hooks(
                         "Attempting to restore previous activation for {}...",
                         update.package_id
                     );
-                    if let Err(restore_err) =
-                        activate_one_plugin(root, &update.package_id, hooks.registrar)
-                    {
+                    if let Err(restore_err) = hooks.lifecycle.activate(root, &update.package_id) {
                         eprintln!(
                             "Failed to restore activation for {}: {}",
                             update.package_id, restore_err
@@ -454,13 +447,16 @@ fn resume_interrupted_reactivate(root: &Path, hooks: &UpdateHooks<'_>) -> Result
         "Resuming reactivation of {} after interrupted update...",
         journal.package_id
     );
-    activate_one_plugin(root, &journal.package_id, hooks.registrar).with_context(|| {
-        format!(
-            "Failed to resume reactivation of '{}'. {}",
-            journal.package_id,
-            hints::run(&format!("numan activate {} --yes", journal.package_id))
-        )
-    })?;
+    hooks
+        .lifecycle
+        .activate(root, &journal.package_id)
+        .with_context(|| {
+            format!(
+                "Failed to resume reactivation of '{}'. {}",
+                journal.package_id,
+                hints::run(&format!("numan activate {} --yes", journal.package_id))
+            )
+        })?;
     PendingLifecycle::clear(root)?;
     println!(
         "{} {} reactivated",
@@ -577,7 +573,7 @@ fn resolve_nu_version_for_update(
 ///
 /// - Active **module**: always refuse (deactivate first).
 /// - Active **plugin** matching current Nu identity with mutation enabled: orchestrate.
-/// - Active **plugin** matching identity with mutation disabled: refuse (kill switch).
+/// - Active **plugin** matching identity without exact opt-in: refuse.
 /// - Active **plugin** with stale/mismatched Nu identity: refuse (preserve activation record).
 fn plan_active_update(
     entry: &LockfileEntry,
@@ -620,6 +616,7 @@ fn plan_active_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cmd::plugin_lifecycle::{activate_one_plugin, deactivate_one_plugin};
     use crate::core::integrity;
     use crate::core::package::ModuleImportMode;
     use crate::state::active_plugin_mutation::ENV_LOCK;
@@ -628,6 +625,18 @@ mod tests {
     use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
     use std::collections::BTreeMap;
     use tempfile::TempDir;
+
+    struct SuccessfulPluginLifecycle;
+
+    impl PluginLifecycle for SuccessfulPluginLifecycle {
+        fn deactivate(&self, root: &Path, pkg_id: &str) -> Result<()> {
+            deactivate_one_plugin(root, pkg_id, &|_nu, _name, _cfg| Ok(()))
+        }
+
+        fn activate(&self, root: &Path, pkg_id: &str) -> Result<()> {
+            activate_one_plugin(root, pkg_id, &|_nu, _bin, _cfg| Ok(()))
+        }
+    }
 
     fn base_entry() -> LockfileEntry {
         LockfileEntry {
@@ -731,9 +740,9 @@ mod tests {
     }
 
     #[test]
-    fn plan_active_update_orchestrates_by_default() {
+    fn plan_active_update_orchestrates_when_exact_opt_in_is_set() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
+        std::env::set_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION", "1");
         let entry = LockfileEntry {
             activation: Some(plugin_activation()),
             ..base_entry()
@@ -746,9 +755,9 @@ mod tests {
     }
 
     #[test]
-    fn plan_active_update_refuses_when_kill_switch_is_set() {
+    fn plan_active_update_refuses_when_opt_in_is_unset() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION", "0");
+        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
         let entry = LockfileEntry {
             activation: Some(plugin_activation()),
             ..base_entry()
@@ -1205,11 +1214,11 @@ mod tests {
     }
 
     #[test]
-    fn active_plugin_update_refuses_when_kill_switch_is_set() {
+    fn active_plugin_update_refuses_when_opt_in_is_unset() {
         let _guard = ENV_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION", "0");
+        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
 
         let env = ActiveUpdateEnv::new();
         let lockfile = Lockfile::load(env.root()).unwrap();
@@ -1343,8 +1352,7 @@ mod tests {
         .unwrap();
 
         let hooks = UpdateHooks {
-            unregistrar: &|_nu, _name, _cfg| Ok(()),
-            registrar: &|_nu, _bin, _cfg| Ok(()),
+            lifecycle: &SuccessfulPluginLifecycle,
             install: None,
         };
         resume_interrupted_reactivate(env.root(), &hooks).unwrap();
@@ -1388,8 +1396,7 @@ mod tests {
         .unwrap();
 
         let hooks = UpdateHooks {
-            unregistrar: &|_nu, _name, _cfg| Ok(()),
-            registrar: &|_nu, _bin, _cfg| Ok(()),
+            lifecycle: &SuccessfulPluginLifecycle,
             install: None,
         };
         resume_interrupted_reactivate(env.root(), &hooks).unwrap();

@@ -1,8 +1,10 @@
 //! Shared single-plugin activate/deactivate helpers (Issue #22 PR3).
 //!
-//! Used by `update` orchestration while the caller already holds the mutation
-//! lock. These helpers intentionally do **not** acquire `mutation.lock`, print
-//! consent tables, or create snapshots (callers own those boundaries).
+//! Owns the activate/deactivate integration boundary used by opt-in `update`
+//! orchestration while the caller already holds the mutation lock. Callers use
+//! [`PluginLifecycle`] and never receive or invoke Nu registrar callbacks.
+//! These helpers intentionally do **not** acquire `mutation.lock`, print consent
+//! tables, or create snapshots (callers own those boundaries).
 //!
 //! Full CLI flows remain in [`super::activate`] and [`super::deactivate`].
 
@@ -19,6 +21,27 @@ use crate::state::plugin_deactivate_journal::{
 };
 use crate::util::format_timestamp;
 use crate::util::hints::{self, CMD_ACTIVATE, CMD_DEACTIVATE, CMD_INIT_REFRESH};
+
+/// Activate/deactivate boundary exposed to lifecycle coordinators such as
+/// `update`. Nu-specific registrar callbacks remain private to this module.
+pub trait PluginLifecycle {
+    fn deactivate(&self, root: &Path, pkg_id: &str) -> Result<()>;
+    fn activate(&self, root: &Path, pkg_id: &str) -> Result<()>;
+}
+
+/// Production implementation backed by the activate/deactivate commands'
+/// Nu integration seams.
+pub struct CommandPluginLifecycle;
+
+impl PluginLifecycle for CommandPluginLifecycle {
+    fn deactivate(&self, root: &Path, pkg_id: &str) -> Result<()> {
+        deactivate_one_plugin(root, pkg_id, &crate::cmd::deactivate::run_plugin_rm)
+    }
+
+    fn activate(&self, root: &Path, pkg_id: &str) -> Result<()> {
+        activate_one_plugin(root, pkg_id, &crate::cmd::activate::run_plugin_add)
+    }
+}
 
 /// Unregister one active plugin and clear its lockfile `activation` record.
 ///
@@ -404,16 +427,6 @@ fn reconcile_or_refuse_pending_activation(
     }
     PendingActivation::delete(root)?;
     Ok(())
-}
-
-/// Production Nu `plugin rm` seam (name/config via env only).
-pub fn run_plugin_rm(nu_executable: &str, plugin_name: &str, plugin_config: &str) -> Result<()> {
-    crate::cmd::deactivate::run_plugin_rm(nu_executable, plugin_name, plugin_config)
-}
-
-/// Production Nu `plugin add` seam (binary/config via env only).
-pub fn run_plugin_add(nu_executable: &str, plugin_binary: &str, plugin_config: &str) -> Result<()> {
-    crate::cmd::activate::run_plugin_add(nu_executable, plugin_binary, plugin_config)
 }
 
 #[cfg(test)]

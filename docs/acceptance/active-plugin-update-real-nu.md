@@ -14,11 +14,11 @@ not exercise update: the official index has no multi-version plugins today.
 
 | Test | Intent |
 |---|---|
-| `real_nu_active_update_happy_path` | Default-on → deactivate → upgrade → reactivate; journals cleared |
-| `real_nu_active_update_refuses_when_kill_switch_is_set` | Explicit kill switch; activation unchanged |
+| `real_nu_active_update_happy_path` | Exact-`1` opt-in → deactivate → upgrade → reactivate; journals cleared |
+| `real_nu_active_update_refuses_when_opt_in_is_unset` | Missing opt-in refuses; activation unchanged |
 | `real_nu_active_update_refuses_stale_nupaths` | Fail-closed identity mismatch |
 | `real_nu_active_update_refuses_missing_nupaths` | Fail-closed without cached Nu paths |
-| `real_nu_active_update_resume_lockfile_updated_reactivates` | `needs_reactivate` resume despite the kill switch |
+| `real_nu_active_update_resume_lockfile_updated_reactivates` | `needs_reactivate` resume without requiring a new opt-in |
 | `real_nu_active_update_unregister_failure_leaves_journals` | Nu shim fails `plugin rm` |
 | `real_nu_active_update_reactivate_failure_leaves_recovery` | Nu shim fails `plugin add` after upgrade |
 
@@ -72,6 +72,6 @@ network.
 
 See also: [docs/active-plugin-gate.md](../active-plugin-gate.md).
 
-The default-on evidence bar was met by the green Ubuntu, Windows, and macOS
+The exact-opt-in lifecycle path passed on Ubuntu, Windows, and macOS in
 [workflow run 30429081756](https://github.com/tonythethompson/numan/actions/runs/30429081756)
 (commit `05eb89d`, after the fixture fixes in `8706bfe`).
