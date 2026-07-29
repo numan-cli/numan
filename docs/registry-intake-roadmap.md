@@ -1,6 +1,6 @@
 # Registry Intake Roadmap
 
-**Status (v0.1.5):** Stage 1 lifecycle proof is implemented and the official registry is live with a production trust root. Continue growing the index in small curated batches while strengthening intake automation and promotion evidence. See the [README roadmap](../README.md#roadmap) for overall release milestones.
+**Status (post-v0.1.4):** The Stage 1 lifecycle harness is implemented; authoritative production proof remains a manual workflow. The official registry is live with a production trust root. Continue growing the index in small curated batches while strengthening intake automation and promotion evidence. See the [README roadmap](../README.md#roadmap) for overall release milestones.
 
 Numan should eventually make package onboarding feel close to "point it at a repo" while preserving the registry trust model. The target is not blind publishing. The target is a repeatable intake pipeline that can discover package metadata, validate artifacts, produce a reviewable registry candidate, and explain exactly what still needs human judgment.
 
@@ -61,16 +61,16 @@ The matrix should drive automation requirements. If a field or check does not he
 
 ### Stage 1: Repeatable manual acceptance
 
-Create a documented acceptance checklist or script for real packages. It should:
+Implemented by the Windows harness in [`tests/official_registry_stage1.rs`](../tests/official_registry_stage1.rs), its dispatch workflow, and the documented procedure in [`docs/acceptance/official-registry-stage1.md`](acceptance/official-registry-stage1.md). The harness:
 
-1. create a clean temporary `NUMAN_ROOT`
-2. add or sync the test registry
-3. run `search`, `info`, `install`, `activate`, `doctor`, `list`, `remove`, and `gc`
-4. record command output and exit codes
-5. inspect lockfile records, payload paths, journals, and activation state
-6. leave artifacts behind only when requested for debugging
+1. creates a clean temporary `NUMAN_ROOT`
+2. syncs the official registry
+3. runs `search`, `info`, `install`, `activate`, `doctor`, `list`, `deactivate`, `remove`, and `gc`
+4. records command output and exit codes
+5. inspects lockfile records, payload paths, journals, and activation state
+6. uploads evidence for debugging from the manual workflow
 
-This stage can remain mostly manual, but it should remove guesswork from "does this real package work?"
+This stage remains manual because it exercises the production registry and a real Nu plugin, but the harness removes guesswork from "does this real package work?"
 
 ### Stage 2: Registry/package lint
 

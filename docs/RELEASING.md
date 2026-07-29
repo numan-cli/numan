@@ -48,6 +48,7 @@ Then:
 6. Confirm platform archives and `SHA256SUMS` on GitHub Releases.
 7. Confirm the **Publish to crates.io** job succeeds (requires `CRATES_IO_TOKEN` repository secret).
 8. Confirm the [`Publish to WinGet`](../.github/workflows/winget.yml) workflow opens the update PR after the release is published.
+9. Update README current-release links and reproducible-install tag examples only after the GitHub Release is published, so documentation never points users at an unavailable tag.
 
 **Do not tag until CI is green on `master`.** The release workflow gates on CI check results for tag pushes; pushing a tag on a failing commit blocks publication.
 
