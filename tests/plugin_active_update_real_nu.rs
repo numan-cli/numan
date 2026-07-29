@@ -75,7 +75,7 @@ fn real_nu_active_update_happy_path() -> Result<()> {
 
 #[test]
 #[ignore = "real-Nu active-plugin update matrix; requires Nu 0.113.x + network artifact fetch"]
-fn real_nu_active_update_refuses_when_flag_off() -> Result<()> {
+fn real_nu_active_update_refuses_when_opt_in_is_unset() -> Result<()> {
     let mut run = new_run()?;
     run.remove_env(ENV_MUTATION);
     run.prepare_active_v1()?;
@@ -170,7 +170,7 @@ fn real_nu_active_update_refuses_missing_nupaths() -> Result<()> {
 #[ignore = "real-Nu active-plugin update matrix; requires Nu 0.113.x + network artifact fetch"]
 fn real_nu_active_update_resume_lockfile_updated_reactivates() -> Result<()> {
     let mut run = new_run()?;
-    // Resume must work even when the mutation env is off.
+    // Resume completes already-journaled work without starting new orchestration.
     run.remove_env(ENV_MUTATION);
     run.prepare_active_v1()?;
 

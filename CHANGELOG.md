@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `numan completions nushell` (alias `nu`) via `clap_complete_nushell`, with a vendor-autoload install hint
 - Active-plugin mutation gate (Issue #22 PR1): refuse `remove`/`update` while a plugin activation record exists; doctor info `activation.plugin_mutation_gated` ([docs/active-plugin-gate.md](docs/active-plugin-gate.md))
 - Journaled plugin deactivate (Issue #22 PR2): `numan deactivate` unregisters via injectable `plugin rm` seam, clears `PluginActivation` without deleting payload; pending journal `state/pending-plugin-deactivate.json`
-- Active-plugin update orchestration (Issue #22 PR3): default **off**; set `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` to enable deactivate→upgrade→reactivate via `cmd::plugin_lifecycle`
+- Active-plugin update orchestration (Issue #22 PR3): default **off**; only exact `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` enables deactivate→upgrade→reactivate via the activate/deactivate-owned `cmd::plugin_lifecycle` boundary
 
 ### Fixed
 
@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `numan remove --force` no longer bypasses active *plugin* activation (still bypasses active *module* activation only)
 - Active-plugin gate hint directs users to `numan deactivate <pkg>` then `numan remove <pkg>`
-- Active-plugin **update** is opt-in (default off; enable with `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1`); remove remains gated until deactivate
+- Active-plugin **update** is fail-closed and opt-in (default off; only exact `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` enables it; unset or alternative values refuse); remove remains gated until deactivate
 - Official registry Stage 1 acceptance: after `list`, run `deactivate` → `remove` → `gc`
 - `numan completions` prints a copy-ready install command on stderr after the script (stdout stays pipe-safe)
 - winget manifests: identifier/path `tonythethompson.numan` (all-lowercase), plus `InstallationNotes` for Nu PATH / `init` / `registry sync`

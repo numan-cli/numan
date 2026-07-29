@@ -57,8 +57,8 @@ src/
     doctor.rs          — `numan doctor [--fix] [--yes]`: health checks + safe repairs (Phase 7.2; spec: docs/numan-doctor.md)
     snapshot.rs        — `numan snapshot list|inspect|delete|rollback` (Phase 5.3)
     deactivate.rs      — Plugin + module deactivation: journaled plugin unregister (`execute_with_unregistrar`); module full/partial (Phase 4 / Issue #22 PR2)
-    plugin_lifecycle.rs — Shared `deactivate_one_plugin` / `activate_one_plugin` for lock-holding callers (Issue #22 PR3 update orchestration)
-    update.rs          — `numan update [--check] [pkg]`: upgrades; active plugins orchestrate deactivate→upgrade→activate when mutation opt-in enabled (Phase 5 / Issue #22 PR3)
+    plugin_lifecycle.rs — Activate/deactivate-owned lifecycle boundary exposed to opt-in update orchestration (Issue #22 PR3)
+    update.rs          — `numan update [--check] [pkg]`: upgrades; active plugins orchestrate deactivate→upgrade→activate only with exact env opt-in (Phase 5 / Issue #22 PR3)
     remove.rs          — `numan remove [--force] <pkg>`: remove from lockfile + delete payload (Phase 5); `--force` bypasses module activation only (active plugins always gated until deactivate, Issue #22)
     gc.rs              — `numan gc [--dry-run]`: delete orphaned payload directories (Phase 5)
     nupm.rs            — `numan nupm status|inspect|import|diff`: nupm discovery + import + drift (Phase 6.1–6.3)
@@ -74,7 +74,7 @@ src/
     lockfile.rs        — Lockfile v2: PluginActivation, ModuleActivation, revision_id, payload_sha256, compute_revision_id()
     journal.rs         — Plugin pending-activation journal for crash recovery
     plugin_deactivate_journal.rs — Plugin pending-deactivate journal (`pending-plugin-deactivate.json`) for crash recovery (Issue #22 PR2)
-    active_plugin_mutation.rs — Opt-in enable `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` (default off) for active update orchestration (Issue #22 PR3)
+    active_plugin_mutation.rs — Fail-closed exact-`1` opt-in for active update orchestration (Issue #22 PR3)
     autoload_journal.rs — Module autoload journal (PendingAutoload, Prepared→Replaced stages) for crash recovery (Phase 4)
     autoload_recovery.rs — Command-independent PendingAutoload reconciliation into lockfile + derived autoload state
     autoload_state.rs  — Derived autoload-state projection (NOT authoritative; lockfile is ground truth) (Phase 4)
@@ -130,7 +130,7 @@ tests/
 - **Immutability**: install path shape is `<root>/packages/<type>/<owner>/<name>/<version>-<sha8prefix>/` — never overwrite
 - **Activate testability**: `execute_with_registrar(args, root, registrar)` for plugins; `execute_with_candidate_runner(args, root, registrar, runner)` for modules — inject fakes in tests, never spawn a real Nu binary in unit tests
 - **Deactivate testability**: `execute_with_unregistrar(args, root, unregistrar)` for plugins; `execute_with_candidate_runner_and_unregistrar` when both lanes need fakes — Nu program string is `RM_PLUGIN` with name/config via env only
-- **Active-plugin update testability**: `update::execute_with_hooks` + `plugin_lifecycle::{deactivate_one_plugin,activate_one_plugin}`; opt-in `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` (default off)
+- **Active-plugin update testability**: `update::execute_with_hooks` injects a `plugin_lifecycle::PluginLifecycle`; Nu registrar callbacks remain owned by the activate/deactivate lifecycle boundary; exact `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` opt-in, default off
 - **Module autoload testability**: `FakeCandidateRunner::success()` / `::failure(msg)` from `nu/autoload.rs` — use as test seam for candidate validation without real Nu
 - **Module autoload identity**: Nu executable hash + Nu version + vendor autoload dir + managed file path — all four must match for a module to be considered active
 - **Autoload state is NOT authoritative**: `autoload-state.json` is a fast-check projection; the lockfile `module_activation` records are ground truth
@@ -145,7 +145,7 @@ tests/
 
 ## Architecture Rules
 1. **Install is always inert** — no Nu integration, only writes to `$NUMAN_ROOT`
-2. **Activate is separate** — only command that touches Nu (plugin registration, autoloads)
+2. **Nu integration is activate/deactivate-owned** — only the activate/deactivate lifecycle boundary invokes plugin register/unregister; an explicitly opted-in `update` may coordinate that boundary but must not own or invoke Nu callbacks directly
 3. **Source builds require consent** — prompt before clone/build, separate consent scope
 4. **Lockfile pins immutable paths** — cached artifacts retained while referenced
 5. **Registry trust** — Ed25519 signatures over exact `index.json` bytes; bypass requires `NUMAN_ALLOW_UNSIGNED=1` (dev only)
@@ -174,8 +174,8 @@ Automated and human PR reviewers should follow [`.github/instructions/review.ins
 - [x] Phase 2: Install transaction (download, verify, extract, lockfile write)
 - [x] Phase 3: Activate command (plugin-only; `plugin add` via env-vars; journal recovery; drift detection)
 - [x] Phase 4: Module autoload (render_use_statement, candidate validation, managed-file replacement, deactivation, journal recovery, mutation lock)
-- [x] Phase 5 (partial): Lockfile v2; `numan update/remove/gc`; pending-lifecycle journal; activation snapshots + rollback CLI ([docs/snapshots-and-rollback.md](docs/snapshots-and-rollback.md)); active-plugin gate PR1–PR3 land with update orchestration **opt-in** ([docs/active-plugin-gate.md](docs/active-plugin-gate.md)); real-Nu update fixture suite in [docs/acceptance/active-plugin-update-real-nu.md](docs/acceptance/active-plugin-update-real-nu.md) (default-on still gated on 3-OS workflow green)
-- [ ] Phase 5 (deferred): Source builds (5.2); plugin lifecycle gate (5.5) default-on only after active-update acceptance is green on 3 OS — see [docs/active-plugin-gate.md](docs/active-plugin-gate.md)
+- [x] Phase 5 (partial): Lockfile v2; `numan update/remove/gc`; pending-lifecycle journal; activation snapshots + rollback CLI ([docs/snapshots-and-rollback.md](docs/snapshots-and-rollback.md)); active-plugin update orchestration remains exact-`1` opt-in with a green 3-OS real-Nu fixture suite ([docs/active-plugin-gate.md](docs/active-plugin-gate.md))
+- [ ] Phase 5 (deferred): Source builds (5.2)
 - [x] Phase 6.0: nupm compatibility audit + fixture corpus (`docs/nupm-compatibility.md`)
 - [x] Phase 6.1: read-only `numan nupm status|inspect` (no import, no nupm mutation, no Nu)
 - [x] Phase 6.2: one-way `numan nupm import` (staging, provenance, lifecycle journal; no activation)
@@ -235,7 +235,7 @@ Standard build/test/lint/run commands live in "Build & Test" above and in the RE
 - Near-term adoption bottleneck is thin catalog depth; release handoff is numan-plugins → numan-registry → numan client.
 - `numan registry sync` only refreshes the local catalog; it does not install packages (`list` stays empty until `install`).
 - Supported install archives include `.zip`, `.tar.gz`/`.tgz`, `.tar.xz`/`.txz`, and plain `.tar`.
-- Active-plugin **remove** stays gated while `activation` is set; run `numan deactivate <pkg>` then `numan remove <pkg>`. `remove --force` does not bypass plugin activation (module only). Active **update** orchestrates deactivate→upgrade→activate when opt-in enabled (`NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1`; default off). See [docs/active-plugin-gate.md](docs/active-plugin-gate.md).
+- Active-plugin **remove** stays gated while `activation` is set; run `numan deactivate <pkg>` then `numan remove <pkg>`. `remove --force` does not bypass plugin activation (module only). Active **update** orchestrates deactivate→upgrade→activate only when `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` exactly; unset or any alternative value fails closed. See [docs/active-plugin-gate.md](docs/active-plugin-gate.md).
 - Prefers streamlining Nu-compat onboarding as honest search/install UX, a one-shot starter, and an offer-based managed Nu pin (never silent auto-switch of Nu).
 - Prefers the command name `numan try` for the prove-it-works starter (not `setup demo` / `setup starter`).
 - Product north star for Numan: make the Nushell package ecosystem more inviting for less experienced users.

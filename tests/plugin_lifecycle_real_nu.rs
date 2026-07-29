@@ -10,11 +10,11 @@
 //! | Unregister / reactivate failure journals | Unit fakes; real-Nu approximations in `plugin_active_update_real_nu` |
 //! | Ownership (path + lockfile identity) | Deactivate/update fake hooks assert absolute binary path |
 //!
-//! ## Default-on gate
+//! ## Opt-in gate
 //!
-//! Active update stays opt-in (`NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION`) until the
-//! real-Nu suite is green on Linux/macOS/Windows via
-//! `.github/workflows/active-plugin-update-acceptance.yml`.
+//! Active update remains fail-closed and exact-`1` opt-in after the real-Nu suite passed on
+//! Linux/macOS/Windows in the green [workflow run 30429081756](https://github.com/tonythethompson/numan/actions/runs/30429081756)
+//! (commit `05eb89d`, after the fixture fixes in `8706bfe`).
 //!
 //! Run the matrix (Nu 0.113.x required):
 //!   cargo build

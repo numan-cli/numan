@@ -19,7 +19,7 @@ pub enum LifecycleOp {
 ///
 /// ## Active-plugin update (`LifecycleOp::Update`)
 ///
-/// When updating an active plugin (mutation opt-in enabled), stages reuse this enum:
+/// When orchestrating an active-plugin update, stages reuse this enum:
 /// - [`Prepared`]: journal written; deactivate may be in progress (also see
 ///   `pending-plugin-deactivate.json`).
 /// - [`LockfileUpdated`]: install upgraded the lockfile/payload; reactivate may

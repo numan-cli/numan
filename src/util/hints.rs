@@ -107,12 +107,26 @@ Active-plugin remove stays gated (Issue #22); \
     )
 }
 
-/// Hint when active-plugin update orchestration is disabled (default off / opt-in).
+/// Doctor message for the `activation.plugin_mutation_gated` finding.
+///
+/// Aligned with [`ACTIVE_PLUGIN_MUTATION_GATED_FIX`] and
+/// `docs/numan-doctor.md`.
+pub fn active_plugin_mutation_gated_doctor_message(package_id: &str) -> String {
+    format!(
+        "Plugin '{package_id}' has an activation record (Issue #22). Deactivate is available; \
+active remove stays gated (deactivate first). Active update is opt-in via \
+NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 exactly (default off): \
+deactivate→upgrade→activate \
+(https://github.com/tonythethompson/numan/issues/22)."
+    )
+}
+
+/// Hint when active-plugin update orchestration lacks its exact opt-in.
 pub fn active_plugin_update_disabled(package_id: &str) -> String {
     format!(
         "Package '{package_id}' has a plugin activation record and active-plugin \
-update orchestration is disabled (default off). \
-Set NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 to enable \
+update orchestration is disabled by default. \
+Set NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 exactly to enable \
 deactivate→update→activate, or run `numan deactivate {package_id}` first \
 then `numan update {package_id}` while inactive \
 (https://github.com/tonythethompson/numan/issues/22)."
@@ -124,7 +138,7 @@ pub fn active_plugin_update_list_note(permitted: bool) -> &'static str {
     if permitted {
         "update: permitted (deactivate→upgrade→activate)"
     } else {
-        "update: gated (set NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 to enable, or deactivate first)"
+        "update: gated (check Nu identity or set NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 exactly)"
     }
 }
 
@@ -134,8 +148,9 @@ pub fn active_plugin_update_list_note(permitted: bool) -> &'static str {
 /// and `docs/active-plugin-gate.md` / `docs/numan-doctor.md`.
 pub const ACTIVE_PLUGIN_MUTATION_GATED_FIX: &str =
     "Remove: `numan deactivate <pkg>`, then `numan remove <pkg>`. \
-Update: set NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 (default off) then \
-`numan update <pkg>` (or deactivate first). \
+Update: set NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 exactly, then \
+`numan update <pkg>` orchestrates deactivate→upgrade→activate; \
+otherwise active update is gated (default off). \
 See docs/active-plugin-gate.md.";
 
 #[cfg(test)]
@@ -164,11 +179,24 @@ mod tests {
     }
 
     #[test]
-    fn active_plugin_update_disabled_mentions_env_kill_switch() {
+    fn active_plugin_mutation_gated_doctor_message_matches_documented_semantics() {
+        let message = active_plugin_mutation_gated_doctor_message("owner/plugin");
+        assert!(message.contains("Plugin 'owner/plugin'"));
+        assert!(message.contains("Issue #22"));
+        assert!(message.contains("Deactivate is available"));
+        assert!(message.contains("remove stays gated"));
+        assert!(message.contains("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 exactly"));
+        assert!(message.contains("default off"));
+        assert!(message.contains("deactivate→upgrade→activate"));
+    }
+
+    #[test]
+    fn active_plugin_update_disabled_mentions_exact_opt_in() {
         let hint = active_plugin_update_disabled("owner/plugin");
         assert!(hint.contains("owner/plugin"));
         assert!(hint.contains("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION"));
-        assert!(hint.contains("default off"));
+        assert!(hint.contains("=1 exactly"));
+        assert!(hint.contains("disabled by default"));
         assert!(hint.contains("numan deactivate owner/plugin"));
         assert!(hint.contains("numan update owner/plugin"));
         assert!(

@@ -23,19 +23,42 @@ pub enum ArchiveFormat {
 }
 
 impl ArchiveFormat {
+    /// Supported archive suffixes, longest-first so compound extensions win.
+    ///
+    /// Keep this list as the single source of truth for URL/filename detection.
+    pub const SUFFIXES: &'static [&'static str] =
+        &[".tar.gz", ".tgz", ".tar.xz", ".txz", ".zip", ".tar"];
+
+    /// Strip query/fragment and lowercase a URL or filename for suffix matching.
+    fn normalize_url_path(url: &str) -> String {
+        let without_query = url.split_once('?').map_or(url, |(path, _)| path);
+        without_query
+            .split_once('#')
+            .map_or(without_query, |(path, _)| path)
+            .to_ascii_lowercase()
+    }
+
+    /// Return the literal matched suffix (including the leading `.`), or `None`.
+    ///
+    /// Preserves short forms (`.tgz` / `.txz`) rather than canonicalizing them.
+    pub fn matched_suffix(url: &str) -> Option<&'static str> {
+        let path = Self::normalize_url_path(url);
+        Self::SUFFIXES
+            .iter()
+            .copied()
+            .find(|suffix| path.ends_with(suffix))
+    }
+
     /// Detect format from a URL or filename. Does NOT inspect file contents.
+    ///
+    /// Query strings and URL fragments are ignored; matching is case-insensitive.
     pub fn from_url(url: &str) -> Option<Self> {
-        let lower = url.to_lowercase();
-        if lower.ends_with(".zip") {
-            Some(ArchiveFormat::Zip)
-        } else if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
-            Some(ArchiveFormat::TarGz)
-        } else if lower.ends_with(".tar.xz") || lower.ends_with(".txz") {
-            Some(ArchiveFormat::TarXz)
-        } else if lower.ends_with(".tar") {
-            Some(ArchiveFormat::Tar)
-        } else {
-            None
+        match Self::matched_suffix(url)? {
+            ".zip" => Some(ArchiveFormat::Zip),
+            ".tar.gz" | ".tgz" => Some(ArchiveFormat::TarGz),
+            ".tar.xz" | ".txz" => Some(ArchiveFormat::TarXz),
+            ".tar" => Some(ArchiveFormat::Tar),
+            _ => None,
         }
     }
 
@@ -788,6 +811,26 @@ mod tests {
         );
         assert_eq!(ArchiveFormat::from_url("https://example.com/pkg.bin"), None);
         assert_eq!(ArchiveFormat::extension(&ArchiveFormat::TarXz), "tar.xz");
+    }
+
+    #[test]
+    fn archive_format_from_url_strips_query_fragment_and_case() {
+        assert_eq!(
+            ArchiveFormat::from_url("https://example.com/PKG.ZIP?download=1"),
+            Some(ArchiveFormat::Zip)
+        );
+        assert_eq!(
+            ArchiveFormat::from_url("https://example.com/pkg.tar.xz?dl=1#asset"),
+            Some(ArchiveFormat::TarXz)
+        );
+        assert_eq!(
+            ArchiveFormat::matched_suffix("https://example.com/plugin.TGZ#release"),
+            Some(".tgz")
+        );
+        assert_eq!(
+            ArchiveFormat::matched_suffix("https://example.com/plugin.txz?x=1"),
+            Some(".txz")
+        );
     }
 
     #[test]
