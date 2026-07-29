@@ -107,6 +107,20 @@ Active-plugin remove stays gated (Issue #22); \
     )
 }
 
+/// Doctor message for the `activation.plugin_mutation_gated` finding.
+///
+/// Aligned with [`ACTIVE_PLUGIN_MUTATION_GATED_FIX`] and
+/// `docs/numan-doctor.md`.
+pub fn active_plugin_mutation_gated_doctor_message(package_id: &str) -> String {
+    format!(
+        "Plugin '{package_id}' has an activation record (Issue #22). Deactivate is available; \
+active remove stays gated (deactivate first). Active update is opt-in via \
+NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 exactly (default off): \
+deactivate→upgrade→activate \
+(https://github.com/tonythethompson/numan/issues/22)."
+    )
+}
+
 /// Hint when active-plugin update orchestration lacks its exact opt-in.
 pub fn active_plugin_update_disabled(package_id: &str) -> String {
     format!(
@@ -162,6 +176,18 @@ mod tests {
             deactivate < remove,
             "fix hint must list deactivate before remove"
         );
+    }
+
+    #[test]
+    fn active_plugin_mutation_gated_doctor_message_matches_documented_semantics() {
+        let message = active_plugin_mutation_gated_doctor_message("owner/plugin");
+        assert!(message.contains("Plugin 'owner/plugin'"));
+        assert!(message.contains("Issue #22"));
+        assert!(message.contains("Deactivate is available"));
+        assert!(message.contains("remove stays gated"));
+        assert!(message.contains("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 exactly"));
+        assert!(message.contains("default off"));
+        assert!(message.contains("deactivate→upgrade→activate"));
     }
 
     #[test]
