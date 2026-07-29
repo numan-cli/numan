@@ -1493,6 +1493,29 @@ mod tests {
     /// Serializes tests that mutate the process-wide `PATH` env var.
     static TEST_PATH_GUARD: Mutex<()> = Mutex::new(());
 
+    /// RAII guard that restores the original PATH on drop, ensuring restoration
+    /// during both normal return and panic unwinding.
+    struct PathRestoreGuard {
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl PathRestoreGuard {
+        fn new() -> Self {
+            Self {
+                original: std::env::var_os("PATH"),
+            }
+        }
+    }
+
+    impl Drop for PathRestoreGuard {
+        fn drop(&mut self) {
+            match self.original.as_ref() {
+                Some(path) => std::env::set_var("PATH", path),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+    }
+
     fn fake_paths(root: &Path, nu_exe: &Path) -> NuPaths {
         let bytes = std::fs::read(nu_exe).unwrap();
         NuPaths {
@@ -2005,12 +2028,12 @@ mod tests {
             std::fs::set_permissions(&fake_nu, perms).unwrap();
         }
 
-        let saved_path = std::env::var("PATH").ok();
+        let _path_restore = PathRestoreGuard::new();
         // Prepend the fake-nu dir; do not replace PATH. `find_nu_on_path` shells
         // out to `which`/`where.exe`, which must remain resolvable.
         let mut path_entries = vec![path_dir];
-        if let Some(ref existing) = saved_path {
-            path_entries.extend(std::env::split_paths(existing));
+        if let Some(existing) = std::env::var_os("PATH") {
+            path_entries.extend(std::env::split_paths(&existing));
         }
         let joined = std::env::join_paths(&path_entries).expect("join PATH for test");
         std::env::set_var("PATH", &joined);
@@ -2029,13 +2052,8 @@ mod tests {
                 discover_off_path: Some(|| None),
                 ..DoctorOptions::default()
             },
-        );
-
-        match saved_path {
-            Some(path) => std::env::set_var("PATH", path),
-            None => std::env::remove_var("PATH"),
-        }
-        let report = report.unwrap();
+        )
+        .unwrap();
 
         let path_finding = report
             .findings
