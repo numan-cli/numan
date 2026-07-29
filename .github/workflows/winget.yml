@@ -1,8 +1,9 @@
 name: Publish to WinGet
 
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
   workflow_dispatch:
     inputs:
       release_tag:
@@ -16,6 +17,12 @@ permissions:
 jobs:
   publish:
     name: Submit manifest update
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-latest
     steps:
       - name: Publish manifest to WinGet
@@ -24,5 +31,5 @@ jobs:
           identifier: tonythethompson.numan
           fork-user: tonythethompson
           installers-regex: '\.zip$'
-          release-tag: ${{ inputs.release_tag || github.event.release.tag_name }}
+          release-tag: ${{ inputs.release_tag || github.event.workflow_run.head_branch }}
           token: ${{ secrets.WINGET_TOKEN }}
