@@ -7,16 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-07-29
+
 ### Added
 
+- `numan setup nu` installs an official managed Nushell release, optionally pinned with `--version`; `--use-existing` repairs an off-PATH installation without downloading another copy
+- `numan setup loader` installs the bundled `nushell-loader` integration
+- Compatibility-aware discovery: `search` hides incompatible packages by default (`--all` reveals them), `info` explains version compatibility, and install errors report the actual Nu/platform mismatch
+- `numan try` installs and activates a curated starter compatible with the current Nu and platform, with managed-Nu pin offers when no starter matches
+- Doctor findings distinguish PATH and managed Nu versions and report the built-in official trust-root identity
 - Install support for `.tar.xz` / `.txz` package archives (alongside `.zip`, `.tar.gz`/`.tgz`, and `.tar`)
 - `numan completions nushell` (alias `nu`) via `clap_complete_nushell`, with a vendor-autoload install hint
 - Active-plugin mutation gate (Issue #22 PR1): refuse `remove`/`update` while a plugin activation record exists; doctor info `activation.plugin_mutation_gated` ([docs/active-plugin-gate.md](docs/active-plugin-gate.md))
 - Journaled plugin deactivate (Issue #22 PR2): `numan deactivate` unregisters via injectable `plugin rm` seam, clears `PluginActivation` without deleting payload; pending journal `state/pending-plugin-deactivate.json`
 - Active-plugin update orchestration (Issue #22 PR3): default **off**; only exact `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` enables deactivate→upgrade→reactivate via the activate/deactivate-owned `cmd::plugin_lifecycle` boundary
+- Cross-platform real-Nu acceptance coverage for active-plugin update, plus a Windows official-registry Stage 1 lifecycle harness
 
 ### Fixed
 
+- Autoload journal recovery is command-independent and reconciles pending state before later mutations
+- Managed Nu bootstrap verifies release-asset size and SHA256 metadata, validates the installed binary, cleans up failed downloads, and discovers supported off-PATH installations more reliably
+- `numan try` gives actionable managed-Nu pin or package-search guidance when no curated starter matches, without silently switching Nu
 - PowerShell completions no longer emit top-of-script `using namespace` directives, so `numan completions powershell` can be appended to an existing `$PROFILE` without a ParserError
 - README PowerShell install used `Out-File` (overwrites `$PROFILE`); docs now use `Add-Content` or a dedicated completions file
 
@@ -27,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Active-plugin **update** is fail-closed and opt-in (default off; only exact `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` enables it; unset or alternative values refuse); remove remains gated until deactivate
 - Official registry Stage 1 acceptance: after `list`, run `deactivate` → `remove` → `gc`
 - `numan completions` prints a copy-ready install command on stderr after the script (stdout stays pipe-safe)
-- winget manifests: identifier/path `tonythethompson.numan` (all-lowercase), plus `InstallationNotes` for Nu PATH / `init` / `registry sync`
+- WinGet uses the all-lowercase `tonythethompson.numan` identifier and publishes update PRs automatically after each GitHub release; unsupported Homebrew packaging was removed
 
 ## [0.1.4] - 2026-07-05
 
@@ -95,7 +106,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Release binaries for Linux, Windows, and macOS
 - Real-Nu acceptance CI job
 
-[Unreleased]: https://github.com/tonythethompson/numan/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/tonythethompson/numan/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/tonythethompson/numan/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/tonythethompson/numan/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/tonythethompson/numan/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/tonythethompson/numan/compare/v0.1.1...v0.1.2

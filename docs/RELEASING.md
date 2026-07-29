@@ -12,12 +12,12 @@
 - Maintain [CHANGELOG.md](../CHANGELOG.md) using [Keep a Changelog](https://keepachangelog.com/).
 - Move items from `[Unreleased]` into a dated version section before tagging.
 - **GitHub Release body** is taken from that version's section in `CHANGELOG.md` via `scripts/release-notes-from-changelog.sh` — real Added/Changed/Fixed bullets, not auto-generated "Full Changelog: vX...vY" compare links.
-- Compare links at the bottom of `CHANGELOG.md` (`[0.1.4]: https://github.com/...`) stay in the file only; they are not copied into release notes.
+- Compare links at the bottom of `CHANGELOG.md` (`[0.1.5]: https://github.com/...`) stay in the file only; they are not copied into release notes.
 
 Preview release notes before tagging:
 
 ```bash
-bash scripts/release-notes-from-changelog.sh v0.1.4
+bash scripts/release-notes-from-changelog.sh v0.1.5
 ```
 
 ## Release checklist
@@ -39,9 +39,9 @@ Then:
 4. Tag and push:
 
    ```bash
-   git tag v0.1.4
+   git tag v0.1.5
    git push origin master
-   git push origin v0.1.4
+   git push origin v0.1.5
    ```
 
 5. The [Release workflow](https://github.com/tonythethompson/numan/actions/workflows/release.yml) waits for green CI on the tagged commit, runs preflight checks, then builds archives and publishes.

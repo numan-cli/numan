@@ -1,6 +1,6 @@
 # Registry Intake Roadmap
 
-**Status (v0.1.4):** Stage 1 (repeatable manual acceptance) is the active focus. The official registry is live with a production trust root; grow the index via curated seed packages before building intake automation. See the [README roadmap](../README.md#roadmap) for overall release milestones.
+**Status (v0.1.5):** Stage 1 lifecycle proof is implemented and the official registry is live with a production trust root. Continue growing the index in small curated batches while strengthening intake automation and promotion evidence. See the [README roadmap](../README.md#roadmap) for overall release milestones.
 
 Numan should eventually make package onboarding feel close to "point it at a repo" while preserving the registry trust model. The target is not blind publishing. The target is a repeatable intake pipeline that can discover package metadata, validate artifacts, produce a reviewable registry candidate, and explain exactly what still needs human judgment.
 

@@ -4,8 +4,8 @@
 # Does not append "Full Changelog: ..." compare links — those stay in CHANGELOG only.
 #
 # Usage:
-#   ./scripts/release-notes-from-changelog.sh v0.1.4
-#   ./scripts/release-notes-from-changelog.sh 0.1.4
+#   ./scripts/release-notes-from-changelog.sh v0.1.5
+#   ./scripts/release-notes-from-changelog.sh 0.1.5
 #
 set -euo pipefail
 
