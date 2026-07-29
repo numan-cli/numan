@@ -572,6 +572,7 @@ fn write_nu_shim(shim_dir: &Path, real_nu: &Path) -> Result<()> {
         let executable = shim_dir.join("nu.exe");
         std::fs::write(&source, include_str!("../../fixtures/nu_forwarder.rs"))?;
         let output = Command::new("rustc")
+            .args(["--crate-name", "nu_forwarder"])
             .args(["--edition", "2021"])
             .arg(&source)
             .arg("-o")
