@@ -21,6 +21,7 @@ use numan_cli::core::package::{
 };
 use numan_cli::core::platform::Platform;
 use numan_cli::core::trust::TrustStore;
+use numan_cli::install::extract::ArchiveFormat;
 use numan_cli::nu::paths::NuPaths;
 use numan_cli::state::lockfile::Lockfile;
 use rand_core::OsRng;
@@ -325,17 +326,8 @@ struct OfficialArtifact {
 }
 
 fn artifact_suffix(url: &str) -> Result<&'static str> {
-    let without_query = url.split_once('?').map_or(url, |(path, _)| path);
-    let path = without_query
-        .split_once('#')
-        .map_or(without_query, |(path, _)| path)
-        .to_ascii_lowercase();
-    for suffix in [".tar.gz", ".tgz", ".tar.xz", ".txz", ".zip", ".tar"] {
-        if path.ends_with(suffix) {
-            return Ok(suffix);
-        }
-    }
-    bail!("unsupported archive format in artifact URL: {url}")
+    ArchiveFormat::matched_suffix(url)
+        .with_context(|| format!("unsupported archive format in artifact URL: {url}"))
 }
 
 fn require_nu_0_113() -> Result<NuVersion> {
@@ -560,6 +552,25 @@ fn write_nu_shim(shim_dir: &Path, real_nu: &Path) -> Result<()> {
     #[cfg(windows)]
     {
         let _ = real_nu;
+        // Windows CreateProcess resolves `nu` to `nu.exe` before `nu.cmd`, so the
+        // acceptance suite needs a native PE forwarder. Building it requires `rustc`
+        // on PATH (normal for `cargo test`; fail loudly if a stripped environment
+        // omits the compiler).
+        let rustc_probe = Command::new("rustc")
+            .arg("--version")
+            .output()
+            .context(
+                "Windows active-update acceptance requires `rustc` on PATH to build \
+                 the native Nu forwarder (nu.exe); install the Rust toolchain or ensure \
+                 rustup's bin directory is on PATH",
+            )?;
+        anyhow::ensure!(
+            rustc_probe.status.success(),
+            "Windows active-update acceptance requires a working `rustc` to build the \
+             native Nu forwarder (nu.exe); `rustc --version` failed:\n{}",
+            String::from_utf8_lossy(&rustc_probe.stderr)
+        );
+
         let source = shim_dir.join("nu-forwarder.rs");
         let executable = shim_dir.join("nu.exe");
         std::fs::write(&source, include_str!("../../fixtures/nu_forwarder.rs"))?;
@@ -570,13 +581,12 @@ fn write_nu_shim(shim_dir: &Path, real_nu: &Path) -> Result<()> {
             .arg(&executable)
             .output()
             .context(
-                "failed to run rustc for the native Windows Nu forwarder; \
-                 the acceptance suite requires the Rust toolchain on PATH",
+                "failed to invoke `rustc` while compiling the native Windows Nu forwarder",
             )?;
-        std::fs::remove_file(&source)?;
+        let _ = std::fs::remove_file(&source);
         anyhow::ensure!(
             output.status.success(),
-            "failed to compile native Windows Nu forwarder:\n{}",
+            "failed to compile native Windows Nu forwarder with rustc:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
         Ok(())
@@ -732,6 +742,17 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_nu_shim_is_a_native_executable() {
+        if std::process::Command::new("rustc")
+            .arg("--version")
+            .output()
+            .map(|o| !o.status.success())
+            .unwrap_or(true)
+        {
+            eprintln!(
+                "skipping windows_nu_shim_is_a_native_executable: `rustc` is not available on PATH"
+            );
+            return;
+        }
         let temp = tempfile::tempdir().unwrap();
         write_nu_shim(temp.path(), std::path::Path::new("ignored.exe")).unwrap();
         let bytes = std::fs::read(temp.path().join("nu.exe")).unwrap();
