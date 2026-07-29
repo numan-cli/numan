@@ -7,7 +7,7 @@ Third-party install manifests live under `packaging/`. They pin GitHub Release b
 After a GitHub Release is published (see [RELEASING.md](RELEASING.md)):
 
 1. Download `SHA256SUMS` from the release assets.
-2. After the tag-triggered Release workflow completes, the [`Publish to WinGet`](../.github/workflows/winget.yml) workflow verifies the Release workflow's `winget-release-ready` artifact and that the non-draft release contains the published Windows `.zip` asset, then generates and submits the update PR. It requires the repository's `WINGET_TOKEN` secret and the existing `tonythethompson/winget-pkgs` fork. Manual dispatch remains available as a recovery path.
+2. After a `v*.*.*` tag-triggered Release workflow completes, the [`Publish to WinGet`](../.github/workflows/winget.yml) workflow verifies the Release workflow's `winget-release-ready` artifact and that the non-draft release contains the published Windows `.zip` asset, then generates and submits the update PR. Automatic runs only accept Release workflows whose head branch is a `v`-prefixed tag (same contract as [RELEASING.md](RELEASING.md)). It requires the repository's `WINGET_TOKEN` secret and the existing `tonythethompson/winget-pkgs` fork. Manual `workflow_dispatch` recovery requires an explicit `release_tag` input (also `v*.*.*`).
 3. **winget** — the generated PR contains `packaging/winget/manifests/t/tonythethompson/numan/<version>/` with three manifests (schema **1.12.0**):
    - `tonythethompson.numan.yaml` (version)
    - `tonythethompson.numan.installer.yaml`

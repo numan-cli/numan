@@ -1,5 +1,9 @@
 name: Publish to WinGet
 
+# Tag contract (matches release.yml): only SemVer tags with a `v` prefix
+# (`v*.*.*`). Auto-trigger uses workflow_run.head_branch as that tag name.
+# Manual recovery requires release_tag (required on workflow_dispatch).
+
 on:
   workflow_run:
     workflows: [Release]
@@ -7,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Release tag to submit (for example, v0.1.5)
+        description: Release tag to submit (must be v*.*.*, for example v0.1.5)
         required: true
         type: string
 
@@ -27,13 +31,24 @@ jobs:
       startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-latest
     env:
-      RELEASE_TAG: ${{ inputs.release_tag || github.event.workflow_run.head_branch }}
+      # workflow_dispatch: required input. workflow_run: tag name from the
+      # Release push (head_branch is the tag ref for tag pushes).
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.workflow_run.head_branch }}
     steps:
       - name: Verify required tools
         shell: bash
         run: |
           command -v gh >/dev/null || { echo "::error::GitHub CLI is required"; exit 1; }
           command -v jq >/dev/null || { echo "::error::jq is required"; exit 1; }
+
+      - name: Verify release tag shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-].+)?$ ]]; then
+            echo "::error::RELEASE_TAG must be a v-prefixed SemVer tag (got: ${RELEASE_TAG:-<empty>})"
+            exit 1
+          fi
 
       - name: Verify originating release marker
         if: github.event_name == 'workflow_run'
