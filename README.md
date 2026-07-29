@@ -25,7 +25,7 @@ Numan fills that gap:
 | **Crash recovery** | Journals for activation, autoload, lifecycle, and nupm import operations |
 | **nupm coexistence** | Read-only discovery, one-way import, and drift detection for existing nupm installs |
 
-Numan is **early-stage** (v0.1.4 is the latest published release). Core install, activate, update, remove, gc, registry, doctor, snapshots, nupm interoperability, and shell completions are implemented and covered by hundreds of tests plus real-Nu acceptance on CI. Pre-built release binaries are published via GitHub Releases.
+Numan is **early-stage**. Core install, activate, update, remove, gc, registry, doctor, snapshots, nupm interoperability, and shell completions are implemented and covered by unit and hermetic integration tests, plus real-Nu acceptance on Linux, macOS, and Windows in CI. Pre-built release binaries are published via GitHub Releases.
 
 ---
 
@@ -108,7 +108,7 @@ Verify downloads with the `SHA256SUMS` file attached to each release.
 cargo install --git https://github.com/tonythethompson/numan
 ```
 
-Tracks the default branch; pin the latest published tag with `--tag v0.1.4` for reproducible installs.
+Tracks the default branch. For a reproducible install, choose a published tag from [GitHub Releases](https://github.com/tonythethompson/numan/releases) and pass `--tag vX.Y.Z`.
 
 ### winget (Windows)
 
@@ -384,7 +384,7 @@ See [AGENTS.md](AGENTS.md) for architecture details aimed at contributors and ag
 
 ```bash
 cargo build
-cargo test                    # unit + integration (419 tests)
+cargo test                    # unit + hermetic integration tests
 cargo clippy -- -D warnings   # lint (CI-enforced)
 cargo fmt                     # format
 
@@ -407,7 +407,7 @@ PR reviewers should follow [`.github/instructions/review.instructions.md`](.gith
 
 ## Roadmap
 
-**Current release:** [v0.1.4](https://github.com/tonythethompson/numan/releases/tag/v0.1.4) — feature-complete core on **0.1.x** while dogfooding the official registry.
+**Releases:** see the [latest GitHub Release](https://github.com/tonythethompson/numan/releases/latest) — feature-complete core on **0.1.x** while dogfooding the official registry.
 
 | Phase | Scope | Status |
 |-------|--------|--------|

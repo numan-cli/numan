@@ -1,6 +1,6 @@
 # Registry Intake Roadmap
 
-**Status (post-v0.1.4):** The Stage 1 lifecycle harness is implemented; authoritative production proof remains a manual workflow. The official registry is live with a production trust root. Continue growing the index in small curated batches while strengthening intake automation and promotion evidence. See the [README roadmap](../README.md#roadmap) for overall release milestones.
+**Status:** The Stage 1 lifecycle harness is implemented; authoritative production proof remains a manual workflow. The official registry is live with a production trust root. Continue growing the index in small curated batches while strengthening intake automation and promotion evidence. See the [README roadmap](../README.md#roadmap) for overall release milestones.
 
 Numan should eventually make package onboarding feel close to "point it at a repo" while preserving the registry trust model. The target is not blind publishing. The target is a repeatable intake pipeline that can discover package metadata, validate artifacts, produce a reviewable registry candidate, and explain exactly what still needs human judgment.
 
@@ -68,7 +68,7 @@ Implemented by the Windows harness in [`tests/official_registry_stage1.rs`](../t
 3. runs `search`, `info`, `install`, `activate`, `doctor`, `list`, `deactivate`, `remove`, and `gc`
 4. records command output and exit codes
 5. inspects lockfile records, payload paths, journals, and activation state
-6. uploads evidence for debugging from the manual workflow
+6. produces evidence for debugging; the manual workflow uploads it
 
 This stage remains manual because it exercises the production registry and a real Nu plugin, but the harness removes guesswork from "does this real package work?"
 
