@@ -13,8 +13,8 @@
 //! ## Default-on gate
 //!
 //! Active update is default-on after the real-Nu suite passed on
-//! Linux/macOS/Windows. `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=0` remains the
-//! emergency kill switch.
+//! Linux/macOS/Windows in the green [workflow run 30427823246](https://github.com/tonythethompson/numan/actions/runs/30427823246).
+//! `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=0` remains the emergency kill switch.
 //!
 //! Run the matrix (Nu 0.113.x required):
 //!   cargo build
