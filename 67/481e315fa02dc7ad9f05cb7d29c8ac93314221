@@ -1,0 +1,21 @@
+docs/acceptance/active-plugin-update-real-nu.md
+  s_8f6d4c2585c6a9::t_83764448df261b 76-77
+tests/plugin_lifecycle_real_nu.rs
+  s_8f6d4c2585c6a9::t_af2141024e5603 16-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "67481e315fa02dc7ad9f05cb7d29c8ac93314221",
+  "prompts": {},
+  "sessions": {
+    "s_8f6d4c2585c6a9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "17bf4849-077e-46bc-a3a4-75ad64568c4b",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}
