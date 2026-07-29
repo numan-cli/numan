@@ -73,4 +73,5 @@ network.
 See also: [docs/active-plugin-gate.md](../active-plugin-gate.md).
 
 The default-on evidence bar was met by the green Ubuntu, Windows, and macOS
-[workflow run 30427823246](https://github.com/tonythethompson/numan/actions/runs/30427823246).
+[workflow run 30429081756](https://github.com/tonythethompson/numan/actions/runs/30429081756)
+(commit `05eb89d`, after the fixture fixes in `8706bfe`).
