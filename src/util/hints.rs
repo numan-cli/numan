@@ -107,12 +107,12 @@ Active-plugin remove stays gated (Issue #22); \
     )
 }
 
-/// Hint when active-plugin update orchestration is disabled (default off / opt-in).
+/// Hint when the active-plugin update emergency kill switch is set.
 pub fn active_plugin_update_disabled(package_id: &str) -> String {
     format!(
         "Package '{package_id}' has a plugin activation record and active-plugin \
-update orchestration is disabled (default off). \
-Set NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 to enable \
+update orchestration is disabled by NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION. \
+Unset it or set NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 to re-enable \
 deactivate→update→activate, or run `numan deactivate {package_id}` first \
 then `numan update {package_id}` while inactive \
 (https://github.com/tonythethompson/numan/issues/22)."
@@ -124,7 +124,7 @@ pub fn active_plugin_update_list_note(permitted: bool) -> &'static str {
     if permitted {
         "update: permitted (deactivate→upgrade→activate)"
     } else {
-        "update: gated (set NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 to enable, or deactivate first)"
+        "update: gated (check Nu identity or the NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION kill switch)"
     }
 }
 
@@ -134,8 +134,8 @@ pub fn active_plugin_update_list_note(permitted: bool) -> &'static str {
 /// and `docs/active-plugin-gate.md` / `docs/numan-doctor.md`.
 pub const ACTIVE_PLUGIN_MUTATION_GATED_FIX: &str =
     "Remove: `numan deactivate <pkg>`, then `numan remove <pkg>`. \
-Update: set NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 (default off) then \
-`numan update <pkg>` (or deactivate first). \
+Update: `numan update <pkg>` orchestrates deactivate→upgrade→activate by default; \
+NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=0 is the emergency kill switch. \
 See docs/active-plugin-gate.md.";
 
 #[cfg(test)]
@@ -168,15 +168,15 @@ mod tests {
         let hint = active_plugin_update_disabled("owner/plugin");
         assert!(hint.contains("owner/plugin"));
         assert!(hint.contains("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION"));
-        assert!(hint.contains("default off"));
+        assert!(hint.contains("Unset it"));
         assert!(hint.contains("numan deactivate owner/plugin"));
         assert!(hint.contains("numan update owner/plugin"));
         assert!(
             !hint.contains("numan remove"),
             "update gate must not suggest remove"
         );
-        assert!(ACTIVE_PLUGIN_MUTATION_GATED_FIX.contains("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1"));
-        assert!(ACTIVE_PLUGIN_MUTATION_GATED_FIX.contains("default off"));
+        assert!(ACTIVE_PLUGIN_MUTATION_GATED_FIX.contains("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=0"));
+        assert!(ACTIVE_PLUGIN_MUTATION_GATED_FIX.contains("by default"));
         assert!(ACTIVE_PLUGIN_MUTATION_GATED_FIX.contains("numan update"));
     }
 

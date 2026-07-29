@@ -14,11 +14,11 @@ not exercise update: the official index has no multi-version plugins today.
 
 | Test | Intent |
 |---|---|
-| `real_nu_active_update_happy_path` | Flag on → deactivate → upgrade → reactivate; journals cleared |
-| `real_nu_active_update_refuses_when_flag_off` | Default gate; activation unchanged |
+| `real_nu_active_update_happy_path` | Default-on → deactivate → upgrade → reactivate; journals cleared |
+| `real_nu_active_update_refuses_when_kill_switch_is_set` | Explicit kill switch; activation unchanged |
 | `real_nu_active_update_refuses_stale_nupaths` | Fail-closed identity mismatch |
 | `real_nu_active_update_refuses_missing_nupaths` | Fail-closed without cached Nu paths |
-| `real_nu_active_update_resume_lockfile_updated_reactivates` | `needs_reactivate` resume without mutation env |
+| `real_nu_active_update_resume_lockfile_updated_reactivates` | `needs_reactivate` resume despite the kill switch |
 | `real_nu_active_update_unregister_failure_leaves_journals` | Nu shim fails `plugin rm` |
 | `real_nu_active_update_reactivate_failure_leaves_recovery` | Nu shim fails `plugin add` after upgrade |
 
@@ -49,14 +49,15 @@ Default PR `real-nu-acceptance` **skips** this suite (same class as Stage 1).
 |---|---|---|
 | `NUMAN_ACCEPTANCE_PACKAGE` | `cptpiepmatz/nu_plugin_highlight` | Official package used as the real artifact source (must have a host-triple target). |
 | `NUMAN_ACCEPTANCE_OUTPUT` | `target/acceptance/active-plugin-update-real-nu` | Evidence parent directory. |
-| `NUMAN_ACCEPTANCE_ARTIFACT_CACHE` | `target/acceptance/artifact-cache` | Downloaded zip cache. |
+| `NUMAN_ACCEPTANCE_ARTIFACT_CACHE` | `target/acceptance/artifact-cache` | Downloaded archive cache; original format suffix is preserved. |
 
 ## Isolation
 
 Each run creates a unique directory with `home/`, `evidence/`, and
 `fixture-registry/`. Child processes use `env_clear()` plus an isolated home
 (same model as Stage 1). A Nu shim is prepended to `PATH` so init caches shim
-identity while forwarding to the real Nu binary; fault tests set
+identity while forwarding to the real Nu binary; Windows uses a test-only native
+forwarder because Rust safely rejects batch launchers for Nu programs. Fault tests set
 `NUMAN_TEST_FAIL_PLUGIN_RM=1` or `NUMAN_TEST_FAIL_PLUGIN_ADD=1`.
 
 The fixture registry is planted into the Numan root after `init` (signed index +
@@ -65,9 +66,11 @@ network.
 
 ## Non-goals
 
-- Flipping `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION` default-on.
 - Production official multi-version update e2e (blocked until an official v2 exists).
 - True mid-crash races between Nu success and lockfile write (covered by unit
   journal-reconcile tests).
 
 See also: [docs/active-plugin-gate.md](../active-plugin-gate.md).
+
+The default-on evidence bar was met by the green Ubuntu, Windows, and macOS
+[workflow run 30427823246](https://github.com/tonythethompson/numan/actions/runs/30427823246).

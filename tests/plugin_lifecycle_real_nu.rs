@@ -12,9 +12,9 @@
 //!
 //! ## Default-on gate
 //!
-//! Active update stays opt-in (`NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION`) until the
-//! real-Nu suite is green on Linux/macOS/Windows via
-//! `.github/workflows/active-plugin-update-acceptance.yml`.
+//! Active update is default-on after the real-Nu suite passed on
+//! Linux/macOS/Windows. `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=0` remains the
+//! emergency kill switch.
 //!
 //! Run the matrix (Nu 0.113.x required):
 //!   cargo build

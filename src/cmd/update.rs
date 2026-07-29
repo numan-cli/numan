@@ -577,7 +577,7 @@ fn resolve_nu_version_for_update(
 ///
 /// - Active **module**: always refuse (deactivate first).
 /// - Active **plugin** matching current Nu identity with mutation enabled: orchestrate.
-/// - Active **plugin** matching identity with mutation disabled: refuse (opt-in kill switch).
+/// - Active **plugin** matching identity with mutation disabled: refuse (kill switch).
 /// - Active **plugin** with stale/mismatched Nu identity: refuse (preserve activation record).
 fn plan_active_update(
     entry: &LockfileEntry,
@@ -731,9 +731,9 @@ mod tests {
     }
 
     #[test]
-    fn plan_active_update_orchestrates_when_enabled() {
+    fn plan_active_update_orchestrates_by_default() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION", "1");
+        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
         let entry = LockfileEntry {
             activation: Some(plugin_activation()),
             ..base_entry()
@@ -746,9 +746,9 @@ mod tests {
     }
 
     #[test]
-    fn plan_active_update_refuses_when_mutation_disabled() {
+    fn plan_active_update_refuses_when_kill_switch_is_set() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
+        std::env::set_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION", "0");
         let entry = LockfileEntry {
             activation: Some(plugin_activation()),
             ..base_entry()
@@ -761,6 +761,7 @@ mod tests {
             !msg.contains("numan remove"),
             "update gate must not suggest remove"
         );
+        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
     }
 
     #[test]
@@ -1204,9 +1205,11 @@ mod tests {
     }
 
     #[test]
-    fn active_plugin_update_refuses_when_env_disabled() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
+    fn active_plugin_update_refuses_when_kill_switch_is_set() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION", "0");
 
         let env = ActiveUpdateEnv::new();
         let lockfile = Lockfile::load(env.root()).unwrap();
@@ -1216,6 +1219,7 @@ mod tests {
         assert!(err
             .to_string()
             .contains("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION"));
+        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
     }
 
     #[test]

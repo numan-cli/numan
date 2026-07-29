@@ -1,8 +1,8 @@
 //! Kill switch for active-plugin update orchestration (Issue #22 PR3).
 //!
-//! Default **off** (opt-in). When enabled via env, `numan update` may
-//! deactivate → upgrade → reactivate an active plugin. When disabled (default),
-//! update refuses while a matching `activation` is set.
+//! Default **on**. `numan update` may deactivate → upgrade → reactivate an
+//! active plugin. The environment override remains as an emergency kill switch;
+//! when disabled, update refuses while a matching `activation` is set.
 //!
 //! Active-plugin **remove** is always refused regardless of this flag; deactivate
 //! first, then remove.
@@ -10,12 +10,13 @@
 #[cfg(test)]
 use std::sync::{Mutex, MutexGuard};
 
-/// Env: set `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION` to `1`, `true`, `TRUE`, or `yes`
-/// to enable active update orchestration. Any other value (or unset) keeps it off.
+/// Unset defaults to enabled. `1`, `true`, `TRUE`, or `yes` explicitly enable
+/// orchestration; any other value disables it as a fail-safe override.
 pub fn is_enabled() -> bool {
     match std::env::var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION") {
         Ok(v) if matches!(v.as_str(), "1" | "true" | "TRUE" | "yes") => true,
-        _ => false, // default off until Issue #22 evidence matrix is green
+        Err(std::env::VarError::NotPresent) => true,
+        _ => false,
     }
 }
 
@@ -25,15 +26,17 @@ pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// RAII helper: holds [`ENV_LOCK`], saves prior env, restores on drop.
 #[cfg(test)]
-pub(crate) struct EnvOptInGuard {
+pub(crate) struct EnvOverrideGuard {
     _lock: MutexGuard<'static, ()>,
     previous: Option<String>,
 }
 
 #[cfg(test)]
-impl EnvOptInGuard {
+impl EnvOverrideGuard {
     pub(crate) fn acquire() -> Self {
-        let lock = ENV_LOCK.lock().unwrap();
+        let lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous = std::env::var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION").ok();
         Self {
             _lock: lock,
@@ -51,7 +54,7 @@ impl EnvOptInGuard {
 }
 
 #[cfg(test)]
-impl Drop for EnvOptInGuard {
+impl Drop for EnvOverrideGuard {
     fn drop(&mut self) {
         match &self.previous {
             Some(value) => std::env::set_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION", value),
@@ -65,15 +68,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_disabled_when_unset() {
-        let guard = EnvOptInGuard::acquire();
+    fn default_enabled_when_unset() {
+        let guard = EnvOverrideGuard::acquire();
         guard.clear();
-        assert!(!is_enabled());
+        assert!(is_enabled());
     }
 
     #[test]
-    fn enabled_only_for_explicit_opt_in_values() {
-        let guard = EnvOptInGuard::acquire();
+    fn explicit_false_and_invalid_values_disable_orchestration() {
+        let guard = EnvOverrideGuard::acquire();
         for v in ["1", "true", "TRUE", "yes"] {
             guard.set(v);
             assert!(is_enabled(), "expected enabled for {v}");
@@ -83,6 +86,6 @@ mod tests {
             assert!(!is_enabled(), "expected disabled for {v:?}");
         }
         guard.clear();
-        assert!(!is_enabled());
+        assert!(is_enabled());
     }
 }
