@@ -112,8 +112,6 @@ Tracks the default branch; pin a tag with `--tag v0.1.4` for reproducible instal
 
 ### winget (Windows)
 
-The package is listed in [winget-pkgs](https://github.com/microsoft/winget-pkgs), and release updates are submitted automatically:
-
 ```powershell
 winget install tonythethompson.numan
 ```
