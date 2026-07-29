@@ -24,7 +24,13 @@ cargo test core::package
 cargo test core::resolve
 cargo test state::lockfile
 cargo test cmd::activate
+
+# Lint / format (CI enforces -D warnings and fmt --check)
+cargo clippy -- -D warnings
+cargo fmt
 ```
+
+CI runs `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check`, and a real-Nu acceptance job (`cargo test -- --ignored` with Nu 0.113 on PATH) on Ubuntu, Windows, and macOS.
 
 ## Project Structure
 ```
@@ -62,6 +68,7 @@ src/
     nu_pin_offer.rs    — Shared TTY offer to `setup nu --version` + `init --refresh` on Nu mismatch
   install/
     download.rs        — HTTP download with progress
+    extract.rs         — tar/zip/xz archive extraction
     transaction.rs     — Full install flow (resolve→download→verify→extract→lockfile)
   state/
     lockfile.rs        — Lockfile v2: PluginActivation, ModuleActivation, revision_id, payload_sha256, compute_revision_id()
@@ -94,7 +101,7 @@ src/
     report.rs          — NupmStatusReport, NupmInspectionReport formatters
 docs/
   nupm-compatibility.md — versioned nupm interoperability contract (authority for Phase 6)
-  PACKAGING.md          — Homebrew/winget release checklist
+  PACKAGING.md          — winget release checklist
   RELEASING.md          — version bump, tag, CI gates
   snapshots-and-rollback.md — snapshot CLI scope and rollback guarantees
 tests/
@@ -120,7 +127,7 @@ tests/
 - **CLI**: `clap` with derive macros
 - **Platform detection**: `#[cfg(target_env)]` from binary's build target, not `std::env::consts`
 - **Trust**: Ed25519 signatures over registry indexes; built-in production trust root for `official` (`src/core/official_registry.rs`); custom registries use `--key <base64-public-key>` via `registry add`
-- **Immutability**: `packages/<type>/<scoped-name>/<version-hash>/` paths, never overwrite
+- **Immutability**: install path shape is `<root>/packages/<type>/<owner>/<name>/<version>-<sha8prefix>/` — never overwrite
 - **Activate testability**: `execute_with_registrar(args, root, registrar)` for plugins; `execute_with_candidate_runner(args, root, registrar, runner)` for modules — inject fakes in tests, never spawn a real Nu binary in unit tests
 - **Deactivate testability**: `execute_with_unregistrar(args, root, unregistrar)` for plugins; `execute_with_candidate_runner_and_unregistrar` when both lanes need fakes — Nu program string is `RM_PLUGIN` with name/config via env only
 - **Active-plugin update testability**: `update::execute_with_hooks` + `plugin_lifecycle::{deactivate_one_plugin,activate_one_plugin}`; opt-in `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` (default off)
@@ -141,7 +148,10 @@ tests/
 2. **Activate is separate** — only command that touches Nu (plugin registration, autoloads)
 3. **Source builds require consent** — prompt before clone/build, separate consent scope
 4. **Lockfile pins immutable paths** — cached artifacts retained while referenced
-5. **Registry trust** — Ed25519 signatures over exact index.json bytes
+5. **Registry trust** — Ed25519 signatures over exact `index.json` bytes; bypass requires `NUMAN_ALLOW_UNSIGNED=1` (dev only)
+6. **Artifact SHA256 is mandatory for plugins** — the install transaction bails if `sha256` is missing from a binary artifact
+7. **State snapshots before mutation** — `create_snapshot()` before `install`/`update`/`remove`/`activate`/`deactivate`/nupm-import mutations; `numan gc` treats every snapshot's referenced payloads as live roots
+8. **Platform triple** — comes from `#[cfg(target_env)]` at compile time, not `std::env::consts` (see `core/platform.rs`; `LIBC` is a compile-time const)
 
 ## Development Workflow
 1. Create feature branch from `master`
@@ -177,7 +187,7 @@ Automated and human PR reviewers should follow [`.github/instructions/review.ins
 - [x] Phase 7.3: shell completions + error UX hints + README `--help` audit ([Phase7Plan.md](docs/plans/Phase7Plan.md))
 - [x] Phase 7.4: Onboarding path — init checklist, README quick start ([Phase7Plan.md](docs/plans/Phase7Plan.md))
 - [x] Phase 7.5: CI hardening — MSRV, cargo deny/package, release gates ([Phase7Plan.md](docs/plans/Phase7Plan.md))
-- [x] Phase 7.6: Wider distribution — Homebrew formula, winget manifests ([docs/PACKAGING.md](docs/PACKAGING.md))
+- [x] Phase 7.6: Wider distribution — winget manifests ([docs/PACKAGING.md](docs/PACKAGING.md)); macOS/Linux package-manager support deferred pending a verified formula
 - [x] Post-7.6: Official registry production cutover + init auto-configures `official` (v0.1.4)
 - [x] Phase 7 complete (polish, CI, distribution) — see [Phase7Plan.md](docs/plans/Phase7Plan.md); toward 1.0: winget merge, registry intake, Phase 5.2/5.5
 

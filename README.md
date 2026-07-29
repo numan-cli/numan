@@ -110,31 +110,12 @@ cargo install --git https://github.com/tonythethompson/numan
 
 Tracks the default branch; pin a tag with `--tag v0.1.4` for reproducible installs.
 
-### Homebrew (macOS / Linux)
-
-```bash
-brew tap tonythethompson/numan
-brew install numan
-```
-
-Or without a tap:
-
-```bash
-brew install --formula https://raw.githubusercontent.com/tonythethompson/numan/master/packaging/homebrew/numan.rb
-```
-
-See [packaging/homebrew/README.md](packaging/homebrew/README.md).
-
 ### winget (Windows)
+
+The package is listed in [winget-pkgs](https://github.com/microsoft/winget-pkgs), and release updates are submitted automatically:
 
 ```powershell
 winget install tonythethompson.numan
-```
-
-Until then, install from the in-repo manifest (from a clone of this repository):
-
-```powershell
-winget install --manifest .\packaging\winget\manifests\t\tonythethompson\numan\0.1.4
 ```
 
 See [packaging/winget/README.md](packaging/winget/README.md) and [docs/PACKAGING.md](docs/PACKAGING.md).
@@ -436,14 +417,14 @@ PR reviewers should follow [`.github/instructions/review.instructions.md`](.gith
 | **3–4** | Plugin + module activation, journals, managed autoloads | ✅ |
 | **5** | `update` / `remove` / `gc`, lockfile v2, [snapshots + rollback](docs/snapshots-and-rollback.md) | ✅ (source builds deferred) |
 | **6** | [nupm](docs/nupm-compatibility.md) status, inspect, import, drift | ✅ |
-| **7** | Doctor, completions, onboarding, CI hardening, [Homebrew/winget packaging](docs/PACKAGING.md) | ✅ — [plan](docs/plans/Phase7Plan.md) |
+| **7** | Doctor, completions, onboarding, CI hardening, [winget packaging](docs/PACKAGING.md) | ✅ — [plan](docs/plans/Phase7Plan.md) |
 | **Post-7.6** | Production [official registry](https://tonythethompson.github.io/numan-registry/) cutover; `numan init` and `numan doctor --fix` auto-configure `official` | ✅ (v0.1.4) |
 
 ### Next (toward 1.0)
 
 | Item | Tracking |
 |------|----------|
-| Community **winget** install (`winget install tonythethompson.numan`) | 🔄 [winget-pkgs PR #400470](https://github.com/microsoft/winget-pkgs/pull/400470) |
+| Community **winget** install (`winget install tonythethompson.numan`) | ✅ [winget-pkgs PR #400470](https://github.com/microsoft/winget-pkgs/pull/400470); updates automated |
 | Curated **official registry** packages + trust/bootstrap policy | 🔄 [#18](https://github.com/tonythethompson/numan/issues/18), [intake roadmap](docs/registry-intake-roadmap.md) stage 1 |
 | Cross-platform **fresh-install** dogfooding | 🔄 `init` → `registry sync` → `search` → `install` → `activate` → `doctor` on Linux, macOS, Windows |
 
@@ -468,7 +449,7 @@ PR reviewers should follow [`.github/instructions/review.instructions.md`](.gith
 | 7.3 Completions + error UX | ✅ |
 | 7.4 Onboarding quick start | ✅ |
 | 7.5 CI / release hardening | ✅ |
-| 7.6 Homebrew tap + winget manifests (in-repo) | ✅ |
+| 7.6 winget manifests (in-repo) | ✅ |
 
 </details>
 

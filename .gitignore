@@ -22,23 +22,19 @@ desktop.ini
 *.bak
 *.tmp
 
-# OpenCode project config
+# Tooling / agent local config (not project source)
 .opencode/
-
-# Serena MCP project config
 .serena/
-
-# Cursor hooks state (machine-specific generated files)
-.cursor/hooks/state/
-
-
-.bobignore
-.clineignore
-.devinignore
-
 .claude/
 .codex/
 .commandcode/
 .cursor/
 .dirac-cache/
 .remember/
+.agents/
+.bobignore
+.clineignore
+.devinignore
+
+# Scratch
+.tmp/

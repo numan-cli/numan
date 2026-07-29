@@ -30,13 +30,13 @@ This separates invariants and mechanisms that already exist from follow-up
 requirements this ADR introduces:
 
 - **Already implemented, unchanged by this ADR:**
-  - Install is inert; only `activate` touches Nu (`CLAUDE.md` Critical Rule 1).
+  - Install is inert; only `activate` touches Nu (`AGENTS.md` Architecture Rule 1).
   - Ed25519 trust-store and registry verification primitives exist in
     `src/core/trust.rs` and `src/core/registry.rs`
     (`RegistryManager::verify_and_load`, `RegistryManager::load_verified`).
-  - Artifact SHA-256 is mandatory for plugin artifacts (Critical Rule 4).
+  - Artifact SHA-256 is mandatory for plugin artifacts (`AGENTS.md` Architecture Rule 6).
   - Lockfile snapshots before mutation; activation uses journal recovery
-    (Critical Rule 5, Phase 3).
+    (`AGENTS.md` Architecture Rule 7, Phase 3).
 - **Not yet implemented — follow-up requirement from this ADR:**
   atomic verified registry sync that downloads index+signature to temporary
   paths, verifies/parses the downloaded bytes, and preserves the active cache

@@ -20,12 +20,10 @@ After manifests are accepted in [microsoft/winget-pkgs](https://github.com/micro
 winget install tonythethompson.numan
 ```
 
-## Submitting an update
+## Automated updates
 
-1. Copy `manifests/t/tonythethompson/numan/<version>/` into a fork of `microsoft/winget-pkgs` at the same path (use WSL/Linux to preserve path casing).
-2. Open a PR using [wingetcreate](https://github.com/microsoft/winget-cli/blob/master/doc/windows/package-manager/winget/create.md) or manually.
-3. Use manifest schema **1.12.0** (`$schema` URLs and `ManifestVersion` must match).
-4. Update `InstallerSha256` from the release `SHA256SUMS` file (uppercase hex).
-5. **One version per PR** to winget-pkgs — include only the new version directory; do not mix `0.1.3` and `0.1.4` in one PR.
+The [`Publish to WinGet`](../../.github/workflows/winget.yml) workflow submits one update PR after each published GitHub Release. It uses the Windows `.zip` release asset and the existing `tonythethompson/winget-pkgs` fork.
+
+The one-time repository setup requires a classic GitHub PAT with `public_repo` scope stored as the `WINGET_TOKEN` repository secret. The workflow can also be run manually for a published release tag.
 
 See [docs/PACKAGING.md](../../docs/PACKAGING.md) for the full release checklist.

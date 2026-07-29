@@ -47,7 +47,7 @@ Then:
 5. The [Release workflow](https://github.com/tonythethompson/numan/actions/workflows/release.yml) waits for green CI on the tagged commit, runs preflight checks, then builds archives and publishes.
 6. Confirm platform archives and `SHA256SUMS` on GitHub Releases.
 7. Confirm the **Publish to crates.io** job succeeds (requires `CRATES_IO_TOKEN` repository secret).
-8. Update [packaging manifests](PACKAGING.md) (Homebrew `sha256`, winget version folder) from release `SHA256SUMS`.
+8. Confirm the [`Publish to WinGet`](../.github/workflows/winget.yml) workflow opens the update PR after the release is published.
 
 **Do not tag until CI is green on `master`.** The release workflow gates on CI check results for tag pushes; pushing a tag on a failing commit blocks publication.
 
@@ -77,5 +77,4 @@ Then:
 | GitHub Release | Download archive from [Releases](https://github.com/tonythethompson/numan/releases) |
 | crates.io | `cargo install numan-cli` |
 | From source | `cargo install --path .` or `cargo install --git https://github.com/tonythethompson/numan` |
-| Homebrew | See [PACKAGING.md](PACKAGING.md) |
 | winget | See [PACKAGING.md](PACKAGING.md) |

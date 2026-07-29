@@ -1,0 +1,28 @@
+name: Publish to WinGet
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to submit (for example, v0.1.5)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Submit manifest update
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish manifest to WinGet
+        uses: vedantmgoyal9/winget-releaser@b3a5dae0047c6180023acba3f548c55fdf6b7193
+        with:
+          identifier: tonythethompson.numan
+          fork-user: tonythethompson
+          installers-regex: '\.zip$'
+          release-tag: ${{ inputs.release_tag || github.event.release.tag_name }}
+          token: ${{ secrets.WINGET_TOKEN }}
