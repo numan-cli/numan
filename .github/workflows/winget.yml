@@ -12,6 +12,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -28,14 +29,30 @@ jobs:
     env:
       RELEASE_TAG: ${{ inputs.release_tag || github.event.workflow_run.head_branch }}
     steps:
+      - name: Verify required tools
+        shell: bash
+        run: |
+          command -v gh >/dev/null || { echo "::error::GitHub CLI is required"; exit 1; }
+          command -v jq >/dev/null || { echo "::error::jq is required"; exit 1; }
+
+      - name: Verify originating release job
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_RUN_ID}/jobs?per_page=100" \
+            --jq 'any(.jobs[]; .name == "Publish GitHub Release" and .conclusion == "success")' \
+            | grep -Fx true
+
       - name: Verify published Windows release asset
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          command -v gh >/dev/null || { echo "::error::GitHub CLI is required"; exit 1; }
-          command -v jq >/dev/null || { echo "::error::jq is required"; exit 1; }
           expected_asset="numan-${RELEASE_TAG#v}-x86_64-pc-windows-msvc.zip"
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,assets \
             | jq -e --arg expected_asset "$expected_asset" \
