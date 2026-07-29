@@ -569,7 +569,10 @@ fn write_nu_shim(shim_dir: &Path, real_nu: &Path) -> Result<()> {
             .arg("-o")
             .arg(&executable)
             .output()
-            .context("failed to compile native Windows Nu forwarder")?;
+            .context(
+                "failed to run rustc for the native Windows Nu forwarder; \
+                 the acceptance suite requires the Rust toolchain on PATH",
+            )?;
         std::fs::remove_file(&source)?;
         anyhow::ensure!(
             output.status.success(),
@@ -695,7 +698,7 @@ mod tests {
     #[test]
     fn artifact_suffix_preserves_supported_release_formats() {
         assert_eq!(
-            artifact_suffix("https://example.invalid/plugin.zip").unwrap(),
+            artifact_suffix("https://example.invalid/PLUGIN.ZIP").unwrap(),
             ".zip"
         );
         assert_eq!(
@@ -705,6 +708,18 @@ mod tests {
         assert_eq!(
             artifact_suffix("https://example.invalid/plugin.tar.xz?download=1").unwrap(),
             ".tar.xz"
+        );
+        assert_eq!(
+            artifact_suffix("https://example.invalid/plugin.tgz").unwrap(),
+            ".tgz"
+        );
+        assert_eq!(
+            artifact_suffix("https://example.invalid/plugin.txz#release-asset").unwrap(),
+            ".txz"
+        );
+        assert_eq!(
+            artifact_suffix("https://example.invalid/plugin.tar").unwrap(),
+            ".tar"
         );
     }
 

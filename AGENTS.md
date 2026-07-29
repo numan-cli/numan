@@ -145,7 +145,7 @@ tests/
 
 ## Architecture Rules
 1. **Install is always inert** — no Nu integration, only writes to `$NUMAN_ROOT`
-2. **Activate is separate** — only command that touches Nu (plugin registration, autoloads)
+2. **Nu integration is explicit and journaled** — `activate`/`deactivate` own direct integration changes; `update` may orchestrate plugin deactivate→upgrade→activate, but install and remove never register or unregister plugins
 3. **Source builds require consent** — prompt before clone/build, separate consent scope
 4. **Lockfile pins immutable paths** — cached artifacts retained while referenced
 5. **Registry trust** — Ed25519 signatures over exact `index.json` bytes; bypass requires `NUMAN_ALLOW_UNSIGNED=1` (dev only)
