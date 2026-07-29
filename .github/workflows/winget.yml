@@ -34,6 +34,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          command -v gh >/dev/null || { echo "::error::GitHub CLI is required"; exit 1; }
+          command -v jq >/dev/null || { echo "::error::jq is required"; exit 1; }
           expected_asset="numan-${RELEASE_TAG#v}-x86_64-pc-windows-msvc.zip"
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,assets \
             | jq -e --arg expected_asset "$expected_asset" \
