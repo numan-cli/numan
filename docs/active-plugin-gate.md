@@ -4,25 +4,25 @@
 
 While a package has a lockfile `activation` record (plugin activation), Numan must not **remove** that package until the activation record is cleared. Plugin deactivate clears the record via a journaled `plugin rm` flow. `--force` on `numan remove` does **not** bypass active plugin activation. It only bypasses active *module* activation (`module_activation`).
 
-**Update** of an active plugin is orchestrated by default: deactivate → upgrade → reactivate. Set `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=0` as an emergency kill switch; the existing explicit enable values (`1`, `true`, `TRUE`, or `yes`) remain accepted. Missing Nu path cache or a stale/mismatched activation identity still refuses update (fail closed) so the activation record is not rewritten without a verified unregister.
+**Update** of an active plugin is orchestrated only when explicitly enabled: set `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` to permit deactivate → upgrade → reactivate. Missing, empty, or any other value disables orchestration. Missing Nu path cache or a stale/mismatched activation identity still refuses update (fail closed) so the activation record is not rewritten without a verified unregister.
 
 ## Current behavior
 
 | Operation | Active plugin | Active module |
 |---|---|---|
 | `numan remove` | **Always refused** while `activation` is set (even when mutation enabled) | Refused unless `--force` |
-| `numan update` | Orchestrated deactivate→upgrade→activate by default; refused when the kill switch is set | Refused (use `deactivate` first) |
+| `numan update` | Orchestrated deactivate→upgrade→activate only with `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1`; otherwise refused | Refused (use `deactivate` first) |
 | `numan deactivate` | Supported: journaled unregister + clear `activation` (payload kept) | Supported today |
 
 After `numan deactivate <pkg>`, `numan remove <pkg>` succeeds without `--force` (inactive plugin).
 
-### Emergency kill switch
+### Explicit opt-in
 
 ```text
-NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=0   # disable active update orchestration
+NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1   # enable active update orchestration
 ```
 
-Unset enables orchestration. `1`, `true`, `TRUE`, or `yes` explicitly enable it for backward compatibility. Any other value disables orchestration as a fail-safe override.
+The variable must be present and exactly equal to `1`. Unset, empty, or any other value disables orchestration as a fail-safe override.
 
 `numan doctor` reports an **info** finding `activation.plugin_mutation_gated` for each package with `package_type == "plugin"` and `activation.is_some()` (even when `nu_state/paths.json` is missing). A pending deactivate journal surfaces as `journal.plugin_deactivate_pending` (warn); `--fix` runs deactivate reconcile.
 

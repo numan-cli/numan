@@ -1,8 +1,8 @@
 //! Kill switch for active-plugin update orchestration (Issue #22 PR3).
 //!
-//! Default **on**. `numan update` may deactivate → upgrade → reactivate an
-//! active plugin. The environment override remains as an emergency kill switch;
-//! when disabled, update refuses while a matching `activation` is set.
+//! Default **off**. `numan update` may deactivate → upgrade → reactivate an
+//! active plugin only when explicitly enabled with the environment variable;
+//! otherwise, update refuses while a matching `activation` is set.
 //!
 //! Active-plugin **remove** is always refused regardless of this flag; deactivate
 //! first, then remove.
@@ -10,14 +10,13 @@
 #[cfg(test)]
 use std::sync::{Mutex, MutexGuard};
 
-/// Unset defaults to enabled. `1`, `true`, `TRUE`, or `yes` explicitly enable
-/// orchestration; any other value disables it as a fail-safe override.
+/// Orchestration is enabled only by an explicit value of `1`; missing, empty,
+/// and alternative values disable it as a fail-safe.
 pub fn is_enabled() -> bool {
-    match std::env::var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION") {
-        Ok(v) if matches!(v.as_str(), "1" | "true" | "TRUE" | "yes") => true,
-        Err(std::env::VarError::NotPresent) => true,
-        _ => false,
-    }
+    matches!(
+        std::env::var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION").as_deref(),
+        Ok("1")
+    )
 }
 
 /// Shared mutex for tests that mutate `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION`.
@@ -68,24 +67,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_enabled_when_unset() {
+    fn disabled_when_unset() {
         let guard = EnvOverrideGuard::acquire();
         guard.clear();
-        assert!(is_enabled());
+        assert!(!is_enabled());
     }
 
     #[test]
     fn explicit_false_and_invalid_values_disable_orchestration() {
         let guard = EnvOverrideGuard::acquire();
-        for v in ["1", "true", "TRUE", "yes"] {
-            guard.set(v);
-            assert!(is_enabled(), "expected enabled for {v}");
-        }
-        for v in ["0", "false", "FALSE", "no", "", "on", "TRUE "] {
+        guard.set("1");
+        assert!(is_enabled(), "expected enabled for explicit opt-in");
+        for v in ["0", "true", "TRUE", "yes", "false", "FALSE", "no", "", "on", "TRUE "] {
             guard.set(v);
             assert!(!is_enabled(), "expected disabled for {v:?}");
         }
         guard.clear();
-        assert!(is_enabled());
+        assert!(!is_enabled());
     }
 }
