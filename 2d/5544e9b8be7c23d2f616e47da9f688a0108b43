@@ -1,0 +1,38 @@
+.github/workflows/ci.yml
+  s_6c58868655aae2::t_4490a634d13af3 25,27,35,39,46,56,58,65,67,74,84,86
+.github/workflows/active-plugin-update-acceptance.yml
+  s_6c58868655aae2::t_4490a634d13af3 21,27
+.github/workflows/claude.yml
+  s_6c58868655aae2::t_4490a634d13af3 29
+.github/workflows/winget.yml
+  s_6c58868655aae2::t_8aad90c72f6f88 23-24
+  s_6c58868655aae2::t_4490a634d13af3 4-6,20-22,25,34
+.github/workflows/official-registry-acceptance.yml
+  s_6c58868655aae2::t_4490a634d13af3 17,23
+.github/workflows/cline-pr-review.yml
+  s_6c58868655aae2::t_4490a634d13af3 31
+docs/RELEASING.md
+  s_6c58868655aae2::t_4490a634d13af3 52
+.github/workflows/release.yml
+  s_6c58868655aae2::t_4490a634d13af3 55,69,73,105,124,156,167,179,208
+.github/workflows/claude-code-review.yml
+  s_6c58868655aae2::t_4490a634d13af3 19,33
+docs/PACKAGING.md
+  s_6c58868655aae2::t_4490a634d13af3 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "2d5544e9b8be7c23d2f616e47da9f688a0108b43",
+  "prompts": {},
+  "sessions": {
+    "s_6c58868655aae2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fab11-b45b-76c0-9653-39aece85b698",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}
