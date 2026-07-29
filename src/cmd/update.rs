@@ -619,7 +619,7 @@ mod tests {
     use crate::cmd::plugin_lifecycle::{activate_one_plugin, deactivate_one_plugin};
     use crate::core::integrity;
     use crate::core::package::ModuleImportMode;
-    use crate::state::active_plugin_mutation::ENV_LOCK;
+    use crate::state::active_plugin_mutation::EnvOverrideGuard;
     use crate::state::lifecycle_journal::PendingLifecycle;
     use crate::state::lockfile::{Lockfile, LockfileEntry, ModuleActivation, PluginActivation};
     use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
@@ -741,8 +741,8 @@ mod tests {
 
     #[test]
     fn plan_active_update_orchestrates_when_exact_opt_in_is_set() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION", "1");
+        let guard = EnvOverrideGuard::acquire();
+        guard.set("1");
         let entry = LockfileEntry {
             activation: Some(plugin_activation()),
             ..base_entry()
@@ -751,13 +751,12 @@ mod tests {
             plan_active_update(&entry, "owner/pkg", &matching_nu_paths()).unwrap(),
             ActiveUpdatePlan::OrchestrateActivePlugin
         );
-        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
     }
 
     #[test]
     fn plan_active_update_refuses_when_opt_in_is_unset() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
+        let guard = EnvOverrideGuard::acquire();
+        guard.clear();
         let entry = LockfileEntry {
             activation: Some(plugin_activation()),
             ..base_entry()
@@ -770,13 +769,12 @@ mod tests {
             !msg.contains("numan remove"),
             "update gate must not suggest remove"
         );
-        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
     }
 
     #[test]
     fn plan_active_update_refuses_when_activation_stale() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION", "1");
+        let guard = EnvOverrideGuard::acquire();
+        guard.set("1");
         let entry = LockfileEntry {
             activation: Some(plugin_activation()),
             ..base_entry()
@@ -787,7 +785,6 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("does not match"));
         assert!(msg.contains("init --refresh") || msg.contains("deactivate"));
-        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
     }
 
     #[test]
@@ -969,8 +966,8 @@ mod tests {
 
     #[test]
     fn active_plugin_update_succeeds_with_fake_hooks() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION", "1");
+        let guard = EnvOverrideGuard::acquire();
+        guard.set("1");
 
         let env = ActiveUpdateEnv::new();
         let pkg_id = env.pkg_id.clone();
@@ -1024,13 +1021,12 @@ mod tests {
         assert_eq!(entry.version, "2.0.0");
         assert!(entry.activation.is_some());
         assert!(PendingLifecycle::load(&root).unwrap().is_none());
-        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
     }
 
     #[test]
     fn install_failure_after_deactivate_attempts_restore() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION", "1");
+        let guard = EnvOverrideGuard::acquire();
+        guard.set("1");
 
         let env = ActiveUpdateEnv::new();
         let _lock = acquire_mutation_lock(env.root()).unwrap();
@@ -1093,15 +1089,14 @@ mod tests {
             PendingLifecycle::load(env.root()).unwrap().unwrap().stage,
             LifecycleStage::Prepared
         );
-        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
     }
 
     #[test]
     fn registrar_failure_after_install_leaves_recovery_journals() {
         use crate::state::journal::PendingActivation;
 
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION", "1");
+        let guard = EnvOverrideGuard::acquire();
+        guard.set("1");
 
         let env = ActiveUpdateEnv::new();
         let pkg_id = env.pkg_id.clone();
@@ -1210,15 +1205,12 @@ mod tests {
         let pending_act = PendingActivation::load(env.root()).unwrap().unwrap();
         assert_eq!(pending_act.entries.len(), 1);
         assert!(pending_act.entries[0].error.is_some());
-        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
     }
 
     #[test]
     fn active_plugin_update_refuses_when_opt_in_is_unset() {
-        let _guard = ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
+        let guard = EnvOverrideGuard::acquire();
+        guard.clear();
 
         let env = ActiveUpdateEnv::new();
         let lockfile = Lockfile::load(env.root()).unwrap();
@@ -1228,13 +1220,12 @@ mod tests {
         assert!(err
             .to_string()
             .contains("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION"));
-        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
     }
 
     #[test]
     fn unregistrar_failure_leaves_activation_and_journals() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION", "1");
+        let guard = EnvOverrideGuard::acquire();
+        guard.set("1");
 
         let env = ActiveUpdateEnv::new();
         let _lock = acquire_mutation_lock(env.root()).unwrap();
@@ -1282,17 +1273,16 @@ mod tests {
         );
         assert!(PendingLifecycle::load(env.root()).unwrap().is_some());
         assert!(PendingPluginDeactivate::load(env.root()).unwrap().is_some());
-        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
     }
 
     #[test]
     fn resume_lockfile_updated_reactivates_inactive_plugin() {
         use crate::state::journal::{PendingActivation, PendingActivationEntry, PendingStatus};
 
-        let _guard = ENV_LOCK.lock().unwrap();
+        let guard = EnvOverrideGuard::acquire();
         // Resume does not require the mutation env; finishing an interrupted
         // orchestrated update must not leave the plugin gated forever.
-        std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION");
+        guard.clear();
 
         let env = ActiveUpdateEnv::new();
         let pkg_id = env.pkg_id.clone();
