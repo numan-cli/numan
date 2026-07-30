@@ -1,0 +1,22 @@
+.github/workflows/release.yml
+  s_4d59efafd8ef10::t_e612fcc9f08ce6 111-113,115,119-120
+  s_4d59efafd8ef10::t_257014c05f3e5a 176-178,180,183,198-200,213-214,217
+.github/workflows/winget.yml
+  s_4d59efafd8ef10::t_e36006b072362a 48-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "9a60847f69c8567e0add87cd21caf6a9ff4f52d2",
+  "prompts": {},
+  "sessions": {
+    "s_4d59efafd8ef10": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "65db124d-9560-4e31-8de2-505020eda32f",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}
