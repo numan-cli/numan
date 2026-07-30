@@ -2,6 +2,11 @@
 
 [![CI](https://github.com/tonythethompson/numan/actions/workflows/ci.yml/badge.svg)](https://github.com/tonythethompson/numan/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+<img alt="Crates.io Version" src="https://img.shields.io/crates/v/numan-cli"> 
+![WinGet Package Version](https://img.shields.io/winget/v/tonythethompson.numan)
+<img alt="Crates.io Version" src="https://img.shields.io/crates/d/numan-cli"> 
+
+
 
 **Numan** is a cross-platform package manager for [Nushell](https://www.nushell.sh/). It installs registry plugins, modules, scripts, and completion payloads from signed registries, pins immutable artifacts in a lockfile, and activates plugins and modules with Nu only when you ask — keeping installs inert until you run `numan activate`.
 
