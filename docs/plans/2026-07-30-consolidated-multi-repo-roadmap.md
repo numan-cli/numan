@@ -47,7 +47,7 @@ Repo-local roadmaps keep operational detail and should link here:
 - Manifest entries pin human-facing tags and immutable `source_commit`.
 - Publication refuses existing release tags/assets; changed bytes need a new version or explicit build revision.
 - Demand-ranked source-only queue: `docs/backlog.json`.
-- **Blocking handoff:** [PR #4](https://github.com/tonythethompson/numan-plugins/pull/4) (`feature/catalog-expansion-wave-1`, `88151d8`) is open and green. Adds `FMotalleb/nu_plugin_port_extension` and `FMotalleb/nu_plugin_image`, plus macOS-15 runner labels. **No Wave 1 assets published yet.**
+- **Blocking handoff:** [PR #4](https://github.com/tonythethompson/numan-plugins/pull/4) is **merged**. `master` has `FMotalleb/nu_plugin_port_extension` and `FMotalleb/nu_plugin_image`, plus macOS-15 runner labels. **No Wave 1 assets published yet.** First Wave 1 dispatch failed on Windows until [PR #8](https://github.com/tonythethompson/numan-plugins/pull/8) forces `shell: bash` on the Recheck step.
 
 ---
 
@@ -57,7 +57,8 @@ Do these in order. Registry intake and client smoke wait on plugins publication.
 
 ### A. `numan-plugins` — merge, build, verify
 
-- [ ] Merge PR #4 after review and green checks; pull merge commit into `master`.
+- [x] Merge PR #4 after review and green checks; pull merge commit into `master`.
+- [ ] Merge Windows Recheck `shell: bash` fix ([PR #8](https://github.com/tonythethompson/numan-plugins/pull/8)) if still open.
 - [ ] Dispatch `build-plugins` manually with only:
   `nu_plugin_port_extension,nu_plugin_image`.
 - [ ] Confirm workflow checks each upstream tag against recorded `source_commit`.
@@ -71,8 +72,8 @@ Do these in order. Registry intake and client smoke wait on plugins publication.
 
 | Package | Version | Notes |
 |---------|---------|-------|
-| `FMotalleb/nu_plugin_port_extension` | 0.113.1 | Prepared in PR #4 |
-| `FMotalleb/nu_plugin_image` | 0.112.2 | Prepared in PR #4 |
+| `FMotalleb/nu_plugin_port_extension` | 0.113.1 | On `master` via PR #4 |
+| `FMotalleb/nu_plugin_image` | 0.112.2 | On `master` via PR #4 |
 
 **Handoff contract to registry (every successful build wave):**
 
@@ -132,8 +133,8 @@ Move a candidate from `docs/backlog.json` → `manifest.json` `active[]` only wh
 
 Source: `docs/backlog.json`. Research before promoting:
 
-- [ ] `devyn/nu_plugin_dbus`
-- [ ] `PhotonBursted/nu_plugin_vec`
+- [x] `devyn/nu_plugin_dbus` — `PRE_0_112` (nu-plugin 0.101.0; libdbus; not Windows)
+- [x] `PhotonBursted/nu_plugin_vec` — `PRE_0_112` (nu-plugin 0.105.1; pure Rust; Windows expected)
 - [ ] `drbrain/nu_plugin_prometheus`
 - [ ] `galuszkak/nu_plugin_bigquery`
 - [ ] `jcornaz/nu_plugin_from_beancount`
@@ -293,7 +294,7 @@ Ship 1.0 when **all** of the following are true:
 
 ## Suggested Execution Order
 
-1. **Now:** Merge plugins PR #4 → dispatch Wave 1 build → registry intake PR → lifecycle-prove → production → client smoke.
+1. **Now:** Merge plugins Windows Recheck fix (PR #8) → dispatch Wave 1 build → registry intake PR → lifecycle-prove → production → client smoke.
 2. **Next:** Wave 2 research (one or two backlog candidates) through the same pipeline; keep client compat UX and doctor honest against new packages.
 3. **Parallel (non-blocking):** Registry Stage 2 lint hardening; intake-candidates / outreach maintenance; winget release monitoring.
 4. **Later:** Intake Stages 3–6; install-only activation contracts; active-update default-on decision; Phase 5.2 source builds only after intake is steady.
