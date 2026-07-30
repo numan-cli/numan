@@ -47,7 +47,7 @@ Repo-local roadmaps keep operational detail and should link here:
 - Manifest entries pin human-facing tags and immutable `source_commit`.
 - Publication refuses existing release tags/assets; changed bytes need a new version or explicit build revision.
 - Demand-ranked source-only queue: `docs/backlog.json`.
-- **Blocking handoff:** [PR #4](https://github.com/tonythethompson/numan-plugins/pull/4) is **merged**. `master` has `FMotalleb/nu_plugin_port_extension` and `FMotalleb/nu_plugin_image`, plus macOS-15 runner labels. **No Wave 1 assets published yet.** First Wave 1 dispatch will fail on Windows unless [PR #8](https://github.com/tonythethompson/numan-plugins/pull/8) (which forces `shell: bash` on the Recheck step) is merged first.
+- **Blocking handoff:** [PR #4](https://github.com/tonythethompson/numan-plugins/pull/4) is **merged**. Wave 1 release assets for `port_extension@0.113.1` and `image@0.112.2` are published. Registry intake is open as [numan-registry#32](https://github.com/tonythethompson/numan-registry/pull/32) (merge block before lifecycle-prove / production).
 
 ---
 
@@ -58,15 +58,16 @@ Do these in order. Registry intake and client smoke wait on plugins publication.
 ### A. `numan-plugins` — merge, build, verify
 
 - [x] Merge PR #4 after review and green checks; pull merge commit into `master`.
-- [ ] Merge Windows Recheck `shell: bash` fix ([PR #8](https://github.com/tonythethompson/numan-plugins/pull/8)) if still open.
-- [ ] Dispatch `build-plugins` manually with only:
+- [x] Merge Windows Recheck `shell: bash` fix ([PR #8](https://github.com/tonythethompson/numan-plugins/pull/8)).
+- [x] Dispatch `build-plugins` manually with only:
   `nu_plugin_port_extension,nu_plugin_image`.
-- [ ] Confirm workflow checks each upstream tag against recorded `source_commit`.
-- [ ] Confirm all expected target assets exist; no pre-existing release/asset was replaced.
-- [ ] Confirm generated specs preserve `source.rev` as the immutable upstream commit.
-- [ ] Download generated `spec-*.json` artifacts for registry intake.
-- [ ] Do not rebuild existing releases unless a new version or explicit build revision was chosen.
-- [ ] Do not publish any registry changes from this repo.
+- [x] Confirm workflow checks each upstream tag against recorded `source_commit`.
+- [x] Confirm all expected target assets exist; no pre-existing release/asset was replaced.
+- [x] Confirm generated specs preserve `source.rev` as the immutable upstream commit.
+- [x] Download generated `spec-*.json` artifacts for registry intake.
+- [x] Do not rebuild existing releases unless a new version or explicit build revision was chosen.
+- [x] Do not publish any registry changes from this repo.
+- [ ] Merge release upload-by-id fix ([numan-plugins#12](https://github.com/tonythethompson/numan-plugins/pull/12)) so future waves avoid the softprops draft race.
 
 **Wave 1 packages:**
 
@@ -86,17 +87,17 @@ Do these in order. Registry intake and client smoke wait on plugins publication.
 
 ### B. `numan-registry` — intake, evidence, publish
 
-- [ ] Fetch `spec-*.json` from the successful plugins build run.
-- [ ] Place specs under `specs/` on a focused registry branch (no unrelated catalog targets).
-- [ ] Run `python scripts/add-package.py --spec specs/<file>.json --write` for each package (script downloads + computes SHA256; never hand-type hashes).
-- [ ] Run `python scripts/sync-intake-candidates.py` if intake-state/index changes need the human doc refreshed.
-- [ ] Local checks:
+- [x] Fetch `spec-*.json` from the successful plugins build run.
+- [x] Place specs under `specs/` on a focused registry branch (no unrelated catalog targets).
+- [x] Run `python scripts/add-package.py --spec specs/<file>.json --write` for each package (script downloads + computes SHA256; never hand-type hashes).
+- [x] Run `python scripts/sync-intake-candidates.py` if intake-state/index changes need the human doc refreshed.
+- [x] Local checks:
   - `python scripts/scan_for_secrets.py`
   - `python scripts/preflight.py`
   - `python scripts/validate.py --index registry/index.json --sig registry/index.json.sig --pub keys/official.pub --skip-artifacts`
   - `cargo run --locked --manifest-path tools/numan-parser-check/Cargo.toml -- registry/index.json`
   - `python scripts/lint-manifest-index.py --index registry/index.json --manifest ../numan-plugins/manifest.json`
-- [ ] Open PR with specs, index diff, intake doc updates, and test evidence.
+- [x] Open PR with specs, index diff, intake doc updates, and test evidence ([numan-registry#32](https://github.com/tonythethompson/numan-registry/pull/32)).
 - [ ] Run staging after review if needed.
 - [ ] Run `lifecycle-prove` against a real Nu matching each package constraint before production.
 - [ ] Dispatch production only after validation is green and reviewer approval exists.
@@ -294,7 +295,7 @@ Ship 1.0 when **all** of the following are true:
 
 ## Suggested Execution Order
 
-1. **Now:** Merge plugins Windows Recheck fix (PR #8) → dispatch Wave 1 build → registry intake PR → lifecycle-prove → production → client smoke.
+1. **Now:** Merge registry Wave 1 intake ([numan-registry#32](https://github.com/tonythethompson/numan-registry/pull/32)) → lifecycle-prove → production → client smoke. Also merge plugins release upload-by-id fix ([#12](https://github.com/tonythethompson/numan-plugins/pull/12)).
 2. **Next:** Wave 2 research (one or two backlog candidates) through the same pipeline; keep client compat UX and doctor honest against new packages.
 3. **Parallel (non-blocking):** Intake-candidates / outreach maintenance; winget release monitoring.
 4. **Later:** Intake Stages 3–6; install-only activation contracts; active-update default-on decision; Phase 5.2 source builds only after intake is steady.
