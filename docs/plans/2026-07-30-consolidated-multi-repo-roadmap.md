@@ -204,9 +204,9 @@ Stage 1 (lifecycle harness) is done. Remaining stages follow [`docs/registry-int
 
 ### Stage 2: Stronger local lint
 
-- [ ] Actionable errors: missing metadata, duplicate targets, unknown triples, unsupported archive suffixes, missing activation declarations, malformed Nu constraints, source provenance mismatches
-- [ ] Deterministic lint output for before/after PR comparison
-- [ ] PR template asks for lint, parser-check, and lifecycle evidence
+- [x] Actionable errors: missing metadata, duplicate targets, unknown triples, unsupported archive suffixes, missing activation declarations, malformed Nu constraints, source provenance mismatches
+- [x] Deterministic lint output for before/after PR comparison
+- [x] PR template asks for lint, parser-check, and lifecycle evidence
 
 ### Stage 3: Repo discovery
 
