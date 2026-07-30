@@ -108,14 +108,16 @@ jobs:
       - name: Resolve release version
         id: meta
         shell: bash
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+          if [[ "$REF_TYPE" == "tag" ]]; then
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
-            tag="${{ inputs.tag }}"
-            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-            echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+            echo "tag=${INPUT_TAG}" >> "$GITHUB_OUTPUT"
+            echo "version=${INPUT_TAG#v}" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -171,11 +173,14 @@ jobs:
       - name: Resolve release tag
         id: meta
         shell: bash
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+          if [[ "$REF_TYPE" == "tag" ]]; then
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "tag=${INPUT_TAG}" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -190,7 +195,9 @@ jobs:
           cat SHA256SUMS
 
       - name: Prepare release notes from CHANGELOG
-        run: bash scripts/release-notes-from-changelog.sh "${{ steps.meta.outputs.tag }}" > release-notes.md
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: bash scripts/release-notes-from-changelog.sh "$RELEASE_TAG" > release-notes.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -203,9 +210,11 @@ jobs:
 
       # Stable producer/consumer contract for winget.yml (do not rename this artifact).
       - name: Emit WinGet release marker
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
         run: |
           mkdir -p winget-marker
-          printf '%s\n' "${{ steps.meta.outputs.tag }}" > winget-marker/release-tag.txt
+          printf '%s\n' "$RELEASE_TAG" > winget-marker/release-tag.txt
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
