@@ -1,0 +1,301 @@
+# Numan Consolidated Multi-Repo Roadmap
+
+**Status date:** 2026-07-30
+
+**Authority:** This is the single cross-repo plan for remaining work toward Numan 1.0.
+Repo-local roadmaps keep operational detail and should link here:
+
+- [`numan-plugins/docs/roadmap.md`](https://github.com/tonythethompson/numan-plugins/blob/master/docs/roadmap.md)
+- [`numan-registry/docs/roadmap.md`](https://github.com/tonythethompson/numan-registry/blob/main/docs/roadmap.md)
+- Prior client draft: [`2026-07-29-remaining-roadmap.md`](2026-07-29-remaining-roadmap.md) (superseded by this doc)
+- Intake automation endgame: [`docs/registry-intake-roadmap.md`](../registry-intake-roadmap.md)
+
+## Repository Split
+
+| Repo | Owns |
+|------|------|
+| `numan` | Client, UX, local state, Nu integration, release packaging |
+| `numan-plugins` | CI-built plugin binaries for upstreams without compliant release assets |
+| `numan-registry` | Signed official catalog, intake evidence, staging, production signing |
+
+**Operating rule:** catalog depth flows `numan-plugins → numan-registry → numan`.
+
+- Client work must not paper over a missing registry artifact.
+- Registry work must not trust a plugin build until the hardened pipeline has produced immutable assets and specs.
+- Plugin builds never publish registry changes.
+
+---
+
+## Current Baseline (2026-07-30)
+
+### Client (`numan`)
+
+- 0.1.x line is feature-complete for core product surface: signed registries, inert installs, plugin/module activation, update/remove/gc, snapshots, doctor, completions, nupm import/diff, crates.io, winget automation.
+- Compat UX (`search` filtered by default, `try`, managed Nu pin offer) is in place; keep it honest as the catalog grows.
+- Active-plugin update remains exact-`NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` opt-in.
+
+### Registry (`numan-registry`)
+
+- Production publication is live via the protected `Production registry` workflow.
+- Source-tree `registry/index.json.sig` remains a placeholder by design.
+- Intake tooling: spec scaffold, SHA256 download, schema/validate, secrets scan, preflight, Numan parser check, manifest/index Nu-constraint lint.
+- Stage 1 lifecycle evidence is mandatory for activatable package promotion.
+- Live candidate truth: [`intake-candidates.md`](https://github.com/tonythethompson/numan-registry/blob/main/docs/intake-candidates.md) (synced from `docs/intake-state.json`).
+
+### Plugins (`numan-plugins`)
+
+- Hardened build pipeline requires manual dispatch with a non-empty package list.
+- Manifest entries pin human-facing tags and immutable `source_commit`.
+- Publication refuses existing release tags/assets; changed bytes need a new version or explicit build revision.
+- Demand-ranked source-only queue: `docs/backlog.json`.
+- **Blocking handoff:** [PR #4](https://github.com/tonythethompson/numan-plugins/pull/4) (`feature/catalog-expansion-wave-1`, `88151d8`) is open and green. Adds `FMotalleb/nu_plugin_port_extension` and `FMotalleb/nu_plugin_image`, plus macOS-15 runner labels. **No Wave 1 assets published yet.**
+
+---
+
+## P0 Critical Path: Finish Catalog Wave 1 End-To-End
+
+Do these in order. Registry intake and client smoke wait on plugins publication.
+
+### A. `numan-plugins` — merge, build, verify
+
+- [ ] Merge PR #4 after review and green checks; pull merge commit into `master`.
+- [ ] Dispatch `build-plugins` manually with only:
+  `nu_plugin_port_extension,nu_plugin_image`.
+- [ ] Confirm workflow checks each upstream tag against recorded `source_commit`.
+- [ ] Confirm all expected target assets exist; no pre-existing release/asset was replaced.
+- [ ] Confirm generated specs preserve `source.rev` as the immutable upstream commit.
+- [ ] Download generated `spec-*.json` artifacts for registry intake.
+- [ ] Do not rebuild existing releases unless a new version or explicit build revision was chosen.
+- [ ] Do not publish any registry changes from this repo.
+
+**Wave 1 packages:**
+
+| Package | Version | Notes |
+|---------|---------|-------|
+| `FMotalleb/nu_plugin_port_extension` | 0.113.1 | Prepared in PR #4 |
+| `FMotalleb/nu_plugin_image` | 0.112.2 | Prepared in PR #4 |
+
+**Handoff contract to registry (every successful build wave):**
+
+- generated `spec-*.json` artifacts
+- release URLs hosted by `numan-plugins`
+- immutable upstream `source.rev` values
+- upstream tags for human-facing provenance
+- target list and exclusions
+- Nu compatibility and `verified_with` values
+
+### B. `numan-registry` — intake, evidence, publish
+
+- [ ] Fetch `spec-*.json` from the successful plugins build run.
+- [ ] Place specs under `specs/` on a focused registry branch (no unrelated catalog targets).
+- [ ] Run `python scripts/add-package.py --spec specs/<file>.json --write` for each package (script downloads + computes SHA256; never hand-type hashes).
+- [ ] Run `python scripts/sync-intake-candidates.py` if intake-state/index changes need the human doc refreshed.
+- [ ] Local checks:
+  - `python scripts/scan_for_secrets.py`
+  - `python scripts/preflight.py`
+  - `python scripts/validate.py --index registry/index.json --sig registry/index.json.sig --pub keys/official.pub --skip-artifacts`
+  - `cargo run --locked --manifest-path tools/numan-parser-check/Cargo.toml -- registry/index.json`
+  - `python scripts/lint-manifest-index.py --index registry/index.json --manifest ../numan-plugins/manifest.json`
+- [ ] Open PR with specs, index diff, intake doc updates, and test evidence.
+- [ ] Run staging after review if needed.
+- [ ] Run `lifecycle-prove` against a real Nu matching each package constraint before production.
+- [ ] Dispatch production only after validation is green and reviewer approval exists.
+
+### C. `numan` — client smoke after production sync
+
+- [ ] Fresh smoke on a clean root:
+  `init → registry sync → search → info → install → activate → doctor → list → deactivate → remove → gc`
+- [ ] Confirm Wave 1 packages appear with honest Nu/platform filtering on the machine under test.
+- [ ] Confirm `numan try` still fails clearly if no compatible starter exists (never silent Nu switch).
+
+---
+
+## P1 Catalog Growth Loop
+
+Repeat this loop for each subsequent wave. Prefer one or two plugins at a time.
+
+### Promotion gates (`numan-plugins`)
+
+Move a candidate from `docs/backlog.json` → `manifest.json` `active[]` only when recorded:
+
+- [ ] Upstream reachable (or archive state explicitly accepted)
+- [ ] Tag resolves to recorded 40-char lowercase `source_commit`
+- [ ] `nu-plugin` / `nu-protocol` dependency versions known
+- [ ] Nu compatibility range is minor-scoped and matches those deps
+- [ ] `plugin_bin` confirmed
+- [ ] Windows locked build succeeds, or Windows excluded with concrete reason
+- [ ] Linux/macOS expected to work, or excluded with concrete reasons
+- [ ] Exact-version Nu command-discovery smoke succeeds where practical
+- [ ] No existing `numan-plugins` release tag/assets for that package version
+- [ ] README active list and backlog notes updated in the same PR
+
+### Wave 2 research queue (`numan-plugins`)
+
+Source: `docs/backlog.json`. Research before promoting:
+
+- [ ] `devyn/nu_plugin_dbus`
+- [ ] `PhotonBursted/nu_plugin_vec`
+- [ ] `drbrain/nu_plugin_prometheus`
+- [ ] `galuszkak/nu_plugin_bigquery`
+- [ ] `jcornaz/nu_plugin_from_beancount`
+- [ ] `dam4rus/nu_plugin_nuts`
+
+For each, record: supported Nu minor compatibility, native system deps, Windows buildability, simple command-discovery smoke.
+
+### Registry catalog maintenance
+
+- [ ] Keep `docs/intake-state.json` as editable candidate source; regenerate `docs/intake-candidates.md`.
+- [ ] Keep every live entry tied to provenance: upstream URL, source revision, asset URL, hashes, Nu constraints, targets, package type.
+- [ ] Preserve upstream-vs-mirror distinction; prefer upstream byte-stable archives when available.
+- [ ] Track outreach in `docs/upstream-release-outreach.md`.
+- [ ] Revisit blocked packages when upstreams add archives, Nu pins, or platforms (see intake-candidates "Blocked for now").
+
+### Deferred plugin candidates (do not promote yet)
+
+- Pre-0.112 plugins (unless Numan re-supports older Nu minors)
+- Repos with no release tag (unless commit-snapshot policy is explicitly adopted)
+- Bare binary uploads / unsupported archive layouts
+- Plugins needing heavy native services or credentials until lifecycle proof can be automated meaningfully
+
+---
+
+## P1 Client Priorities (`numan`)
+
+### Compat UX stays honest as catalog grows
+
+- [ ] `search` filtered by detected Nu/platform by default; `--all` explains plugin ABI mismatch clearly
+- [ ] `info` shows provenance, verification metadata, type, targets, Nu constraints without implying security approval
+- [ ] `try` aligned with live catalog; clear failure when no compatible starter; never silent Nu switch
+- [ ] Install errors explicit that nothing was installed on Nu/platform resolution failure
+- [ ] Refresh doctor checks as catalog growth exposes setup failures: PATH Nu drift, managed Nu pin drift, official trust drift, stale plugin activation, pending lifecycle journals
+
+### Active plugin update default-on decision
+
+- [ ] Keep exact `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` until real-Nu active-update evidence is boring on Ubuntu, Windows, and macOS
+- [ ] Keep `update` free of direct Nu registration ownership (activate/deactivate boundary owns Nu callbacks)
+- [ ] Before default-on: failure-before-lifecycle, deactivate failure, upgrade rollback, activate recovery, and real-Nu matrix evidence
+- [ ] Same PR updates `docs/active-plugin-gate.md`, `AGENTS.md`, README, changelog
+
+### Install-only package types
+
+- [ ] Scripts and completions stay install-only until activation contracts are designed and tested
+- [ ] Completions: decide managed vendor autoload vs shell-specific hints vs `numan completions` adjunct
+- [ ] Scripts: define execution/discovery boundaries before any Nu config mutation
+- [ ] Lifecycle evidence per package type before changing README support tiers
+
+### Source builds (Phase 5.2)
+
+- [ ] Keep deferred while `numan-plugins` covers highest-demand source-only plugins via CI
+- [ ] When revived: explicit consent, dependency disclosure, deterministic paths, failure cleanup, no hidden Nu activation
+- [ ] Never mix source builds with registry catalog expansion PRs
+
+### Distribution polish
+
+- [ ] Monitor winget automation after each GitHub release
+- [ ] Defer macOS/Linux package managers until a verified maintained formula/tap/channel exists
+- [ ] Keep release docs version-agnostic where possible (README ships in crates.io + tagged archives)
+- [ ] Per release dry-run: `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check`, package checks, release-note extraction, archive smoke
+
+---
+
+## P2 Intake Automation (`numan-registry` + `numan`)
+
+Stage 1 (lifecycle harness) is done. Remaining stages follow [`docs/registry-intake-roadmap.md`](../registry-intake-roadmap.md). Do not block Wave 1 on these.
+
+### Stage 2: Stronger local lint
+
+- [ ] Actionable errors: missing metadata, duplicate targets, unknown triples, unsupported archive suffixes, missing activation declarations, malformed Nu constraints, source provenance mismatches
+- [ ] Deterministic lint output for before/after PR comparison
+- [ ] PR template asks for lint, parser-check, and lifecycle evidence
+
+### Stage 3: Repo discovery
+
+- [ ] Read-only discovery from GitHub repo, release URL, or local checkout
+- [ ] Detect `nupm.nuon`, layouts, Cargo metadata, assets, license, homepage, tags, Nu deps, platform matrix
+- [ ] Separate discovered facts from guessed fields and maintainer decisions
+
+### Stage 4: Candidate generation
+
+- [ ] Draft specs only (not committed registry entries)
+- [ ] Provenance per inferred field; unresolved decisions marked explicitly
+- [ ] Stable, reviewable generated JSON
+
+### Stage 5: Validation reports
+
+- [ ] Machine + human validation evidence per candidate
+- [ ] Cover download, hash, archive layout, install, activation readiness, doctor, list, deactivate/remove/gc, final state
+- [ ] Production secrets unavailable to validation jobs
+
+### Stage 6: Registry PR generation
+
+- [ ] PR branch from validated specs + evidence
+- [ ] Summary: type, provenance, targets, lifecycle results, limitations, publish plan
+- [ ] Human review and protected signing remain mandatory
+
+---
+
+## Ongoing Safety And Pipeline Hygiene
+
+### `numan-plugins`
+
+- [ ] Third-party Actions pinned to reviewed commit SHAs
+- [ ] Workflow permissions read-only except release publication
+- [ ] macOS runner labels current and tested
+- [ ] Deterministic archive tests (`.zip`, `.tar.gz`)
+- [ ] Release-absence tests (existing tags/assets fail before upload)
+- [ ] Strict manifest validation (duplicates, missing targets, malformed commits, tag-to-commit drift)
+- [ ] Strict generated-spec validation (packaged SHA records, complete target coverage)
+
+### `numan-registry`
+
+- [ ] Never commit or print private key material
+- [ ] Never treat source-tree placeholder signature as production evidence
+- [ ] Never publish before artifacts are hash-pinned and reviewable
+- [ ] Never add lifecycle-activatable packages without lifecycle evidence
+- [ ] Never mix catalog expansion with workflow/signing refactors unless the catalog change depends on the safety change
+
+---
+
+## Unified 1.0 Gate
+
+Ship 1.0 when **all** of the following are true:
+
+| Area | Criterion |
+|------|-----------|
+| Catalog depth | Official registry has enough packages for first-use demos to feel real on Windows, macOS, and Linux |
+| Lifecycle | install / activate / update / deactivate / remove / gc / snapshots / doctor have green local + CI evidence across the OS matrix |
+| Intake | Routine package additions are spec-driven and reproducible; no ad hoc hand editing for routine packages |
+| Evidence | Every activatable package has lifecycle evidence or a documented exception |
+| Compat UX | Package compatibility failures are discoverable before install |
+| Trust | Production signing is boring, protected, auditable; mirrors and outreach status are clear |
+| Client sync | `numan registry sync` + search/info/install reflect the catalog accurately |
+| Distribution | Release packaging and winget updates are routine |
+| Risk | No open P0/P1 lifecycle, trust, or data-loss issues |
+
+### Repo-local health checks (supporting)
+
+**Plugins healthy when:** one or two plugins can be added without touching publication safety code; every active manifest entry traces to upstream tag + immutable commit; every release asset is immutable and hash-pinned downstream; backlog explains promote/defer/block; registry receives specs needing no manual repair.
+
+**Registry healthy when:** same as 1.0 registry rows above, plus meaningful multi-OS coverage in the live catalog.
+
+---
+
+## Explicitly Deferred (All Repos)
+
+- Silent side-by-side Nu profile switching
+- Source builds hidden inside registry intake
+- Publishing registry entries without review
+- Calling packages "approved" or "audited" solely because they are in the official registry
+- Broad maintained forks of upstream plugins before the catalog pipeline has exhausted ordinary CI-built upstream tags
+- Pre-0.112 plugin support (unless product chooses older Nu minors again)
+- macOS/Linux system package managers without a verified maintained formula
+
+---
+
+## Suggested Execution Order
+
+1. **Now:** Merge plugins PR #4 → dispatch Wave 1 build → registry intake PR → lifecycle-prove → production → client smoke.
+2. **Next:** Wave 2 research (one or two backlog candidates) through the same pipeline; keep client compat UX and doctor honest against new packages.
+3. **Parallel (non-blocking):** Registry Stage 2 lint hardening; intake-candidates / outreach maintenance; winget release monitoring.
+4. **Later:** Intake Stages 3–6; install-only activation contracts; active-update default-on decision; Phase 5.2 source builds only after intake is steady.
+5. **1.0:** When the unified gate above is green.

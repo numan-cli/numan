@@ -2,7 +2,13 @@
 
 **Status date:** 2026-07-29
 
-This is the cross-repository plan for the remaining work in the Numan product
+**Superseded:** Use the consolidated multi-repo plan
+[`2026-07-30-consolidated-multi-repo-roadmap.md`](2026-07-30-consolidated-multi-repo-roadmap.md).
+This file is retained as the prior client draft for history.
+
+---
+
+This was the cross-repository plan for the remaining work in the Numan product
 line. It is intentionally grounded in the current repository split:
 
 - `numan` owns the client, user experience, local state, Nu integration, and
