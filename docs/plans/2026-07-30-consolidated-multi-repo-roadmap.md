@@ -7,6 +7,7 @@ Repo-local roadmaps keep operational detail and should link here:
 
 - [`numan-plugins/docs/roadmap.md`](https://github.com/tonythethompson/numan-plugins/blob/master/docs/roadmap.md)
 - [`numan-registry/docs/roadmap.md`](https://github.com/tonythethompson/numan-registry/blob/main/docs/roadmap.md)
+- Prior client draft: [`2026-07-29-remaining-roadmap.md`](2026-07-29-remaining-roadmap.md) (superseded by this doc)
 - Intake automation endgame: [`docs/registry-intake-roadmap.md`](../registry-intake-roadmap.md)
 
 ## Repository Split

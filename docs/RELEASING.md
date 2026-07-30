@@ -49,7 +49,7 @@ Then:
 6. The [Release workflow](https://github.com/tonythethompson/numan/actions/workflows/release.yml) waits for green CI on the tagged commit, runs preflight checks, then builds archives and publishes.
 7. Confirm platform archives and `SHA256SUMS` on GitHub Releases.
 8. Confirm the **Publish to crates.io** job succeeds (requires `CRATES_IO_TOKEN` repository secret).
-9. Confirm the [`Publish to WinGet`](../.github/workflows/winget.yml) workflow opens the update PR after the release is published.
+9. Confirm the [`Publish to WinGet`](../.github/workflows/winget.yml) workflow verifies the `winget-release-ready` artifact and published Windows release asset, then opens the update PR after the `v*.*.*` tag-triggered Release workflow completes (manual recovery: dispatch with required `release_tag`).
 10. After publication, update documentation only if it needs links that depend on newly created release pages or assets; do not use this step to repair README content already shipped in the crate or tag.
 
 **Do not tag until CI is green on `master`.** The release workflow gates on CI check results for tag pushes; pushing a tag on a failing commit blocks publication.

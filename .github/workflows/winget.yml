@@ -1,28 +1,88 @@
 name: Publish to WinGet
 
+# Tag contract (matches release.yml): only SemVer tags with a `v` prefix
+# (`v*.*.*`). Auto-trigger uses workflow_run.head_branch as that tag name.
+# Manual recovery requires release_tag (required on workflow_dispatch).
+
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Release tag to submit (for example, v0.1.5)
+        description: Release tag to submit (must be v*.*.*, for example v0.1.5)
         required: true
         type: string
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
   publish:
     name: Submit manifest update
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      ((github.event.workflow_run.conclusion == 'success' ||
+      github.event.workflow_run.conclusion == 'failure') &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-latest
+    env:
+      # workflow_dispatch: required input. workflow_run: tag name from the
+      # Release push (head_branch is the tag ref for tag pushes).
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.workflow_run.head_branch }}
     steps:
+      - name: Verify required tools
+        shell: bash
+        run: |
+          command -v gh >/dev/null || { echo "::error::GitHub CLI is required"; exit 1; }
+          command -v jq >/dev/null || { echo "::error::jq is required"; exit 1; }
+
+      - name: Verify release tag shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          # SemVer core (no leading zeros) with optional prerelease / build metadata.
+          # Rejects extra numeric segments such as v1.2.3.4.
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "::error::RELEASE_TAG must be a v-prefixed SemVer tag (got: ${RELEASE_TAG:-<empty>})"
+            exit 1
+          fi
+
+      - name: Verify originating release marker
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Contract with release.yml: successful publication uploads artifact
+          # winget-release-ready (stable name; independent of job display names).
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_RUN_ID}/artifacts?per_page=100" \
+            --jq 'any(.artifacts[]; .name == "winget-release-ready" and .expired == false)' \
+            | grep -Fx true
+
+      - name: Verify published Windows release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_asset="numan-${RELEASE_TAG#v}-x86_64-pc-windows-msvc.zip"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,assets \
+            | jq -e --arg expected_asset "$expected_asset" \
+              '.isDraft == false and any(.assets[]; .name == $expected_asset and .state == "uploaded")' \
+              >/dev/null
+
       - name: Publish manifest to WinGet
         uses: vedantmgoyal9/winget-releaser@b3a5dae0047c6180023acba3f548c55fdf6b7193
         with:
           identifier: tonythethompson.numan
           fork-user: tonythethompson
           installers-regex: '\.zip$'
-          release-tag: ${{ inputs.release_tag || github.event.release.tag_name }}
+          release-tag: ${{ env.RELEASE_TAG }}
           token: ${{ secrets.WINGET_TOKEN }}

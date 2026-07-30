@@ -414,6 +414,10 @@ PR reviewers should follow [`.github/instructions/review.instructions.md`](.gith
 
 **Releases:** see the [latest GitHub Release](https://github.com/tonythethompson/numan/releases/latest) — feature-complete core on **0.1.x** while dogfooding the official registry.
 
+For the cross-repository plan snapshot (as of 2026-07-29) across `numan`,
+`numan-registry`, and `numan-plugins`, see
+[docs/plans/2026-07-29-remaining-roadmap.md](docs/plans/2026-07-29-remaining-roadmap.md).
+
 | Phase | Scope | Status |
 |-------|--------|--------|
 | **1–2** | Types, platform, lockfile, signed registry, install transaction | ✅ |
