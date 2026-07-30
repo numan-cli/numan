@@ -47,7 +47,7 @@ Repo-local roadmaps keep operational detail and should link here:
 - Manifest entries pin human-facing tags and immutable `source_commit`.
 - Publication refuses existing release tags/assets; changed bytes need a new version or explicit build revision.
 - Demand-ranked source-only queue: `docs/backlog.json`.
-- **Blocking handoff:** [PR #4](https://github.com/tonythethompson/numan-plugins/pull/4) is **merged**. `master` has `FMotalleb/nu_plugin_port_extension` and `FMotalleb/nu_plugin_image`, plus macOS-15 runner labels. **No Wave 1 assets published yet.** First Wave 1 dispatch failed on Windows until [PR #8](https://github.com/tonythethompson/numan-plugins/pull/8) forces `shell: bash` on the Recheck step.
+- **Blocking handoff:** [PR #4](https://github.com/tonythethompson/numan-plugins/pull/4) is **merged**. `master` has `FMotalleb/nu_plugin_port_extension` and `FMotalleb/nu_plugin_image`, plus macOS-15 runner labels. **No Wave 1 assets published yet.** First Wave 1 dispatch will fail on Windows unless [PR #8](https://github.com/tonythethompson/numan-plugins/pull/8) (which forces `shell: bash` on the Recheck step) is merged first.
 
 ---
 
@@ -296,6 +296,6 @@ Ship 1.0 when **all** of the following are true:
 
 1. **Now:** Merge plugins Windows Recheck fix (PR #8) → dispatch Wave 1 build → registry intake PR → lifecycle-prove → production → client smoke.
 2. **Next:** Wave 2 research (one or two backlog candidates) through the same pipeline; keep client compat UX and doctor honest against new packages.
-3. **Parallel (non-blocking):** Registry Stage 2 lint hardening; intake-candidates / outreach maintenance; winget release monitoring.
+3. **Parallel (non-blocking):** Intake-candidates / outreach maintenance; winget release monitoring.
 4. **Later:** Intake Stages 3–6; install-only activation contracts; active-update default-on decision; Phase 5.2 source builds only after intake is steady.
 5. **1.0:** When the unified gate above is green.
