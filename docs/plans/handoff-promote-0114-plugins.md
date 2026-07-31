@@ -70,7 +70,7 @@ For each viable candidate, add to `manifest.json` `active[]`:
   "source_commit": "<40-char sha from: gh api repos/<repo>/git/ref/tags/<tag> --jq .object.sha>",
   "version": "<semver without v prefix>",
   "exclude_targets": ["x86_64-apple-darwin"],
-  "exclude_reason": "x86_64 macOS omitted; macos-15-intel runner not yet validated for this plugin",
+  "exclude_reason": "Intel Mac EOL; not supported",
   "nu_version": ">=0.114.0 <0.115.0",
   "verified_with": ["0.114.1"],
   "description": "<one-line>",
@@ -80,7 +80,7 @@ For each viable candidate, add to `manifest.json` `active[]`:
 
 **Important:**
 - `source_commit` must be the **dereferenced** commit SHA (for annotated tags: `gh api repos/<repo>/git/tags/<tag_sha> --jq .object.sha`)
-- `x86_64-apple-darwin` is systematically excluded for new plugins until macos-15-intel is validated
+- `x86_64-apple-darwin` is permanently excluded (Intel Mac is EOL; not worth the build surface)
 - `aarch64-unknown-linux-gnu` may need exclusion if the plugin uses openssl-sys/native-tls (cross-compile fails)
 - Validate: `python scripts/validate_manifest.py --only <name> --verify-upstream`
 
