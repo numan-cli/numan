@@ -48,7 +48,7 @@ Repo-local roadmaps keep operational detail and should link here:
 - Manifest entries pin human-facing tags and immutable `source_commit`.
 - Publication refuses existing release tags/assets; changed bytes need a new version or explicit build revision.
 - Demand-ranked source-only queue: `docs/backlog.json`.
-- **Blocking handoff:** [PR #4](https://github.com/tonythethompson/numan-plugins/pull/4) is **merged**. Wave 1 release assets for `port_extension@0.113.1` and `image@0.112.2` are published. Registry intake is open as [numan-registry#32](https://github.com/tonythethompson/numan-registry/pull/32) (merge block before lifecycle-prove / production).
+- **Wave 1 closed:** [PR #4](https://github.com/tonythethompson/numan-plugins/pull/4) merged; assets published; [numan-registry#32](https://github.com/tonythethompson/numan-registry/pull/32) merged; staging green; lifecycle-prove OK on Linux x86_64 (Nu 0.113.1 / 0.112.2); production published 2026-07-31; client smoke OK against official registry.
 
 ---
 
@@ -68,7 +68,7 @@ Do these in order. Registry intake and client smoke wait on plugins publication.
 - [x] Download generated `spec-*.json` artifacts for registry intake.
 - [x] Do not rebuild existing releases unless a new version or explicit build revision was chosen.
 - [x] Do not publish any registry changes from this repo.
-- [ ] Merge release upload-by-id fix ([numan-plugins#12](https://github.com/tonythethompson/numan-plugins/pull/12)) so future waves avoid the softprops draft race.
+- [x] Merge release upload-by-id fix ([numan-plugins#12](https://github.com/tonythethompson/numan-plugins/pull/12)) so future waves avoid the softprops draft race.
 
 **Wave 1 packages:**
 
@@ -99,16 +99,16 @@ Do these in order. Registry intake and client smoke wait on plugins publication.
   - `cargo run --locked --manifest-path tools/numan-parser-check/Cargo.toml -- registry/index.json`
   - `python scripts/lint-manifest-index.py --index registry/index.json --manifest ../numan-plugins/manifest.json`
 - [x] Open PR with specs, index diff, intake doc updates, and test evidence ([numan-registry#32](https://github.com/tonythethompson/numan-registry/pull/32)).
-- [ ] Run staging after review if needed.
-- [ ] Run `lifecycle-prove` against a real Nu matching each package constraint before production.
-- [ ] Dispatch production only after validation is green and reviewer approval exists.
+- [x] Run staging after merge (green on `main` merge commit `4e3ae77`).
+- [x] Run `lifecycle-prove` against a real Nu matching each package constraint before production (Linux x86_64: Nu 0.113.1 for port_extension, Nu 0.112.2 for image).
+- [x] Dispatch production only after validation is green and reviewer approval exists ([run 30600799679](https://github.com/tonythethompson/numan-registry/actions/runs/30600799679)).
 
 ### C. `numan` — client smoke after production sync
 
-- [ ] Fresh smoke on a clean root:
+- [x] Fresh smoke on a clean root:
   `init → registry sync → search → info → install → activate → doctor → list → deactivate → remove → gc`
-- [ ] Confirm Wave 1 packages appear with honest Nu/platform filtering on the machine under test.
-- [ ] Confirm `numan try` still fails clearly if no compatible starter exists (never silent Nu switch).
+- [x] Confirm Wave 1 packages appear with honest Nu/platform filtering on the machine under test.
+- [x] Confirm `numan try` still fails clearly if no compatible starter exists (never silent Nu switch). (`try` picked a compatible starter; `search nu_plugin_image` on Nu 0.113.1 hid the incompatible package and `--all` showed `[needs Nu >=0.112.0 <0.113.0]`.)
 
 ---
 
@@ -137,10 +137,10 @@ Source: `docs/backlog.json`. Research before promoting:
 
 - [x] `devyn/nu_plugin_dbus` — `PRE_0_112` (nu-plugin 0.101.0; libdbus; not Windows)
 - [x] `PhotonBursted/nu_plugin_vec` — `PRE_0_112` (nu-plugin 0.105.1; pure Rust; Windows expected)
-- [ ] `drbrain/nu_plugin_prometheus`
-- [ ] `galuszkak/nu_plugin_bigquery`
-- [ ] `jcornaz/nu_plugin_from_beancount`
-- [ ] `dam4rus/nu_plugin_nuts`
+- [x] `drbrain/nu_plugin_prometheus` — promoted to `active[]` as `v0.12.0` ([numan-plugins#15](https://github.com/tonythethompson/numan-plugins/pull/15); nu-plugin 0.114.1, commit `3fed1d93…`). Windows locked green; `aarch64-unknown-linux-gnu` excluded after openssl-sys cross failure ([#16](https://github.com/tonythethompson/numan-plugins/pull/16)). Build re-dispatched; registry intake after successful release specs.
+- [ ] `galuszkak/nu_plugin_bigquery` — peeked: tag `v0.2.0` pins nu-plugin 0.112.2 (eligible Nu minor) but needs Google credentials for meaningful lifecycle proof
+- [x] `jcornaz/nu_plugin_from_beancount` — researched 2026-07-31: `PRE_0_112` (nu-plugin 0.76)
+- [x] `dam4rus/nu_plugin_nuts` — researched 2026-07-31: `PRE_0_112` (nu-plugin 0.110.0)
 
 For each, record: supported Nu minor compatibility, native system deps, Windows buildability, simple command-discovery smoke.
 
@@ -208,7 +208,7 @@ Stage 1 (lifecycle harness) is done. Remaining stages follow [`docs/registry-int
 
 - [x] Actionable errors: missing metadata, duplicate targets, unknown triples, unsupported archive suffixes, missing activation declarations, malformed Nu constraints, source provenance mismatches
 - [x] Deterministic lint output for before/after PR comparison
-- [x] PR template asks for lint, parser-check, and lifecycle evidence
+- [x] PR template asks for lint, parser-check, and lifecycle evidence ([numan-registry#31](https://github.com/tonythethompson/numan-registry/pull/31))
 
 ### Stage 3: Repo discovery
 
@@ -296,8 +296,8 @@ Ship 1.0 when **all** of the following are true:
 
 ## Suggested Execution Order
 
-1. **Now:** Merge registry Wave 1 intake ([numan-registry#32](https://github.com/tonythethompson/numan-registry/pull/32)) → lifecycle-prove → production → client smoke. Also merge plugins release upload-by-id fix ([#12](https://github.com/tonythethompson/numan-plugins/pull/12)).
-2. **Next:** Wave 2 research (one or two backlog candidates) through the same pipeline; keep client compat UX and doctor honest against new packages.
+1. **Done:** Wave 1 end-to-end (plugins build → [registry#32](https://github.com/tonythethompson/numan-registry/pull/32) → lifecycle-prove → production → client smoke). Plugins release upload-by-id fix ([#12](https://github.com/tonythethompson/numan-plugins/pull/12)) merged.
+2. **Next:** Finish `nu_plugin_prometheus@v0.12.0` build → registry intake → lifecycle-prove → production (and/or `nu_plugin_bigquery` if credentialed lifecycle is feasible); keep client compat UX and doctor honest against new packages.
 3. **Parallel (non-blocking):** Intake-candidates / outreach maintenance; winget release monitoring.
 4. **Later:** Intake Stages 3–6; install-only activation contracts; active-update default-on decision; Phase 5.2 source builds only after intake is steady.
 5. **1.0:** When the unified gate above is green.
