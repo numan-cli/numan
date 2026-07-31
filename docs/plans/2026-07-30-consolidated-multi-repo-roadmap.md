@@ -1,6 +1,6 @@
 # Numan Consolidated Multi-Repo Roadmap
 
-**Status date:** 2026-07-30
+**Status date:** 2026-07-31
 
 **Authority:** This is the single cross-repo plan for remaining work toward Numan 1.0.
 Repo-local roadmaps keep operational detail and should link here:
@@ -138,6 +138,11 @@ Source: `docs/backlog.json`. Research before promoting:
 - [x] `devyn/nu_plugin_dbus` — `PRE_0_112` (nu-plugin 0.101.0; libdbus; not Windows)
 - [x] `PhotonBursted/nu_plugin_vec` — `PRE_0_112` (nu-plugin 0.105.1; pure Rust; Windows expected)
 - [x] `drbrain/nu_plugin_prometheus` — promoted to `active[]` as `v0.12.0` ([numan-plugins#15](https://github.com/tonythethompson/numan-plugins/pull/15); nu-plugin 0.114.1, commit `3fed1d93…`). Windows locked green; `aarch64-unknown-linux-gnu` excluded after openssl-sys cross failure ([#16](https://github.com/tonythethompson/numan-plugins/pull/16)). Build re-dispatched; registry intake after successful release specs.
+- [x] `fdncred/nu_plugin_emoji` — **PROMOTED** v0.23.0 (nu-plugin 0.114.0; pure Rust; [numan-plugins#17](https://github.com/tonythethompson/numan-plugins/pull/17), [numan-registry#36](https://github.com/tonythethompson/numan-registry/pull/36); lifecycle-prove OK Windows/Nu 0.114.1)
+- [x] `fdncred/nu_plugin_json_path` — **PROMOTED** v0.24.0 (nu-plugin 0.114.0; pure Rust; [numan-plugins#17](https://github.com/tonythethompson/numan-plugins/pull/17), [numan-registry#36](https://github.com/tonythethompson/numan-registry/pull/36); lifecycle-prove OK Windows/Nu 0.114.1)
+- [x] `fdncred/nu_plugin_parquet` — **PROMOTED** v0.24.0 (nu-plugin 0.114.0; pure Rust; [numan-plugins#17](https://github.com/tonythethompson/numan-plugins/pull/17), [numan-registry#36](https://github.com/tonythethompson/numan-registry/pull/36); lifecycle-prove OK Windows/Nu 0.114.1)
+- [x] `yybit/nu_plugin_compress` — `PRE_0_112` (nu-plugin 0.103.0; tag 0.2.5 exists but too old)
+- [x] `JosephTLyons/nu_plugin_units` — `PRE_0_112` (nu-plugin 0.106.1; tag v0.1.8 exists but too old)
 - [ ] `galuszkak/nu_plugin_bigquery` — peeked: tag `v0.2.0` pins nu-plugin 0.112.2 (eligible Nu minor) but needs Google credentials for meaningful lifecycle proof
 - [x] `jcornaz/nu_plugin_from_beancount` — researched 2026-07-31: `PRE_0_112` (nu-plugin 0.76)
 - [x] `dam4rus/nu_plugin_nuts` — researched 2026-07-31: `PRE_0_112` (nu-plugin 0.110.0)
@@ -212,27 +217,27 @@ Stage 1 (lifecycle harness) is done. Remaining stages follow [`docs/registry-int
 
 ### Stage 3: Repo discovery
 
-- [ ] Read-only discovery from GitHub repo, release URL, or local checkout
-- [ ] Detect `nupm.nuon`, layouts, Cargo metadata, assets, license, homepage, tags, Nu deps, platform matrix
-- [ ] Separate discovered facts from guessed fields and maintainer decisions
+- [x] Read-only discovery from GitHub repo, release URL, or local checkout (`scripts/discover.py`)
+- [x] Detect `nupm.nuon`, layouts, Cargo metadata, assets, license, homepage, tags, Nu deps, platform matrix
+- [x] Separate discovered facts from guessed fields and maintainer decisions
 
 ### Stage 4: Candidate generation
 
-- [ ] Draft specs only (not committed registry entries)
-- [ ] Provenance per inferred field; unresolved decisions marked explicitly
-- [ ] Stable, reviewable generated JSON
+- [x] Draft specs only (not committed registry entries) (`scripts/gen_candidate.py`)
+- [x] Provenance per inferred field; unresolved decisions marked explicitly
+- [x] Stable, reviewable generated JSON
 
 ### Stage 5: Validation reports
 
-- [ ] Machine + human validation evidence per candidate
-- [ ] Cover download, hash, archive layout, install, activation readiness, doctor, list, deactivate/remove/gc, final state
-- [ ] Production secrets unavailable to validation jobs
+- [x] Machine + human validation evidence per candidate (`scripts/validate_candidate.py`)
+- [x] Cover download, hash, archive layout, install, activation readiness, doctor, list, deactivate/remove/gc, final state
+- [x] Production secrets unavailable to validation jobs
 
 ### Stage 6: Registry PR generation
 
-- [ ] PR branch from validated specs + evidence
-- [ ] Summary: type, provenance, targets, lifecycle results, limitations, publish plan
-- [ ] Human review and protected signing remain mandatory
+- [x] PR branch from validated specs + evidence (`scripts/open_intake_pr.py`)
+- [x] Summary: type, provenance, targets, lifecycle results, limitations, publish plan
+- [x] Human review and protected signing remain mandatory
 
 ---
 
@@ -297,7 +302,9 @@ Ship 1.0 when **all** of the following are true:
 ## Suggested Execution Order
 
 1. **Done:** Wave 1 end-to-end (plugins build → [registry#32](https://github.com/tonythethompson/numan-registry/pull/32) → lifecycle-prove → production → client smoke). Plugins release upload-by-id fix ([#12](https://github.com/tonythethompson/numan-plugins/pull/12)) merged.
-2. **Next:** Finish `nu_plugin_prometheus@v0.12.0` build → registry intake → lifecycle-prove → production (and/or `nu_plugin_bigquery` if credentialed lifecycle is feasible); keep client compat UX and doctor honest against new packages.
-3. **Parallel (non-blocking):** Intake-candidates / outreach maintenance; winget release monitoring.
-4. **Later:** Intake Stages 3–6; install-only activation contracts; active-update default-on decision; Phase 5.2 source builds only after intake is steady.
-5. **1.0:** When the unified gate above is green.
+2. **Done:** `nu_plugin_prometheus@v0.12.0` + Nu 0.114 batch (`nu_plugin_emoji@0.23.0`, `nu_plugin_json_path@0.24.0`, `nu_plugin_parquet@0.24.0`) — built, registry intake ([#36](https://github.com/tonythethompson/numan-registry/pull/36)), production live, lifecycle-prove OK on Windows/Nu 0.114.1.
+3. **Next:** Continue catalog growth from backlog; keep client compat UX and doctor honest against new packages.
+4. **Parallel (non-blocking):** Intake-candidates / outreach maintenance; winget release monitoring.
+5. **Done:** Intake Stages 3–6 ([numan-registry#37](https://github.com/tonythethompson/numan-registry/pull/37) merged 2026-07-31).
+6. **Later:** Install-only activation contracts; active-update default-on decision; Phase 5.2 source builds only after intake is steady.
+7. **1.0:** When the unified gate above is green.
