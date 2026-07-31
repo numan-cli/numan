@@ -406,7 +406,7 @@ CI runs tests, clippy, `rustfmt --check`, and real-Nu acceptance on Ubuntu, Wind
 3. Ensure `cargo test` and `cargo clippy -- -D warnings` pass.
 4. Open a pull request with a clear description and test plan.
 
-PR reviewers should follow [`.github/instructions/review.instructions.md`](.github/instructions/review.instructions.md).
+PR reviewers should follow [`REVIEW.md`](REVIEW.md).
 
 ---
 

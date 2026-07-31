@@ -88,7 +88,7 @@ jobs:
           PR: #'"${PR_NUMBER}"'
 
           ## Required reading (in the checked-out repo)
-          - .github/instructions/review.instructions.md
+          - REVIEW.md
           - AGENTS.md
 
           ## Gather PR context
@@ -101,7 +101,7 @@ jobs:
           ```
 
           ## Review goals
-          - Flag architecture invariant violations from review.instructions.md (install inert, activate separate, mutation lock, etc.)
+          - Flag architecture invariant violations from REVIEW.md (install inert, activate separate, mutation lock, etc.)
           - Flag P0/P1 correctness and security issues on the happy path
           - Flag P2 test/doc gaps tied to the changed behavior
           - Ignore pre-existing issues outside the diff and P3 style nits unless they change meaning

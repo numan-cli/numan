@@ -162,7 +162,7 @@ tests/
 
 ## PR review guidance
 
-Automated and human PR reviewers should follow [`.github/instructions/review.instructions.md`](.github/instructions/review.instructions.md) for review checklists, severity expectations, and architecture invariants to flag. Keep that file updated when review conventions change; link here rather than duplicating review rules in this doc.
+Automated and human PR reviewers should follow [`REVIEW.md`](REVIEW.md) for review checklists, severity expectations, and architecture invariants to flag. Keep that file updated when review conventions change; link here rather than duplicating review rules in this doc. Copilot apply-to instructions remain at [`.github/instructions/review.instructions.md`](.github/instructions/review.instructions.md) and must stay aligned with `REVIEW.md`.
 
 ## Dependencies
 - clap (CLI), clap_complete + clap_complete_nushell (shell completions), serde/serde_json/toml (serialization), reqwest (HTTP), tar/flate2/xz2/zip (archives)

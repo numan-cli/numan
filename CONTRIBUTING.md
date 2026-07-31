@@ -71,7 +71,7 @@ Before requesting review, confirm:
 - [ ] Unit tests use injectable seams (`FakeCandidateRunner`, registrars) — do not spawn real `nu` in unit tests
 - [ ] PR description explains *why* and includes a test plan
 
-Reviewers follow [`.github/instructions/review.instructions.md`](.github/instructions/review.instructions.md) for severity labels and architecture invariants.
+Reviewers follow [`REVIEW.md`](REVIEW.md) for severity labels and architecture invariants.
 
 ## Architecture rules
 
