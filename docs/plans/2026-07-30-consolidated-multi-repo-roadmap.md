@@ -137,7 +137,7 @@ Source: `docs/backlog.json`. Research before promoting:
 
 - [x] `devyn/nu_plugin_dbus` — `PRE_0_112` (nu-plugin 0.101.0; libdbus; not Windows)
 - [x] `PhotonBursted/nu_plugin_vec` — `PRE_0_112` (nu-plugin 0.105.1; pure Rust; Windows expected)
-- [x] `drbrain/nu_plugin_prometheus` — researched 2026-07-31: prefer tag `v0.12.0` (nu-plugin 0.114.1, SOURCE_ONLY empty assets, commit `3fed1d93…`); `v0.11.0` is `PRE_0_112` (0.110.0). Promote candidate after Windows locked build + command smoke.
+- [x] `drbrain/nu_plugin_prometheus` — promoted to `active[]` as `v0.12.0` ([numan-plugins#15](https://github.com/tonythethompson/numan-plugins/pull/15); nu-plugin 0.114.1, commit `3fed1d93…`). Windows locked green; `aarch64-unknown-linux-gnu` excluded after openssl-sys cross failure ([#16](https://github.com/tonythethompson/numan-plugins/pull/16)). Build re-dispatched; registry intake after successful release specs.
 - [ ] `galuszkak/nu_plugin_bigquery` — peeked: tag `v0.2.0` pins nu-plugin 0.112.2 (eligible Nu minor) but needs Google credentials for meaningful lifecycle proof
 - [x] `jcornaz/nu_plugin_from_beancount` — researched 2026-07-31: `PRE_0_112` (nu-plugin 0.76)
 - [x] `dam4rus/nu_plugin_nuts` — researched 2026-07-31: `PRE_0_112` (nu-plugin 0.110.0)
@@ -297,7 +297,7 @@ Ship 1.0 when **all** of the following are true:
 ## Suggested Execution Order
 
 1. **Done:** Wave 1 end-to-end (plugins build → [registry#32](https://github.com/tonythethompson/numan-registry/pull/32) → lifecycle-prove → production → client smoke). Plugins release upload-by-id fix ([#12](https://github.com/tonythethompson/numan-plugins/pull/12)) merged.
-2. **Next:** Wave 2 promotion starting with researched `nu_plugin_prometheus@v0.12.0` (and/or `nu_plugin_bigquery` if credentialed lifecycle is feasible); keep client compat UX and doctor honest against new packages.
+2. **Next:** Finish `nu_plugin_prometheus@v0.12.0` build → registry intake → lifecycle-prove → production (and/or `nu_plugin_bigquery` if credentialed lifecycle is feasible); keep client compat UX and doctor honest against new packages.
 3. **Parallel (non-blocking):** Intake-candidates / outreach maintenance; winget release monitoring.
 4. **Later:** Intake Stages 3–6; install-only activation contracts; active-update default-on decision; Phase 5.2 source builds only after intake is steady.
 5. **1.0:** When the unified gate above is green.
