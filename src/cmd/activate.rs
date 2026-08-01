@@ -158,8 +158,6 @@ fn execute_with_registrar_and_runner(
         &nu_paths.plugin_registry_path,
     );
 
-    // Proceed without prompting (UX improvement: reduce prompts for reversible operations).
-
     // 9. Reacquire the root mutation lock after consent.
     let _lock = acquire_mutation_lock(root)?;
 

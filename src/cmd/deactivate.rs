@@ -145,8 +145,6 @@ pub fn execute_with_candidate_runner_and_unregistrar(
     // 5. Show consent table (informational only; no prompt)
     print_consent_table(&targets_requested, &nu_paths.plugin_registry_path);
 
-    // Proceed without prompting (UX improvement: reduce prompts for reversible operations).
-
     // 6. Reacquire the root mutation lock after consent.
     let _lock = acquire_mutation_lock(root)?;
 
@@ -162,7 +160,7 @@ pub fn execute_with_candidate_runner_and_unregistrar(
     // on the current authoritative state.
     let mut lockfile = Lockfile::load(root)?;
     let targets_requested =
-        reclassify_confirmed_targets(args, &lockfile, root, &nu_paths, &targets_requested)?;
+        reclassify_targets(args, &lockfile, root, &nu_paths, &targets_requested)?;
     if targets_requested.is_empty() {
         println!("Nothing to deactivate.");
         return Ok(());
@@ -501,17 +499,17 @@ fn active_plugin_from_entry(
     })
 }
 
-fn reclassify_confirmed_targets(
+fn reclassify_targets(
     args: &DeactivateArgs,
     lockfile: &Lockfile,
     root: &Path,
     nu_paths: &NuPaths,
-    confirmed_targets: &ClassifiedTargets,
+    planned_targets: &ClassifiedTargets,
 ) -> Result<ClassifiedTargets> {
     let current_targets = classify_and_validate_packages(args, lockfile, root, nu_paths)?;
-    if current_targets != *confirmed_targets {
+    if current_targets != *planned_targets {
         bail!(
-            "Activation state changed after confirmation. No packages were deactivated; retry the command to review the current targets."
+            "Activation state changed since planning; no packages were deactivated. Retry to review current targets."
         );
     }
     Ok(current_targets)
@@ -1560,7 +1558,7 @@ mod tests {
     }
 
     #[test]
-    fn reclassification_rejects_expanded_implicit_targets_after_confirmation() {
+    fn reclassification_rejects_expanded_implicit_targets_after_planning() {
         let dir = TempDir::new().unwrap();
         let args = DeactivateArgs {
             packages: vec![],
@@ -1580,7 +1578,7 @@ mod tests {
             ("owner/beta", "module", true),
         ]);
 
-        let error = reclassify_confirmed_targets(
+        let error = reclassify_targets(
             &args,
             &changed_lockfile,
             dir.path(),
@@ -1588,7 +1586,7 @@ mod tests {
             &confirmed_targets,
         )
         .unwrap_err();
-        assert!(error.to_string().contains("changed after confirmation"));
+        assert!(error.to_string().contains("changed since planning"));
     }
 
     #[test]
