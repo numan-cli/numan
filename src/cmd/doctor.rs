@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Args;
 use console::style;
 use serde::Serialize;
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::cmd::activate::{execute as activate_execute, ActivateArgs};
@@ -41,13 +41,9 @@ const LAYOUT_DIRS: &[&str] = &["nu_state", "state", "packages", "registries"];
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
-    /// Apply safe automated repairs after reporting
+    /// Scan only — report issues without applying fixes
     #[arg(long)]
-    pub fix: bool,
-
-    /// Skip confirmation prompts for confirm-tier repairs
-    #[arg(long)]
-    pub yes: bool,
+    pub scan: bool,
 
     /// Emit JSON report (no ANSI styling)
     #[arg(long)]
@@ -142,7 +138,8 @@ pub fn execute(args: &DoctorArgs, root: &Path) -> Result<i32> {
 
 pub fn execute_with_options(args: &DoctorArgs, root: &Path, options: DoctorOptions) -> Result<i32> {
     let mut report = run_checks_with_options(args, root, &options)?;
-    if args.fix {
+    // Apply fixes by default; --scan skips repairs (report-only mode).
+    if !args.scan {
         let repairs = apply_repairs(args, root, &report.findings, &options)?;
         report = run_checks_with_options(args, root, &options)?;
         report.repairs = Some(repairs);
@@ -985,8 +982,9 @@ fn count_nupm_name_overlap(
     Ok(count)
 }
 
-fn confirm_repairs(args: &DoctorArgs) -> bool {
-    args.yes || !std::io::stdin().is_terminal()
+fn confirm_repairs(_args: &DoctorArgs) -> bool {
+    // Always proceed without prompting (UX improvement: reduce prompts).
+    true
 }
 
 fn apply_repairs(
@@ -1236,7 +1234,6 @@ fn apply_repairs(
         } else {
             let activate_args = ActivateArgs {
                 packages: Vec::new(),
-                yes: true,
                 verbose: false,
                 list: false,
                 check: false,
@@ -1293,7 +1290,7 @@ fn apply_repairs(
             } else {
                 let deactivate_args = DeactivateArgs {
                     packages: journal_packages,
-                    yes: true,
+
                     verbose: false,
                 };
                 let deactivate_fn = options.deactivate_repair.unwrap_or(deactivate_execute);
@@ -1433,9 +1430,6 @@ fn print_report(args: &DoctorArgs, root: &Path, report: &DoctorReport) -> Result
         if !repairs.is_empty() {
             writeln!(out)?;
             writeln!(out, "Repairs: {applied} applied, {skipped} skipped")?;
-            if skipped > 0 && !args.yes {
-                writeln!(out, "(use --yes to apply confirm-tier fixes)")?;
-            }
         }
     }
 
@@ -1513,8 +1507,7 @@ mod tests {
         let root = dir.path();
         std::fs::create_dir_all(root).unwrap();
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: false,
             nupm_home: None,
         };
@@ -1531,8 +1524,7 @@ mod tests {
         let root = dir.path();
         std::fs::create_dir_all(root).unwrap();
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: false,
             nupm_home: None,
         };
@@ -1572,8 +1564,7 @@ mod tests {
         ensure_fake_managed_nu(root);
 
         let args = DoctorArgs {
-            fix: true,
-            yes: true,
+            scan: false,  // Apply fixes (default behavior)
             json: false,
             nupm_home: None,
         };
@@ -1607,15 +1598,13 @@ mod tests {
         crate::config::Config::default().save(root).unwrap();
 
         let args = DoctorArgs {
-            fix: true,
-            yes: true,
+            scan: false,  // Apply fixes (default behavior)
             json: false,
             nupm_home: None,
         };
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,  // First check: report only to see findings
                 json: false,
                 nupm_home: None,
             },
@@ -1664,8 +1653,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: false,
                 nupm_home: None,
             },
@@ -1694,8 +1682,7 @@ mod tests {
         fake_paths(root, &nu_exe).save(root).unwrap();
 
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: true,
             nupm_home: None,
         };
@@ -1759,8 +1746,7 @@ mod tests {
         std::fs::create_dir_all(root.join("packages/plugins/owner/plugin/1.0.0-abc")).unwrap();
 
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: false,
             nupm_home: None,
         };
@@ -1829,8 +1815,7 @@ mod tests {
         std::fs::create_dir_all(root.join("packages/plugins/owner/plugin/1.0.0-abc")).unwrap();
 
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: false,
             nupm_home: None,
         };
@@ -1915,8 +1900,7 @@ mod tests {
         lockfile.save(root).unwrap();
 
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: false,
             nupm_home: None,
         };
@@ -1958,8 +1942,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },
@@ -2017,8 +2000,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },
@@ -2060,8 +2042,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },
@@ -2102,8 +2083,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },
@@ -2142,8 +2122,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },
@@ -2186,8 +2165,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },

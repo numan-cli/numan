@@ -12,13 +12,12 @@ use crate::util::hints::{self, CMD_INIT_REFRESH};
 /// Print blast-radius warning and optionally install managed Nu + refresh paths.
 ///
 /// Returns `Ok(true)` when a pin was installed and `init --refresh` succeeded.
-/// Returns `Ok(false)` when the user declined or the session is non-interactive /
-/// `--yes` (hints printed only; never auto-downloads Nu from `--yes` alone).
+/// Returns `Ok(false)` when the user declined or the session is non-interactive
+/// (hints printed only; never auto-downloads Nu without explicit confirmation).
 pub fn offer_managed_nu_pin(
     root: &Path,
     current_nu: &str,
     diagnosis: &PackageIncompatibility,
-    auto_yes: bool,
 ) -> Result<bool> {
     let Some(pin) = diagnosis.suggested_pin.as_deref() else {
         return Ok(false);
@@ -36,9 +35,9 @@ pub fn offer_managed_nu_pin(
 
     let setup_cmd = hints::setup_nu_version(pin);
 
-    if auto_yes || !std::io::stdin().is_terminal() {
+    if !std::io::stdin().is_terminal() {
         println!("To switch Nu, run:");
-        println!("  {setup_cmd} --yes --force");
+        println!("  {setup_cmd} --force");
         println!("  {CMD_INIT_REFRESH}");
         println!("  then retry your install.");
         return Ok(false);

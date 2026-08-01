@@ -20,10 +20,6 @@ use crate::util::hints::{self, CMD_REGISTRY_SYNC};
 /// a matching managed Nu version or searching for another package with `numan search`.
 #[derive(Parser, Debug)]
 pub struct TryArgs {
-    /// Skip confirmation prompts
-    #[arg(long)]
-    pub yes: bool,
-
     /// Install only; do not activate
     #[arg(long)]
     pub no_activate: bool,
@@ -93,8 +89,7 @@ pub fn execute(args: &TryArgs, root: &Path) -> Result<()> {
         StarterSelection::Compatible(id) => id,
         StarterSelection::NeedsPin { id, diagnosis } => {
             println!("Starter '{id}' needs a different Nu than {}.", nu.version);
-            let accepted =
-                nu_pin_offer::offer_managed_nu_pin(root, &nu.version, &diagnosis, args.yes)?;
+            let accepted = nu_pin_offer::offer_managed_nu_pin(root, &nu.version, &diagnosis)?;
             if !accepted {
                 bail!(
                     "{}",
@@ -159,7 +154,7 @@ pub fn execute(args: &TryArgs, root: &Path) -> Result<()> {
     activate::execute(
         &ActivateArgs {
             packages: vec![package_id.clone()],
-            yes: true,
+
             verbose: false,
             list: false,
             check: false,
@@ -450,10 +445,10 @@ mod tests {
         };
         let root = tempfile::tempdir().unwrap();
         let accepted =
-            nu_pin_offer::offer_managed_nu_pin(root.path(), "0.114.1", &diagnosis, true).unwrap();
+            nu_pin_offer::offer_managed_nu_pin(root.path(), "0.114.1", &diagnosis).unwrap();
         assert!(
             !accepted,
-            "--yes must not silent-switch / auto-install managed Nu"
+            "non-interactive mode must not auto-install managed Nu"
         );
     }
 
