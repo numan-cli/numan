@@ -138,7 +138,6 @@ pub fn execute(args: &DoctorArgs, root: &Path) -> Result<i32> {
 
 pub fn execute_with_options(args: &DoctorArgs, root: &Path, options: DoctorOptions) -> Result<i32> {
     let mut report = run_checks_with_options(args, root, &options)?;
-    // Apply fixes by default; --scan skips repairs (report-only mode).
     if !args.scan {
         let repairs = apply_repairs(args, root, &report.findings, &options)?;
         report = run_checks_with_options(args, root, &options)?;
