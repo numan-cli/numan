@@ -6,6 +6,8 @@
 //! - `numan use list` — show all installed versions with active marker
 
 use anyhow::{bail, Context, Result};
+
+use crate::util::hints;
 use clap::Args;
 use std::path::Path;
 
@@ -21,7 +23,8 @@ pub struct UseArgs {
 pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
     // Attempt migration of legacy single-binary install before any operation.
     // This is a no-op if migration has already occurred or no legacy install exists.
-    let _ = version_manager::migrate_legacy_install(root);
+    version_manager::migrate_legacy_install(root)
+        .with_context(|| "Failed to migrate legacy Nu installation")?;
 
     match args.version.as_str() {
         "list" => execute_list(root),
@@ -37,7 +40,7 @@ fn execute_list(root: &Path) -> Result<()> {
 
     if versions.is_empty() {
         println!("No Nu versions installed.");
-        println!("Run 'numan setup nu' or 'numan setup nu --version <version>' to install.");
+        println!("Run 'numan setup nu' or 'numan setup nu <version>' to install.");
         return Ok(());
     }
 
@@ -63,7 +66,7 @@ fn execute_latest(root: &Path) -> Result<()> {
         None => {
             bail!(
                 "No Nu versions installed.\n\
-                 Run 'numan setup nu' or 'numan setup nu --version <version>' first."
+                 Run 'numan setup nu' or 'numan setup nu <version>' first."
             )
         }
     }
@@ -71,20 +74,21 @@ fn execute_latest(root: &Path) -> Result<()> {
 
 /// Switch to a specific Nu version.
 fn execute_switch(root: &Path, version: &str) -> Result<()> {
+    let version = version_manager::normalize_version(version)?;
     // Validate the version is installed.
     if !version_manager::is_version_installed(root, version) {
         let installed = version_manager::list_installed_versions(root)?;
         let hint = if installed.is_empty() {
             format!(
                 "No Nu versions installed.\n\
-                 Run 'numan setup nu --version {}' to install.",
+                 Run 'numan setup nu {}' to install.",
                 version
             )
         } else {
             format!(
                 "Nu {} is not installed.\n\
                  Installed versions: {}\n\
-                 Run 'numan setup nu --version {}' to install, or 'numan use list' to see available versions.",
+                 Run 'numan setup nu {}' to install, or 'numan use list' to see available versions.",
                 version,
                 installed.join(", "),
                 version

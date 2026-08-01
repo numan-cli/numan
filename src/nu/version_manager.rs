@@ -32,13 +32,16 @@ pub fn read_active_version(root: &Path) -> Result<Option<ActiveVersion>> {
     }
     let content = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read active version from '{}'", path.display()))?;
-    let active: ActiveVersion = serde_json::from_str(&content)
-        .with_context(|| format!("Failed to parse active version from '{}'", path.display()))?;
+    let active: ActiveVersion = match serde_json::from_str(&content) {
+        Ok(active) => active,
+        Err(_) => return Ok(None),
+    };
     Ok(Some(active))
 }
 
 /// Write the active Nu version to the marker file.
 pub fn write_active_version(root: &Path, version: &str) -> Result<()> {
+    let version = normalize_version(version)?;
     let path = active_version_path(root);
     // Ensure parent directory exists.
     if let Some(parent) = path.parent() {
@@ -59,6 +62,17 @@ pub fn versioned_nu_dir(root: &Path) -> PathBuf {
     root.join("tools").join("nushell")
 }
 
+/// Parse and normalize a Nu version, rejecting path-like values.
+pub fn normalize_version(version: &str) -> Result<String> {
+    let version = version.strip_prefix('v').unwrap_or(version);
+    if version.is_empty() || version.contains('/') || version.contains('\\\\') || version.contains("..") {
+        bail!("Invalid Nu version '{}'; expected X.Y.Z", version)
+    }
+    let parsed = semver::Version::parse(version)
+        .with_context(|| format!("Invalid Nu version '{}'; expected X.Y.Z", version))?;
+    Ok(parsed.to_string())
+}
+
 /// Directory for a specific Nu version install.
 pub fn version_install_dir(root: &Path, version: &str) -> PathBuf {
     versioned_nu_dir(root).join(version)
@@ -77,7 +91,8 @@ pub fn active_nu_binary(root: &Path) -> Result<Option<PathBuf>> {
     let Some(active) = read_active_version(root)? else {
         return Ok(None);
     };
-    let binary = version_binary(root, &active.version);
+    let version = normalize_version(&active.version)?;
+    let binary = version_binary(root, &version);
     if binary.exists() {
         Ok(Some(binary))
     } else {
@@ -120,7 +135,9 @@ pub fn list_installed_versions(root: &Path) -> Result<Vec<String>> {
 
 /// Check if a specific Nu version is installed.
 pub fn is_version_installed(root: &Path, version: &str) -> bool {
-    version_binary(root, version).exists()
+    normalize_version(version)
+        .map(|version| version_binary(root, &version).exists())
+        .unwrap_or(false)
 }
 
 /// Get the latest installed Nu version, or `None` if no versions are installed.
@@ -183,6 +200,7 @@ pub fn migrate_legacy_install(root: &Path) -> Result<bool> {
     let version = parse_nu_version_from_output(&version_output)?;
 
     // Move the legacy binary to the versioned directory.
+    let version = normalize_version(&version)?;
     let version_dir = version_install_dir(root, &version);
     std::fs::create_dir_all(&version_dir).with_context(|| {
         format!(
@@ -204,7 +222,9 @@ pub fn migrate_legacy_install(root: &Path) -> Result<bool> {
     write_active_version(root, &version)?;
 
     // Try to remove the now-empty legacy directory (ignore errors if not empty).
-    let _ = std::fs::remove_dir(legacy_binary.parent().unwrap());
+    if let Some(parent) = legacy_binary.parent() {
+        let _ = std::fs::remove_dir(parent);
+    }
 
     Ok(true)
 }
