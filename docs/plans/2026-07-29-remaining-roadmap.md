@@ -3,7 +3,7 @@
 **Status date:** 2026-07-29
 
 **Superseded:** Use the consolidated multi-repo plan
-[`2026-07-30-consolidated-multi-repo-roadmap.md`](2026-07-30-consolidated-multi-repo-roadmap.md).
+[`consolidated-multi-repo-roadmap.md`](consolidated-multi-repo-roadmap.md).
 This file is retained as the prior client draft for history.
 
 ---

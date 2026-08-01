@@ -1,7 +1,5 @@
 # Numan Consolidated Multi-Repo Roadmap
 
-**Status date:** 2026-07-31
-
 **Authority:** This is the single cross-repo plan for remaining work toward Numan 1.0.
 Repo-local roadmaps keep operational detail and should link here:
 
@@ -287,9 +285,58 @@ Ship 1.0 when **all** of the following are true:
 
 ---
 
+## Post-1.0 Features (0.2+)
+
+Captured from product discussion; subject to change.
+
+### Side-by-side Nu version management (`numan use`)
+
+**Vision:** Numan manages multiple Nu versions simultaneously. The user picks the
+Nu version that has the plugins they need, and switching is instant.
+
+- `numan use <version>` — switch active Nu (auto-installs if missing)
+- `numan use latest` — switch to newest installed version
+- `numan use list` — show installed versions + active marker + per-version plugin counts
+- Storage: `<root>/tools/nushell/<version>/nu` (immutable, one dir per version)
+- Active marker: symlink or marker file at `<root>/tools/nushell/active`
+- PATH/shim: Numan manages a shim directory on PATH pointing at the active version
+
+**Per-version activation sets:**
+
+- Lockfile `plugin_activation` becomes keyed by Nu version
+- Switching Nu activates/deactivates plugins for that version automatically
+- `numan use 0.113.1` → activates plugins compatible with 0.113, deactivates 0.114-only ones
+
+**Numan-level aliases (optional):**
+
+- `numan alias work 0.113.1` → `numan use work` switches to 0.113.1
+- Persisted in Numan config; survives shell changes
+- Shell-level aliases (`alias nu113 = numan use 0.113.1`) remain a user option
+
+**Catalog implication:** backfilling older Nu versions (0.112, 0.113) becomes
+valuable because each version is a switchable "profile" rather than a dead end.
+Pre-0.112 plugins remain deferred unless product re-scopes.
+
+**Backfill data:** `numan-plugins/docs/backlog.json` (schema v1) tracks ALL
+release versions per plugin with their Nu minor compatibility. The
+`backfill_targets` field lists Nu minors that have eligible plugin versions not
+yet in the registry. Use this to drive backfill waves once `numan use` ships.
+Source: awesome-nu + manual discovery. Entries marked `NEEDS_RESEARCH` need
+their version history filled in before promotion.
+
+**Command reserved:** `numan use` exists as a stub in 0.1.x (prints a
+"coming in 0.2" message) so the UX shape is locked.
+
+### Explicitly NOT in scope for post-1.0 (requires Nu upstream)
+
+- Simultaneous multi-version plugin hosting (running 0.113 and 0.114 plugins in
+  one session) — requires Nu-core plugin protocol bridging / remote plugin hosts
+- Plugin ABI translation layer between Nu versions
+
+---
+
 ## Explicitly Deferred (All Repos)
 
-- Silent side-by-side Nu profile switching
 - Source builds hidden inside registry intake
 - Publishing registry entries without review
 - Calling packages "approved" or "audited" solely because they are in the official registry

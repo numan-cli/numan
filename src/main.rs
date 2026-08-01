@@ -43,5 +43,6 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Setup(cmd) => numan_cli::cmd::setup::execute(cmd, &root),
         Commands::Try(args) => numan_cli::cmd::try_cmd::execute(&args, &root),
+        Commands::Use(args) => numan_cli::cmd::use_cmd::execute(&args, &root),
     }
 }
