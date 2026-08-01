@@ -257,7 +257,7 @@ fn format_no_compatible_starter(nu: &str, triple: &str, pin: Option<&str>) -> St
     let mut msg = format!("No compatible starter package for Nu {nu} on {triple}.");
     if let Some(pin) = pin {
         msg.push_str(&format!(
-            "\nInstall a matching managed Nu: {} (PATH Nu is not touched), then retry `numan try`.",
+            "\nInstall a matching managed Nu: {} (your existing Nu is not replaced), then retry `numan try`.",
             hints::setup_nu_version(pin)
         ));
     }

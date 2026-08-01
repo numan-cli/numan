@@ -326,7 +326,7 @@ fn append_nu_mismatch_remediation(msg: &mut String, package: &Package, pin: Opti
     msg.push_str("\n       Options:");
     if let Some(pin) = pin {
         msg.push_str(&format!(
-            "\n         - Install a matching managed Nu: numan setup nu {pin}\n           (installs under your Numan root; your PATH Nu is not touched)"
+            "\n         - Install a matching managed Nu: numan setup nu {pin}\n           (installs under your Numan root; your existing Nu is not replaced)"
         ));
         msg.push_str(&format!(
             "\n         - Then: {}",
@@ -344,7 +344,7 @@ fn append_nu_mismatch_remediation(msg: &mut String, package: &Package, pin: Opti
             hints::CMD_SETUP_NU
         ));
         msg.push_str(
-            "\n           (managed install under your Numan root; your PATH Nu is not touched)",
+            "\n           (managed install under your Numan root; your existing Nu is not replaced)",
         );
     }
     msg.push_str(
@@ -575,8 +575,8 @@ mod tests {
         assert!(err.contains("too new"), "{err}");
         assert!(err.contains("setup nu 0.113.1"), "{err}");
         assert!(
-            err.contains("PATH Nu is not touched"),
-            "expected PATH-untouched note: {err}"
+            err.contains("existing Nu is not replaced"),
+            "expected existing-Nu-untouched note: {err}"
         );
         assert!(
             err.contains("Nothing was installed. No changes were made."),
@@ -606,7 +606,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("setup nu 0.113.1"), "{err}");
-        assert!(err.contains("PATH Nu is not touched"), "{err}");
+        assert!(err.contains("existing Nu is not replaced"), "{err}");
         assert!(
             err.contains("numan search <query>"),
             "expected alternate-package guidance: {err}"
@@ -645,7 +645,7 @@ mod tests {
             !err.contains("setup nu --version"),
             "must not invent a concrete pin: {err}"
         );
-        assert!(err.contains("PATH Nu is not touched"), "{err}");
+        assert!(err.contains("existing Nu is not replaced"), "{err}");
         assert!(
             err.contains("numan search <query>"),
             "expected alternate-package guidance: {err}"
