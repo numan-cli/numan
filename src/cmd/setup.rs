@@ -172,7 +172,7 @@ pub(crate) fn execute_nu_impl(args: &NuSetupArgs, root: &Path) -> Result<()> {
         eprintln!("warning: --use-existing is deprecated, use 'numan setup nu use <path>' instead");
         if args.skip_path {
             bail!(
-                "numan setup nu --use-existing cannot be combined with --skip-path. \
+                "numan setup nu use cannot be combined with --skip-path. \
                  Off-PATH registration must persist the binary directory to PATH."
             );
         }
@@ -212,11 +212,14 @@ fn execute_use_path(yes: bool, root: &Path) -> Result<()> {
 
     let managed_dir = bootstrap::managed_nu_dir(root);
     if managed_dir.is_dir() {
-        let resolved_path_nu = path_nu
+        let resolved_path_nu = Path::new(&path_nu)
             .canonicalize()
-            .with_context(|| format!("Failed to resolve PATH Nu '{}'", path_nu.display()))?;
+            .with_context(|| format!("Failed to resolve PATH Nu '{}'", path_nu))?;
         let resolved_managed_dir = managed_dir.canonicalize().with_context(|| {
-            format!("Failed to resolve managed Nushell directory '{}'", managed_dir.display())
+            format!(
+                "Failed to resolve managed Nushell directory '{}'",
+                managed_dir.display()
+            )
         })?;
         if resolved_path_nu.starts_with(&resolved_managed_dir) {
             bail!(

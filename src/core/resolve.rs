@@ -40,7 +40,7 @@ impl Incompatibility {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageIncompatibility {
     pub issue: Incompatibility,
-    /// Suggested managed Nu pin (`setup nu --version`), when one can be derived.
+    /// Suggested managed Nu pin (`setup nu <VERSION>`), when one can be derived.
     pub suggested_pin: Option<String>,
     pub available_versions: Vec<String>,
 }
@@ -314,7 +314,7 @@ fn append_nu_pin_options(msg: &mut String, package: &Package, diagnosis: &Packag
 
 /// Shared Nu-mismatch remediation for resolve / resolve_exact.
 ///
-/// Keeps `setup nu --version`, states PATH is untouched, and closes with
+/// Keeps `setup nu <VERSION>`, states PATH is untouched, and closes with
 /// "nothing was installed". Never suggests `registry sync` as an ABI fix.
 fn append_nu_mismatch_remediation(msg: &mut String, package: &Package, pin: Option<&str>) {
     if matches!(package.package_type, PackageType::Plugin) {
@@ -326,7 +326,7 @@ fn append_nu_mismatch_remediation(msg: &mut String, package: &Package, pin: Opti
     msg.push_str("\n       Options:");
     if let Some(pin) = pin {
         msg.push_str(&format!(
-            "\n         - Install a matching managed Nu: numan setup nu --version {pin}\n           (installs under your Numan root; your PATH Nu is not touched)"
+            "\n         - Install a matching managed Nu: numan setup nu {pin}\n           (installs under your Numan root; your PATH Nu is not touched)"
         ));
         msg.push_str(&format!(
             "\n         - Then: {}",
@@ -573,7 +573,7 @@ mod tests {
         let pkg = test_plugin();
         let err = resolver.resolve(&pkg).unwrap_err().to_string();
         assert!(err.contains("too new"), "{err}");
-        assert!(err.contains("setup nu --version 0.113.1"), "{err}");
+        assert!(err.contains("setup nu 0.113.1"), "{err}");
         assert!(
             err.contains("PATH Nu is not touched"),
             "expected PATH-untouched note: {err}"
@@ -605,7 +605,7 @@ mod tests {
             .resolve_exact(&pkg, &target)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("setup nu --version 0.113.1"), "{err}");
+        assert!(err.contains("setup nu 0.113.1"), "{err}");
         assert!(err.contains("PATH Nu is not touched"), "{err}");
         assert!(
             err.contains("numan search <query>"),

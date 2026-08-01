@@ -249,3 +249,29 @@ fn setup_nu_rejects_use_existing_with_skip_path() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn cli_parse_rejects_version_with_subcommand() {
+    let full = ["numan", "setup", "nu", "remove", "0.113.1"];
+    assert!(
+        Cli::try_parse_from(full).is_err(),
+        "a version must not be accepted alongside an action subcommand"
+    );
+}
+
+#[test]
+fn setup_nu_rejects_legacy_use_existing_with_skip_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let existing = root.join("nu");
+    std::fs::write(&existing, b"fake nu").unwrap();
+
+    let mut args = NuSetupArgs::install(None, false, true, true);
+    args.use_existing = Some(existing);
+
+    let err = execute_nu(&args, root).unwrap_err();
+    assert!(
+        err.to_string().contains("--skip-path"),
+        "unexpected error: {err}"
+    );
+}
