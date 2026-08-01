@@ -630,7 +630,6 @@ fn test_activate_auto_confirms_on_no_tty() {
 
     let args = ActivateArgs {
         packages: vec![],
-        yes: false,
         verbose: false,
         list: false,
         check: false,
