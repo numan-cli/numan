@@ -15,8 +15,8 @@ pub const CMD_ACTIVATE_CHECK: &str = "numan activate --check";
 /// `numan registry sync`
 pub const CMD_REGISTRY_SYNC: &str = "numan registry sync";
 
-/// `numan doctor --fix`
-pub const CMD_DOCTOR_FIX: &str = "numan doctor --fix";
+/// `numan doctor`
+pub const CMD_DOCTOR_FIX: &str = "numan doctor";
 
 /// `numan setup nu`
 pub const CMD_SETUP_NU: &str = "numan setup nu";

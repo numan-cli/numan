@@ -22,20 +22,20 @@ It answers: *“Is this Numan root consistent, safe to mutate, and aligned with 
 ## Invocation
 
 ```text
-numan doctor [--fix] [--yes] [--json] [--nupm-home PATH]
+numan doctor [--scan] [--json] [--nupm-home PATH]
 ```
 
 | Flag | Behavior |
 |------|----------|
-| `--fix` | After reporting, apply automated repairs (see [Repair policy](#repair-policy)) |
-| `--yes` | Skip confirmation prompts for **confirm**-tier repairs (non-TTY implies `--yes` for confirm tier only) |
+| `--scan` | Report findings without applying repairs |
+
 | `--json` | Emit a single JSON object (schema versioned); no ANSI styling. With `--fix`, include `repairs` attempted/applied |
 | `--nupm-home PATH` | Override nupm home for the optional coexistence section (same resolution order as `numan nupm status`) |
 
 Global `--root` applies as for all commands.
 
-**Default (no flags):** diagnose and print findings + manual fix hints.  
-**`--fix`:** diagnose, then repair what is allowed without user-supplied data.
+**Default (no flags):** diagnose and apply available repairs, then print findings.  
+**`--scan`:** diagnose and print findings without mutating state.
 
 ## Exit codes
 
