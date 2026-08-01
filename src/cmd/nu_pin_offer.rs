@@ -37,7 +37,7 @@ pub fn offer_managed_nu_pin(
 
     if !std::io::stdin().is_terminal() {
         println!("To switch Nu, run:");
-        println!("  {setup_cmd} --force");
+        println!("  {setup_cmd} --yes --force");
         println!("  {CMD_INIT_REFRESH}");
         println!("  then retry your install.");
         return Ok(false);
