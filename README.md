@@ -269,8 +269,8 @@ See [docs/snapshots-and-rollback.md](docs/snapshots-and-rollback.md) for scope, 
 #### 6. Verify health
 
 ```bash
-numan doctor                      # report-only diagnosis
-numan doctor --fix --yes          # apply safe automated repairs
+numan doctor                      # diagnose and apply safe automated repairs
+numan doctor --scan                # report-only diagnosis
 ```
 
 ---
@@ -333,7 +333,7 @@ Global flag: `--root <path>` — override the Numan root directory (all commands
 | `numan nupm import --manifest file.toml` | Batch import from manifest |
 | `numan nupm diff <owner/name>` | Compare imported payload vs nupm source |
 | `numan completions <shell>` | Generate bash, fish, zsh, powershell, or nushell completions |
-| `numan doctor [--fix] [--yes] [--json]` | Diagnose root health; optional safe repairs |
+| `numan doctor [--scan] [--json]` | Diagnose root health; repairs by default |
 
 ### Common flags (by command)
 

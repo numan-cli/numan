@@ -152,7 +152,7 @@ fn print_onboarding_next_steps(official_configured: bool) {
     }
     println!();
     println!(
-        "Run 'numan doctor' to verify setup (use 'numan doctor --fix --yes' for safe repairs)."
+        "Run 'numan doctor' to verify setup and apply safe repairs (use 'numan doctor --scan' for report-only output)."
     );
 }
 
