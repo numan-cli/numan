@@ -1,4 +1,5 @@
 pub mod atomic;
+pub mod confirm;
 pub mod fs_safety;
 pub mod hints;
 

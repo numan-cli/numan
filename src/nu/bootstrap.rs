@@ -2,7 +2,6 @@
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
-use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use crate::core::integrity;
@@ -444,26 +443,15 @@ pub fn register_existing_nu(binary: &Path, options: &NuSetupOptions) -> Result<P
 
     let parent = path_parent_for_registration(input.as_path(), &resolved)?;
 
-    if !options.yes && !std::io::stdin().is_terminal() {
-        bail!(
-            "Interactive confirmation required to update PATH in non-TTY sessions. \
-             Pass --yes to proceed."
-        );
-    }
-
-    if !options.yes && std::io::stdin().is_terminal() {
-        println!(
-            "This will add '{}' to your user PATH so Nushell can be found.",
-            parent.display()
-        );
-        print!("Proceed? [y/N] ");
-        std::io::stdout().flush()?;
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        if !input.trim().eq_ignore_ascii_case("y") {
-            bail!("Nushell PATH setup cancelled.");
-        }
-    }
+    println!(
+        "This will add '{}' to your user PATH so Nushell can be found.",
+        parent.display()
+    );
+    crate::util::confirm::confirm_or_bail(
+        "Proceed?",
+        options.yes,
+        "Nushell PATH setup cancelled.",
+    )?;
 
     prepend_process_path(&parent)?;
     if !options.skip_path {
@@ -678,46 +666,21 @@ where
             return Ok(dest);
         }
 
-        if !std::io::stdin().is_terminal() {
-            bail!(
-                "Nushell is already installed at '{}'. \
-                 Pass --force to reinstall, or --yes to skip this check and update PATH only.",
+        crate::util::confirm::confirm_or_bail(
+            &format!(
+                "Nushell is already installed at '{}'. Reinstall {version_label} release?",
                 dest.display()
-            );
-        }
-
-        print!(
-            "Nushell is already installed at '{}'. Reinstall {version_label} release? [y/N] ",
-            dest.display()
-        );
-        std::io::stdout().flush()?;
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        if !input.trim().eq_ignore_ascii_case("y") {
-            bail!("Nushell setup cancelled.");
-        }
+            ),
+            false,
+            "Nushell setup cancelled.",
+        )?;
     }
 
-    if !options.yes && !std::io::stdin().is_terminal() {
-        bail!(
-            "Interactive confirmation required to download Nushell in non-TTY sessions. \
-             Pass --yes to proceed."
-        );
-    }
-
-    if !options.yes && std::io::stdin().is_terminal() {
-        println!(
-            "This will download the official Nushell {version_label} release for {} from GitHub.",
-            platform.triple
-        );
-        print!("Proceed? [y/N] ");
-        std::io::stdout().flush()?;
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        if !input.trim().eq_ignore_ascii_case("y") {
-            bail!("Nushell setup cancelled.");
-        }
-    }
+    println!(
+        "This will download the official Nushell {version_label} release for {} from GitHub.",
+        platform.triple
+    );
+    crate::util::confirm::confirm_or_bail("Proceed?", options.yes, "Nushell setup cancelled.")?;
 
     let installed = install(root, platform)?;
     let tools_dir = managed_nu_dir(root);

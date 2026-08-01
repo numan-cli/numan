@@ -1,6 +1,5 @@
 use anyhow::{bail, Context, Result};
 use clap::Args;
-use std::io::{IsTerminal, Write};
 use std::path::{Component, Path, PathBuf};
 
 use crate::nu::autoload::{
@@ -26,7 +25,7 @@ pub struct ActivateArgs {
     /// Package IDs (owner/name) to activate. Omit to activate all installed inactive packages.
     pub packages: Vec<String>,
 
-    /// Skip confirmation prompt
+    /// Skip confirmation prompts
     #[arg(long)]
     pub yes: bool,
 
@@ -163,22 +162,7 @@ fn execute_with_registrar_and_runner(
         &nu_paths.plugin_registry_path,
     );
 
-    if !std::io::stdin().is_terminal() && !args.yes {
-        bail!(
-            "Interactive confirmation required for non-TTY sessions. \
-             Pass --yes to activate without prompting."
-        );
-    }
-
-    if !args.yes {
-        print!("Proceed? [y/N] ");
-        std::io::stdout().flush()?;
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        if !input.trim().eq_ignore_ascii_case("y") {
-            bail!("Activation cancelled.");
-        }
-    }
+    crate::util::confirm::confirm_or_bail("Proceed?", args.yes, "Activation cancelled.")?;
 
     // 9. Reacquire the root mutation lock after consent.
     let _lock = acquire_mutation_lock(root)?;
@@ -1699,19 +1683,14 @@ mod tests {
     }
 
     #[test]
-    fn non_tty_without_yes_is_caught_before_mutation() {
-        // This test verifies the non-TTY check logic.
-        // In a test environment stdin is not a TTY, so we just verify the
-        // conditional logic is wired correctly by checking the error message
-        // expected from that code path.
-        let is_tty = std::io::stdin().is_terminal();
-        // In CI / test environments stdin is not a TTY.
-        if !is_tty {
-            // The check `!std::io::stdin().is_terminal() && !args.yes` would
-            // bail here. We can't directly invoke execute() without full state,
-            // so we just verify the constant matches what the plan expects.
-            let expected_fragment = "Interactive confirmation required for non-TTY sessions";
-            assert!(expected_fragment.contains("non-TTY"));
+    fn non_tty_auto_confirms() {
+        // With the shared confirm utility, non-TTY sessions auto-confirm
+        // instead of bailing. Verify confirm_or_auto returns Ok(true)
+        // when stdin is not a terminal (as in CI/test environments).
+        use std::io::IsTerminal;
+        if !std::io::stdin().is_terminal() {
+            let result = crate::util::confirm::confirm_or_auto("test?", false);
+            assert!(result.unwrap(), "non-TTY should auto-confirm");
         }
     }
 }

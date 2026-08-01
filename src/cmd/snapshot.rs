@@ -1,6 +1,5 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use clap::Subcommand;
-use std::io::{IsTerminal, Write};
 use std::path::Path;
 
 use crate::nu::autoload::NuCandidateRunner;
@@ -241,17 +240,7 @@ fn rollback(root: &Path, id: &str, yes: bool) -> Result<()> {
 }
 
 fn confirm(prompt: &str) -> Result<()> {
-    if !std::io::stdin().is_terminal() {
-        bail!("Interactive confirmation required for non-TTY sessions. Pass --yes to proceed without prompting.");
-    }
-    print!("{prompt} [y/N] ");
-    std::io::stdout().flush()?;
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    if !input.trim().eq_ignore_ascii_case("y") {
-        bail!("Cancelled.");
-    }
-    Ok(())
+    crate::util::confirm::confirm_or_bail(prompt, false, "Cancelled.")
 }
 
 fn short_hash(h: &str) -> String {

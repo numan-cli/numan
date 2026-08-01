@@ -59,13 +59,7 @@ pub fn offer_managed_nu_pin(
 
 pub fn install_pinned_nu_and_refresh(root: &Path, pin: &str) -> Result<()> {
     setup::execute_nu(
-        &NuSetupArgs {
-            force: true,
-            skip_path: false,
-            yes: true,
-            version: Some(pin.to_string()),
-            use_existing: None,
-        },
+        &NuSetupArgs::install(Some(pin.to_string()), true, false, true),
         root,
     )
     .with_context(|| format!("Failed to install managed Nu {pin}"))?;

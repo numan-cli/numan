@@ -1,7 +1,6 @@
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use std::collections::BTreeSet;
-use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use crate::nu::autoload::{
@@ -40,7 +39,7 @@ pub struct DeactivateArgs {
     /// Package IDs (owner/name) to deactivate. Omit to deactivate all active plugins and modules.
     pub packages: Vec<String>,
 
-    /// Skip confirmation prompt
+    /// Skip confirmation prompts
     #[arg(long)]
     pub yes: bool,
 
@@ -150,22 +149,7 @@ pub fn execute_with_candidate_runner_and_unregistrar(
     // 5. Show consent table and confirm
     print_consent_table(&targets_requested, &nu_paths.plugin_registry_path);
 
-    if !std::io::stdin().is_terminal() && !args.yes {
-        bail!(
-            "Interactive confirmation required for non-TTY sessions. \
-             Pass --yes to deactivate without prompting."
-        );
-    }
-
-    if !args.yes {
-        print!("Proceed? [y/N] ");
-        std::io::stdout().flush()?;
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        if !input.trim().eq_ignore_ascii_case("y") {
-            bail!("Deactivation cancelled.");
-        }
-    }
+    crate::util::confirm::confirm_or_bail("Proceed?", args.yes, "Deactivation cancelled.")?;
 
     // 6. Reacquire the root mutation lock after consent.
     let _lock = acquire_mutation_lock(root)?;
@@ -1612,11 +1596,11 @@ mod tests {
     }
 
     #[test]
-    fn non_tty_without_yes_is_expected_to_fail() {
-        let is_tty = std::io::stdin().is_terminal();
-        if !is_tty {
-            let expected = "Interactive confirmation required for non-TTY sessions";
-            assert!(expected.contains("non-TTY"));
+    fn non_tty_auto_confirms() {
+        use std::io::IsTerminal;
+        if !std::io::stdin().is_terminal() {
+            let result = crate::util::confirm::confirm_or_auto("test?", false);
+            assert!(result.unwrap(), "non-TTY should auto-confirm");
         }
     }
 

@@ -609,14 +609,12 @@ fn test_activate_stale_journal_requires_refresh() {
 }
 
 #[test]
-fn test_activate_requires_consent_no_tty() {
-    // Without --yes and no TTY, activate must refuse rather than silently proceeding.
-    // We can't simulate a real TTY in tests, but we can verify that the `yes: false`
-    // path bails before calling the registrar when stdin is not a terminal.
+fn test_activate_auto_confirms_on_no_tty() {
+    // With the shared confirm utility, non-TTY sessions auto-confirm instead of
+    // bailing. Without --yes and no TTY, activate should proceed (auto-confirm).
     //
-    // In CI (non-TTY), this test verifies the guard fires.
-    // In interactive dev (TTY), this test is skipped by the `is_terminal` check
-    // — the guard only fires in non-TTY contexts.
+    // In CI (non-TTY), this test verifies auto-confirm works.
+    // In interactive dev (TTY), this test is skipped by the `is_terminal` check.
     if std::io::stdin().is_terminal() {
         // Running interactively — cannot test non-TTY path here; skip
         return;
@@ -641,11 +639,10 @@ fn test_activate_requires_consent_no_tty() {
         check: false,
     };
     let result = execute_with_registrar(&args, &env.root(), &ok_registrar);
-    assert!(result.is_err());
-    let msg = result.unwrap_err().to_string();
     assert!(
-        msg.contains("--yes") || msg.contains("TTY") || msg.contains("Interactive"),
-        "Expected non-TTY consent error, got: {msg}"
+        result.is_ok(),
+        "non-TTY should auto-confirm, got error: {:?}",
+        result.err()
     );
 }
 

@@ -77,8 +77,8 @@ Repair steps run in this **order** (each step re-validates only what it changed)
 | **auto** | Never | `layout.*` (missing dirs), `nu_paths.missing` | `create_dir_all` for layout; `numan init` |
 | **auto** | Never | `registry.index_missing` | `numan registry sync` |
 | **auto** | Never | `registry.none` (production trust root only) | Add official registry via same path as `numan init` |
-| **confirm** | Unless `--yes` / non-TTY | `nu.binary.missing_on_path` | `numan setup nu --yes` (downloads managed Nushell) |
-| **confirm** | Unless `--yes` / non-TTY | `nu.binary.found_off_path` | `numan setup nu --use-existing <path> --yes` (adds existing install to PATH) |
+| **confirm** | Unless `--yes` / non-TTY | `nu.binary.missing_on_path` | `numan setup nu` (downloads managed Nushell) |
+| **confirm** | Unless `--yes` / non-TTY | `nu.binary.found_off_path` | `numan setup nu use <path>` (adds existing install to PATH) |
 | **confirm** | Unless `--yes` / non-TTY | `nu_paths.drift`, `nu_paths.vendor_drift` | `numan init --refresh` |
 | **confirm** | Unless `--yes` / non-TTY | `journal.plugin_pending`, `journal.autoload_pending`, `journal.plugin_stale`, `journal.autoload_stale`, `activation.plugin_stale`, `activation.module_stale`, `autoload.projection`, `autoload.managed_missing` | `numan activate` (empty package list — reconciles journals and re-activates stale entries; same entry point as normal activate recovery) |
 | **confirm** | Unless `--yes` / non-TTY | `journal.plugin_deactivate_pending` | `numan deactivate <journal package ids>` (reconciles pending-plugin-deactivate journal only; not a full-root deactivate) |
@@ -115,7 +115,7 @@ Checks run in order below. Implementation should call existing validators (`NuPa
 | ID | Severity | Condition |
 |----|----------|-----------|
 | `nu.binary.missing_on_path` | `error` | Nu not on PATH and not under `$NUMAN_ROOT/tools/nushell/` → fix: `numan setup nu` |
-| `nu.binary.found_off_path` | `warn` | Nu exists in a known install root (e.g. `~/.cargo/bin`, `%LOCALAPPDATA%\Programs\nushell`) but not on PATH → fix: `numan setup nu --use-existing <path> --yes` |
+| `nu.binary.found_off_path` | `warn` | Nu exists in a known install root (e.g. `~/.cargo/bin`, `%LOCALAPPDATA%\Programs\nushell`) but not on PATH → fix: `numan setup nu use <path>` |
 | `nu.path.version` | `info` | PATH-only Nu version (`PATH Nu: 0.114.1`), `PATH Nu: not found`, or `PATH Nu: found at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Does not treat managed Nu as PATH. Report-only (no `--fix`). |
 | `nu.managed.version` | `info` | Managed binary under `$NUMAN_ROOT/tools/nushell/` with version, `Managed Nu: not installed`, or `Managed Nu: present at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Report-only (no `--fix`). |
 | `nu_paths.missing` | `error` | `paths.json` absent → fix: `numan init` |
@@ -263,7 +263,7 @@ pub fn execute_with_options(args: &DoctorArgs, root: &Path, options: DoctorOptio
 |---------|------|
 | `numan init` / `init --refresh` | **Repair** Nu path drift (`--fix` delegates here) |
 | `numan setup nu` | **Repair** missing Nushell (`nu.binary.missing_on_path`; `--fix` downloads managed binary) |
-| `numan setup nu --use-existing` | **Repair** off-PATH Nushell (`nu.binary.found_off_path`; `--fix` adds parent dir to user PATH) |
+| `numan setup nu use <path>` | **Repair** off-PATH Nushell (`nu.binary.found_off_path`; `--fix` adds parent dir to user PATH) |
 | `numan activate` | **Repair** activation + journal reconciliation (`--fix` delegates here) |
 | `numan registry sync` | **Repair** missing index cache (`--fix` auto tier) |
 | `numan activate --check` | Deep **module** check only; no repair |

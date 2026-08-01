@@ -190,7 +190,7 @@ numan install vyadh/nutest
 numan activate vyadh/nutest --yes
 ```
 
-Install is **inert** — nothing is registered with Nu until you run `numan activate` (or `numan try`, which activates after install). If a package needs a different Nu minor, Numan explains the mismatch and can offer `numan setup nu --version <x.y.z>` (activations are per-Nu; re-activate after switching). When no compatible starter exists, `numan try` suggests installing a matching managed Nu version or searching for another package with `numan search`.
+Install is **inert** — nothing is registered with Nu until you run `numan activate` (or `numan try`, which activates after install). If a package needs a different Nu minor, Numan explains the mismatch and can offer `numan setup nu <x.y.z>` (activations are per-Nu; re-activate after switching). When no compatible starter exists, `numan try` suggests installing a matching managed Nu version or searching for another package with `numan search`.
 
 After Nu upgrades, refresh cached paths and activation identity:
 
@@ -323,7 +323,10 @@ Global flag: `--root <path>` — override the Numan root directory (all commands
 | `numan snapshot delete <id> [--yes]` | Delete a snapshot |
 | `numan snapshot rollback <id> [--yes]` | Restore exactly a stored snapshot |
 | `numan registry list\|sync\|add\|remove\|packages` | Registry management |
-| `numan setup nu [--version <x.y.z>]` | Download and install official Nushell under Numan root (optionally pinned) |
+| `numan setup nu [VERSION]` | Download and install official Nushell under Numan root (optionally pinned) |
+| `numan setup nu remove` | Remove the managed Nushell install and fall back to PATH Nu |
+| `numan setup nu path` | Use the Nushell already on PATH (removes managed install) |
+| `numan setup nu use <path>` | Register a specific existing Nushell binary |
 | `numan nupm status` | Summarize nupm home and import eligibility |
 | `numan nupm inspect [--all] [path]` | Classify nupm packages at a path |
 | `numan nupm import [--as owner/name] [path]` | One-way import into Numan |
@@ -347,6 +350,7 @@ Global flag: `--root <path>` — override the Numan root directory (all commands
 | `nupm inspect` | `--all` scan home; `--nupm-home <path>`; `--exit-on-ineligible` fail on ineligible |
 | `nupm import` | `--as owner/name` (single import); `--manifest <file>` (batch); `--nupm-home <path>`; `--yes` skip consent |
 | `doctor` | `--fix` apply safe repairs; `--yes` skip confirm tier; `--json` machine output; `--nupm-home <path>` |
+| `setup nu` | `--force` re-download; `--skip-path` don't update PATH; `--yes` skip prompt |
 
 Run `numan <command> --help` for full flag documentation.
 

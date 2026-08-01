@@ -69,7 +69,7 @@ pub struct ImportArgs {
     #[arg(long, value_name = "OWNER/NAME")]
     pub r#as: Option<String>,
 
-    /// Confirm import without interactive consent
+    /// Skip confirmation prompts
     #[arg(long)]
     pub yes: bool,
 }
