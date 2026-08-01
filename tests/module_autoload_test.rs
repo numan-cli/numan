@@ -167,22 +167,20 @@ impl ModuleTestEnv {
         lockfile.save(self.root()).unwrap();
     }
 
-    /// Build ActivateArgs for the given package IDs with --yes.
+    /// Build ActivateArgs for the given package IDs.
     fn activate_args(&self, packages: &[&str]) -> ActivateArgs {
         ActivateArgs {
             packages: packages.iter().map(|s| s.to_string()).collect(),
-            yes: true,
             verbose: false,
             list: false,
             check: false,
         }
     }
 
-    /// Build DeactivateArgs for the given package IDs with --yes.
+    /// Build DeactivateArgs for the given package IDs.
     fn deactivate_args(&self, packages: &[&str]) -> DeactivateArgs {
         DeactivateArgs {
             packages: packages.iter().map(|s| s.to_string()).collect(),
-            yes: true,
             verbose: false,
         }
     }

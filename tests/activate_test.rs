@@ -137,7 +137,6 @@ impl TestEnv {
     fn no_args(&self) -> ActivateArgs {
         ActivateArgs {
             packages: vec![],
-            yes: true,
             verbose: false,
             list: false,
             check: false,
@@ -147,7 +146,6 @@ impl TestEnv {
     fn args_for(&self, packages: &[&str]) -> ActivateArgs {
         ActivateArgs {
             packages: packages.iter().map(|s| s.to_string()).collect(),
-            yes: true,
             verbose: false,
             list: false,
             check: false,
@@ -352,7 +350,6 @@ fn test_activate_path_with_spaces() {
 
     let args = ActivateArgs {
         packages: vec![],
-        yes: true,
         verbose: false,
         list: false,
         check: false,
