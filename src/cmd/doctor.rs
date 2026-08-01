@@ -1563,7 +1563,7 @@ mod tests {
         ensure_fake_managed_nu(root);
 
         let args = DoctorArgs {
-            scan: false,  // Apply fixes (default behavior)
+            scan: false, // Apply fixes (default behavior)
             json: false,
             nupm_home: None,
         };
@@ -1597,13 +1597,13 @@ mod tests {
         crate::config::Config::default().save(root).unwrap();
 
         let args = DoctorArgs {
-            scan: false,  // Apply fixes (default behavior)
+            scan: false, // Apply fixes (default behavior)
             json: false,
             nupm_home: None,
         };
         let report = run_checks_with_options(
             &DoctorArgs {
-                scan: true,  // First check: report only to see findings
+                scan: true, // First check: report only to see findings
                 json: false,
                 nupm_home: None,
             },
