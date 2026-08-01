@@ -7,7 +7,9 @@ use crate::core::platform::Platform;
 use crate::nu::bootstrap::{self, NuSetupOptions};
 use crate::nu::paths::{find_nu_executable_with_root, find_nu_on_path, probe_nu_config_path};
 use crate::util::atomic::write_bytes_atomic;
-use crate::util::fs_safety::{acquire_mutation_lock, assert_not_symlink};
+use crate::util::fs_safety::{
+    acquire_mutation_lock, assert_managed_file_owned, assert_not_symlink,
+};
 
 const VENDOR_LOADER: &str = include_str!("../../assets/nushell-loader/loader.nu");
 
@@ -168,6 +170,12 @@ pub(crate) fn execute_nu_impl(args: &NuSetupArgs, root: &Path) -> Result<()> {
     }
     if let Some(existing) = &args.use_existing {
         eprintln!("warning: --use-existing is deprecated, use 'numan setup nu use <path>' instead");
+        if args.skip_path {
+            bail!(
+                "numan setup nu --use-existing cannot be combined with --skip-path. \
+                 Off-PATH registration must persist the binary directory to PATH."
+            );
+        }
         return execute_use_existing(existing, args.yes, root);
     }
 
@@ -201,6 +209,22 @@ pub(crate) fn execute_nu_impl(args: &NuSetupArgs, root: &Path) -> Result<()> {
 fn execute_use_path(yes: bool, root: &Path) -> Result<()> {
     let path_nu = find_nu_on_path()?;
     println!("Found Nu on PATH: {path_nu}");
+
+    let managed_dir = bootstrap::managed_nu_dir(root);
+    if managed_dir.is_dir() {
+        let resolved_path_nu = path_nu
+            .canonicalize()
+            .with_context(|| format!("Failed to resolve PATH Nu '{}'", path_nu.display()))?;
+        let resolved_managed_dir = managed_dir.canonicalize().with_context(|| {
+            format!("Failed to resolve managed Nushell directory '{}'", managed_dir.display())
+        })?;
+        if resolved_path_nu.starts_with(&resolved_managed_dir) {
+            bail!(
+                "PATH Nu resolves to the managed install; install a separate Nu or use `setup nu remove`."
+            );
+        }
+    }
+
     remove_managed_nu_if_present(root)?;
     let options = NuSetupOptions {
         yes,
@@ -334,14 +358,18 @@ fn install_loader_file(loader_path: &Path, args: &LoaderArgs) -> Result<()> {
             return Ok(());
         }
 
-        confirm_or_bail(
-            &format!(
-                "loader.nu already exists at '{}'. Overwrite with the vendored copy?",
-                loader_path.display()
-            ),
-            args.yes,
-            "Loader install cancelled.",
-        )?;
+        assert_managed_file_owned(loader_path)?;
+
+        if !args.force {
+            confirm_or_bail(
+                &format!(
+                    "loader.nu already exists at '{}'. Overwrite with the vendored copy?",
+                    loader_path.display()
+                ),
+                args.yes,
+                "Loader install cancelled.",
+            )?;
+        }
     }
 
     assert_not_symlink(loader_path, "loader.nu")?;
