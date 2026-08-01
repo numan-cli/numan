@@ -147,7 +147,7 @@ pub fn execute(args: &TryArgs, root: &Path) -> Result<()> {
 
     if args.no_activate {
         println!(
-            "Installed '{package_id}' (not activated). Run `numan activate {package_id} --yes`."
+            "Installed '{package_id}' (not activated). Run `numan activate {package_id}`."
         );
         return Ok(());
     }
