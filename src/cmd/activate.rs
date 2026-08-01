@@ -25,16 +25,12 @@ pub struct ActivateArgs {
     /// Package IDs (owner/name) to activate. Omit to activate all installed inactive packages.
     pub packages: Vec<String>,
 
-    /// Skip confirmation prompts
-    #[arg(long)]
-    pub yes: bool,
-
     /// Show detailed output
     #[arg(long)]
     pub verbose: bool,
 
     /// List all installed packages and their activation status (read-only)
-    #[arg(long, conflicts_with_all = ["yes", "packages"])]
+    #[arg(long, conflicts_with = "packages")]
     pub list: bool,
 
     /// Check activation integrity for packages (read-only, no mutation)
@@ -154,7 +150,7 @@ fn execute_with_registrar_and_runner(
     };
     drop(planning_lock);
 
-    // 8. Consent table + confirmation
+    // 8. Consent table (informational only; no prompt)
     print_grouped_consent_table(
         &plugin_targets,
         &module_targets,
@@ -162,7 +158,7 @@ fn execute_with_registrar_and_runner(
         &nu_paths.plugin_registry_path,
     );
 
-    crate::util::confirm::confirm_or_bail("Proceed?", args.yes, "Activation cancelled.")?;
+    // Proceed without prompting (UX improvement: reduce prompts for reversible operations).
 
     // 9. Reacquire the root mutation lock after consent.
     let _lock = acquire_mutation_lock(root)?;
@@ -1421,7 +1417,7 @@ mod tests {
 
         let args = ActivateArgs {
             packages: vec!["owner/myscript".to_string()],
-            yes: true,
+
             verbose: false,
             list: false,
             check: false,
@@ -1501,7 +1497,7 @@ mod tests {
 
         let args = ActivateArgs {
             packages: vec!["owner/mycomp".to_string()],
-            yes: true,
+
             verbose: false,
             list: false,
             check: false,
@@ -1587,7 +1583,7 @@ mod tests {
 
         let args = ActivateArgs {
             packages: vec!["owner/mymod".to_string()],
-            yes: true,
+
             verbose: false,
             list: false,
             check: false,
@@ -1669,7 +1665,7 @@ mod tests {
 
         let args = ActivateArgs {
             packages: vec!["owner/depmod".to_string()],
-            yes: true,
+
             verbose: false,
             list: false,
             check: false,

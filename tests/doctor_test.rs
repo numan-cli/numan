@@ -98,8 +98,7 @@ fn doctor_report_only_leaves_root_unchanged() {
     std::fs::create_dir_all(root).unwrap();
 
     let args = DoctorArgs {
-        fix: false,
-        yes: false,
+        scan: true,
         json: false,
         nupm_home: None,
     };
@@ -118,8 +117,7 @@ fn doctor_fix_auto_creates_layout_without_network() {
     std::fs::write(&nu_exe, b"nu").unwrap();
 
     let args = DoctorArgs {
-        fix: true,
-        yes: true,
+        scan: false,
         json: false,
         nupm_home: None,
     };
@@ -164,8 +162,7 @@ fn doctor_reports_pending_plugin_journal() {
     journal.save(root).unwrap();
 
     let args = DoctorArgs {
-        fix: false,
-        yes: false,
+        scan: true,
         json: false,
         nupm_home: None,
     };
@@ -195,8 +192,7 @@ fn doctor_detects_nu_path_drift() {
     paths.save(root).unwrap();
 
     let args = DoctorArgs {
-        fix: false,
-        yes: false,
+        scan: true,
         json: false,
         nupm_home: None,
     };
@@ -221,8 +217,7 @@ fn doctor_reports_off_path_nu_without_download() {
     let _path_guard = TEST_PATH_GUARD.lock().unwrap();
     let _cleared_path = ClearedPath::new();
     let args = DoctorArgs {
-        fix: false,
-        yes: false,
+        scan: true,
         json: false,
         nupm_home: None,
     };
@@ -267,8 +262,7 @@ fn doctor_fix_registers_off_path_nu_without_network() {
     let _path_guard = TEST_PATH_GUARD.lock().unwrap();
     let _cleared_path = ClearedPath::new();
     let args = DoctorArgs {
-        fix: true,
-        yes: true,
+        scan: false,
         json: false,
         nupm_home: None,
     };
@@ -333,8 +327,7 @@ fn doctor_fix_reconciles_pending_plugin_deactivate_journal() {
     *TEST_DEACTIVATE_REPAIR_SHOULD_FAIL.lock().unwrap() = false;
 
     let args = DoctorArgs {
-        fix: true,
-        yes: true,
+        scan: false,
         json: false,
         nupm_home: None,
     };
@@ -370,8 +363,7 @@ fn doctor_fix_stale_plugin_deactivate_runs_refresh_then_deactivate() {
     *TEST_DEACTIVATE_REPAIR_SHOULD_FAIL.lock().unwrap() = false;
 
     let args = DoctorArgs {
-        fix: true,
-        yes: true,
+        scan: false,
         json: false,
         nupm_home: None,
     };
@@ -405,8 +397,7 @@ fn doctor_fix_reports_deactivate_repair_failure() {
     *TEST_DEACTIVATE_REPAIR_SHOULD_FAIL.lock().unwrap() = true;
 
     let args = DoctorArgs {
-        fix: true,
-        yes: true,
+        scan: false,
         json: true,
         nupm_home: None,
     };
@@ -452,8 +443,7 @@ fn doctor_reports_path_nu_not_found_when_path_cleared() {
 
     let report = run_checks_with_options(
         &DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: true,
             nupm_home: None,
         },
@@ -496,8 +486,7 @@ fn doctor_reports_managed_and_trust_root_findings() {
 
     let report = run_checks_with_options(
         &DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: true,
             nupm_home: None,
         },

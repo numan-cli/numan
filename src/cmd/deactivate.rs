@@ -39,10 +39,6 @@ pub struct DeactivateArgs {
     /// Package IDs (owner/name) to deactivate. Omit to deactivate all active plugins and modules.
     pub packages: Vec<String>,
 
-    /// Skip confirmation prompts
-    #[arg(long)]
-    pub yes: bool,
-
     /// Show detailed output
     #[arg(long)]
     pub verbose: bool,
@@ -146,10 +142,10 @@ pub fn execute_with_candidate_runner_and_unregistrar(
     }
     drop(planning_lock);
 
-    // 5. Show consent table and confirm
+    // 5. Show consent table (informational only; no prompt)
     print_consent_table(&targets_requested, &nu_paths.plugin_registry_path);
 
-    crate::util::confirm::confirm_or_bail("Proceed?", args.yes, "Deactivation cancelled.")?;
+    // Proceed without prompting (UX improvement: reduce prompts for reversible operations).
 
     // 6. Reacquire the root mutation lock after consent.
     let _lock = acquire_mutation_lock(root)?;
@@ -1339,7 +1335,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/myplugin".to_string()],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1360,7 +1356,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/myplugin".to_string()],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1381,7 +1377,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec![],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1397,7 +1393,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/myplugin".to_string()],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1414,7 +1410,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/myscript".to_string()],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1433,7 +1429,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/mycomp".to_string()],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1453,7 +1449,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/mymod".to_string()],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1472,7 +1468,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/nosuchpkg".to_string()],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1492,7 +1488,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/mymod".to_string()],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1552,7 +1548,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec![],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1568,7 +1564,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let args = DeactivateArgs {
             packages: vec![],
-            yes: true,
+
             verbose: false,
         };
         let confirmed_lockfile = make_lockfile_with_modules(vec![("owner/alpha", "module", true)]);
@@ -1613,7 +1609,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/highlight".to_string()],
-            yes: true,
+
             verbose: false,
         };
         execute_with_unregistrar(&args, env.root(), &|_nu, identity, _cfg| {
@@ -1670,7 +1666,7 @@ mod tests {
         let called = AtomicBool::new(false);
         let args = DeactivateArgs {
             packages: vec![],
-            yes: true,
+
             verbose: false,
         };
         let err = execute_with_unregistrar(&args, env.root(), &|_nu, _identity, _cfg| {
@@ -1730,7 +1726,7 @@ mod tests {
         let called = AtomicBool::new(false);
         let args = DeactivateArgs {
             packages: vec!["owner/highlight".to_string()],
-            yes: true,
+
             verbose: false,
         };
         execute_with_unregistrar(&args, env.root(), &|_nu, _identity, _cfg| {
@@ -1761,7 +1757,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/highlight".to_string()],
-            yes: true,
+
             verbose: false,
         };
         let err = execute_with_unregistrar(&args, env.root(), &|_nu, _name, _cfg| {
