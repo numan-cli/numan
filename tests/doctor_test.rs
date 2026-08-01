@@ -283,7 +283,7 @@ fn doctor_fix_registers_off_path_nu_without_network() {
 }
 
 fn fake_deactivate_repair(args: &DeactivateArgs, root: &Path) -> anyhow::Result<()> {
-    assert!(args.yes);
+    assert!(!args.verbose);
     assert_eq!(args.packages, vec!["owner/plugin".to_string()]);
     *TEST_DEACTIVATE_REPAIR_CALLED.lock().unwrap() = true;
     if *TEST_DEACTIVATE_REPAIR_SHOULD_FAIL.lock().unwrap() {
