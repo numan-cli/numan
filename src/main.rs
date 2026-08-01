@@ -11,10 +11,10 @@ fn main() -> anyhow::Result<()> {
         .root
         .unwrap_or_else(|| config::Config::resolve_root(&platform));
 
-    // Ensure root directory exists (completions/doctor/setup do not need layout)
+    // Ensure root directory exists (completions/doctor/setup/use do not need layout)
     if !matches!(
         cli.command,
-        Commands::Completions(_) | Commands::Doctor(_) | Commands::Setup(_)
+        Commands::Completions(_) | Commands::Doctor(_) | Commands::Setup(_) | Commands::Use(_)
     ) {
         std::fs::create_dir_all(&root)?;
     }
@@ -43,5 +43,6 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Setup(cmd) => numan_cli::cmd::setup::execute(cmd, &root),
         Commands::Try(args) => numan_cli::cmd::try_cmd::execute(&args, &root),
+        Commands::Use(args) => numan_cli::cmd::use_cmd::execute(&args, &root),
     }
 }

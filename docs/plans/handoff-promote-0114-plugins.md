@@ -157,7 +157,7 @@ Lifecycle-prove runs: `init → registry sync → search → info → install �
 
 - Update `backlog.json`: set `blocker: "PROMOTED"`, add `c1_note` with date and details
 - Update `docs/intake-state.json` in numan-registry
-- Update `d:\Dev\numan\docs\plans\2026-07-30-consolidated-multi-repo-roadmap.md` Wave 2 research queue checkboxes
+- Update `d:\Dev\numan\docs\plans\consolidated-multi-repo-roadmap.md` Wave 2 research queue checkboxes
 
 ## Constraints & Gotchas
 

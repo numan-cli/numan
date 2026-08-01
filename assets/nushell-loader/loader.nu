@@ -1,3 +1,5 @@
+# Generated and managed by Numan. Do not edit.
+# Numan autoload schema: 1
 # Vendored from https://github.com/aidnem/nushell-loader (MIT, Copyright (c) 2026 aidnem)
 # Installed by `numan setup loader`. Re-run with --force to update.
 

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **`numan setup nu` CLI redesign**: action flags (`--remove`, `--use-path`, `--use-existing`) are replaced by subcommands:
+  - `numan setup nu` — install latest (unchanged)
+  - `numan setup nu <VERSION>` — install pinned version (was `--version <x.y.z>`)
+  - `numan setup nu remove` — uninstall managed Nu (was `--remove`)
+  - `numan setup nu path` — use PATH Nu (was `--use-path`)
+  - `numan setup nu use <path>` — register a specific binary (was `--use-existing <path>`)
+  - Hidden backward-compat flags (`--remove`, `--use-path`, `--use-existing`) still work but emit deprecation warnings. They will be removed in v0.3.0.
+- **Non-TTY auto-confirm**: all confirmation prompts now auto-confirm on non-TTY (CI, scripts) instead of requiring `--yes`. A `(non-interactive: auto-confirming)` notice is printed to stderr. `--yes` remains available to skip prompts on TTY.
+
+### Added
+
+- Shared confirmation utility (`src/util/confirm.rs`): consistent prompt/auto-confirm behavior across all commands
+
 ## [0.1.5] - 2026-07-29
 
 ### Added

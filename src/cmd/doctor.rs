@@ -45,7 +45,7 @@ pub struct DoctorArgs {
     #[arg(long)]
     pub fix: bool,
 
-    /// Skip confirmation prompts for confirm-tier repairs (non-TTY implies --yes)
+    /// Skip confirmation prompts for confirm-tier repairs
     #[arg(long)]
     pub yes: bool,
 
@@ -1077,16 +1077,7 @@ fn apply_repairs(
             });
         } else if let Some(off_path) = resolve_off_path(options) {
             let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_impl);
-            match setup_fn(
-                &NuSetupArgs {
-                    force: false,
-                    skip_path: false,
-                    yes: true,
-                    version: None,
-                    use_existing: Some(off_path),
-                },
-                root,
-            ) {
+            match setup_fn(&NuSetupArgs::use_existing(off_path, true), root) {
                 Ok(()) => records.push(RepairRecord {
                     id,
                     status: RepairStatus::Applied,
@@ -1126,16 +1117,7 @@ fn apply_repairs(
             });
         } else {
             let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_impl);
-            match setup_fn(
-                &NuSetupArgs {
-                    force: false,
-                    skip_path: false,
-                    yes: true,
-                    version: None,
-                    use_existing: None,
-                },
-                root,
-            ) {
+            match setup_fn(&NuSetupArgs::install(None, false, false, true), root) {
                 Ok(()) => records.push(RepairRecord {
                     id,
                     status: RepairStatus::Applied,

@@ -21,9 +21,9 @@ pub const CMD_DOCTOR_FIX: &str = "numan doctor --fix";
 /// `numan setup nu`
 pub const CMD_SETUP_NU: &str = "numan setup nu";
 
-/// `numan setup nu --version <ver>`
+/// `numan setup nu <ver>`
 pub fn setup_nu_version(version: &str) -> String {
-    format!("numan setup nu --version {version}")
+    format!("numan setup nu {version}")
 }
 
 /// `numan try`
@@ -32,9 +32,9 @@ pub const CMD_TRY: &str = "numan try";
 /// `numan setup loader`
 pub const CMD_SETUP_LOADER: &str = "numan setup loader";
 
-/// `numan setup nu --use-existing <path> --yes`
+/// `numan setup nu use <path>`
 pub fn setup_nu_use_existing(path: &std::path::Path) -> String {
-    format!("numan setup nu --use-existing {} --yes", path.display())
+    format!("numan setup nu use {}", path.display())
 }
 
 /// `numan registry add …`

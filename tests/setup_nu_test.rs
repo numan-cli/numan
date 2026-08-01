@@ -3,7 +3,9 @@
 //! Tests that invoke a real Nushell binary are marked `#[ignore]` and run in the
 //! Real-Nu acceptance CI job (`cargo test -- --ignored`).
 
-use numan_cli::cmd::setup::{execute_nu, NuSetupArgs};
+use clap::Parser;
+use numan_cli::cli::Cli;
+use numan_cli::cmd::setup::{execute_nu, NuAction, NuSetupArgs};
 use numan_cli::core::platform::Platform;
 use numan_cli::nu::bootstrap::{self, install_from_archive, NuSetupOptions};
 use numan_cli::nu::paths::{find_nu_executable_with_root, validate_nushell_binary};
@@ -81,17 +83,7 @@ fn execute_nu_command_wraps_installer() {
     std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
     std::fs::write(&binary, b"fake nu").unwrap();
 
-    execute_nu(
-        &NuSetupArgs {
-            force: false,
-            skip_path: true,
-            yes: true,
-            version: None,
-            use_existing: None,
-        },
-        root,
-    )
-    .unwrap();
+    execute_nu(&NuSetupArgs::install(None, false, true, true), root).unwrap();
 }
 
 /// Return the first runnable Nushell binary on `$PATH` (or `/usr/local/bin/nu` on Unix).
@@ -134,17 +126,7 @@ fn setup_nu_use_existing_registers_binary_without_download() {
         std::fs::set_permissions(&existing, perms).unwrap();
     }
 
-    execute_nu(
-        &NuSetupArgs {
-            force: false,
-            skip_path: false,
-            yes: true,
-            version: None,
-            use_existing: Some(existing.clone()),
-        },
-        root,
-    )
-    .unwrap();
+    execute_nu(&NuSetupArgs::use_existing(existing.clone(), true), root).unwrap();
 
     assert!(
         !bootstrap::managed_nu_binary(root).is_file(),
@@ -167,6 +149,82 @@ fn setup_nu_use_existing_registers_binary_without_download() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// CLI-parse tests: verify the subcommand tree resolves as expected
+// ---------------------------------------------------------------------------
+
+fn parse_nu_args(argv: &[&str]) -> NuSetupArgs {
+    let mut full: Vec<&str> = vec!["numan", "setup", "nu"];
+    full.extend_from_slice(argv);
+    let cli = Cli::try_parse_from(&full).unwrap();
+    match cli.command {
+        numan_cli::cli::Commands::Setup(numan_cli::cmd::setup::SetupCommands::Nu(args)) => args,
+        _ => panic!("expected Setup(Nu) variant"),
+    }
+}
+
+#[test]
+fn cli_parse_bare_install() {
+    let args = parse_nu_args(&[]);
+    assert!(args.action.is_none());
+    assert!(args.version.is_none());
+    assert!(!args.force);
+    assert!(!args.yes);
+}
+
+#[test]
+fn cli_parse_pinned_version() {
+    let args = parse_nu_args(&["0.113.1"]);
+    assert!(args.action.is_none());
+    assert_eq!(args.version.as_deref(), Some("0.113.1"));
+}
+
+#[test]
+fn cli_parse_remove_subcommand() {
+    let args = parse_nu_args(&["remove"]);
+    assert!(matches!(args.action, Some(NuAction::Remove)));
+}
+
+#[test]
+fn cli_parse_path_subcommand() {
+    let args = parse_nu_args(&["path"]);
+    assert!(matches!(args.action, Some(NuAction::Path)));
+}
+
+#[test]
+fn cli_parse_use_subcommand() {
+    let args = parse_nu_args(&["use", "/usr/bin/nu"]);
+    match &args.action {
+        Some(NuAction::Use { path }) => assert_eq!(path, &PathBuf::from("/usr/bin/nu")),
+        other => panic!("expected Use, got {other:?}"),
+    }
+}
+
+#[test]
+fn cli_parse_backward_compat_remove_flag() {
+    let args = parse_nu_args(&["--remove", "--yes"]);
+    assert!(args.remove);
+    assert!(args.yes);
+    assert!(args.action.is_none());
+}
+
+#[test]
+fn cli_parse_backward_compat_use_path_flag() {
+    let args = parse_nu_args(&["--use-path"]);
+    assert!(args.use_path);
+    assert!(args.action.is_none());
+}
+
+#[test]
+fn cli_parse_backward_compat_use_existing_flag() {
+    let args = parse_nu_args(&["--use-existing", "C:\\nu.exe"]);
+    assert_eq!(
+        args.use_existing.as_deref(),
+        Some(std::path::Path::new("C:\\nu.exe"))
+    );
+    assert!(args.action.is_none());
+}
+
 #[test]
 fn setup_nu_rejects_use_existing_with_skip_path() {
     let dir = tempfile::tempdir().unwrap();
@@ -174,20 +232,46 @@ fn setup_nu_rejects_use_existing_with_skip_path() {
     let existing = root.join("nu");
     std::fs::write(&existing, b"fake nu").unwrap();
 
-    let err = execute_nu(
-        &NuSetupArgs {
-            force: false,
-            skip_path: true,
-            yes: true,
-            version: None,
-            use_existing: Some(existing),
-        },
-        root,
-    )
-    .unwrap_err();
+    let args = NuSetupArgs {
+        action: Some(numan_cli::cmd::setup::NuAction::Use { path: existing }),
+        version: None,
+        force: false,
+        skip_path: true,
+        yes: true,
+        remove: false,
+        use_path: false,
+        use_existing: None,
+    };
+    let err = execute_nu(&args, root).unwrap_err();
     assert!(
         err.to_string()
             .contains("cannot be combined with --skip-path"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn cli_parse_rejects_version_with_subcommand() {
+    let full = ["numan", "setup", "nu", "remove", "0.113.1"];
+    assert!(
+        Cli::try_parse_from(full).is_err(),
+        "a version must not be accepted alongside an action subcommand"
+    );
+}
+
+#[test]
+fn setup_nu_rejects_legacy_use_existing_with_skip_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let existing = root.join("nu");
+    std::fs::write(&existing, b"fake nu").unwrap();
+
+    let mut args = NuSetupArgs::install(None, false, true, true);
+    args.use_existing = Some(existing);
+
+    let err = execute_nu(&args, root).unwrap_err();
+    assert!(
+        err.to_string().contains("--skip-path"),
         "unexpected error: {err}"
     );
 }

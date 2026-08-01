@@ -33,9 +33,15 @@ fn nu_setup_repair_test(
     _root: &Path,
 ) -> anyhow::Result<()> {
     let expected = TEST_OFF_PATH.lock().unwrap();
-    assert_eq!(
-        args.use_existing.as_deref(),
-        expected.as_ref().map(|p| p.as_path())
+    // The doctor passes the off-path binary via NuSetupArgs::use_existing(),
+    // which sets action = Some(NuAction::Use { path }) and leaves use_existing unset.
+    let Some(numan_cli::cmd::setup::NuAction::Use { path }) = &args.action else {
+        panic!("expected NuAction::Use, got {:?}", args.action);
+    };
+    assert_eq!(Some(path.as_path()), expected.as_ref().map(|p| p.as_path()));
+    assert!(
+        args.use_existing.is_none(),
+        "doctor must not use the deprecated flag"
     );
     assert!(args.yes);
     *TEST_NU_SETUP_CALLED.lock().unwrap() = true;
@@ -236,7 +242,7 @@ fn doctor_reports_off_path_nu_without_download() {
         .find(|f| f.id == "nu.binary.found_off_path")
         .expect("expected nu.binary.found_off_path");
     assert_eq!(finding.severity, Severity::Warn);
-    assert!(finding.fix.as_deref().unwrap().contains("--use-existing"));
+    assert!(finding.fix.as_deref().unwrap().contains("setup nu use"));
 
     let missing = report
         .findings

@@ -20,7 +20,7 @@ use crate::util::hints::{self, CMD_REGISTRY_SYNC};
 /// a matching managed Nu version or searching for another package with `numan search`.
 #[derive(Parser, Debug)]
 pub struct TryArgs {
-    /// Skip confirmation prompts (still will not silent-switch Nu)
+    /// Skip confirmation prompts
     #[arg(long)]
     pub yes: bool,
 
@@ -257,7 +257,7 @@ fn format_no_compatible_starter(nu: &str, triple: &str, pin: Option<&str>) -> St
     let mut msg = format!("No compatible starter package for Nu {nu} on {triple}.");
     if let Some(pin) = pin {
         msg.push_str(&format!(
-            "\nInstall a matching managed Nu: {} (PATH Nu is not touched), then retry `numan try`.",
+            "\nInstall a matching managed Nu: {} (your existing Nu is not replaced), then retry `numan try`.",
             hints::setup_nu_version(pin)
         ));
     }
@@ -423,7 +423,7 @@ mod tests {
             format_no_compatible_starter("0.114.1", "x86_64-pc-windows-msvc", Some("0.113.1"));
         assert!(msg.contains("0.114.1"), "{msg}");
         assert!(msg.contains("x86_64-pc-windows-msvc"), "{msg}");
-        assert!(msg.contains("setup nu --version 0.113.1"), "{msg}");
+        assert!(msg.contains("setup nu 0.113.1"), "{msg}");
         assert!(msg.contains("numan search <query>"), "{msg}");
         assert!(
             !msg.contains("registry sync"),

@@ -63,9 +63,10 @@ src/
     gc.rs              — `numan gc [--dry-run]`: delete orphaned payload directories (Phase 5)
     nupm.rs            — `numan nupm status|inspect|import|diff`: nupm discovery + import + drift (Phase 6.1–6.3)
     completions.rs     — `numan completions <shell>`: bash/fish/zsh/powershell/nushell scripts (Phase 7.3)
-    setup.rs           — `numan setup nu [--version]|loader`: Nushell bootstrap (pinned or latest) + nushell-loader install
+    setup.rs           — `numan setup nu [VERSION]|remove|path|use <path>` + `setup loader`: Nushell bootstrap + nushell-loader install
     try_cmd.rs         — `numan try [--yes] [--no-activate]`: curated starter install + activate for current Nu
-    nu_pin_offer.rs    — Shared TTY offer to `setup nu --version` + `init --refresh` on Nu mismatch
+    use_cmd.rs         — `numan use <version>`: reserved stub for side-by-side Nu version management (post-1.0)
+    nu_pin_offer.rs    — Shared TTY offer to `setup nu <version>` + `init --refresh` on Nu mismatch
   install/
     download.rs        — HTTP download with progress
     extract.rs         — tar/zip/xz archive extraction
@@ -229,8 +230,8 @@ Standard build/test/lint/run commands live in "Build & Test" above and in the RE
 
 ## Learned Workspace Facts
 - Plugin ABI is Nu-minor-scoped: mixed plugin ABIs cannot run inside one Nu process; side-by-side Nu profiles would be a separate future product shape, not a near-term substitute for compat UX.
-- PATH Nu can be newer than official-registry Windows plugin Nu constraints, so `search` can look fine while `install` fails; use compat-filtered search / `numan try` / `setup nu --version`.
-- `numan setup nu --version <x.y.z>` pins a managed Nu release; default without `--version` still installs latest.
+- PATH Nu can be newer than official-registry Windows plugin Nu constraints, so `search` can look fine while `install` fails; use compat-filtered search / `numan try` / `setup nu <version>`.
+- `numan setup nu <x.y.z>` pins a managed Nu release; bare `numan setup nu` installs latest. Subcommands: `remove`, `path`, `use <path>`.
 - Numan product spans three repos (`numan`, `numan-registry`, `numan-plugins`); trust is cross-cutting (client verifies, registry signs); there is no separate `numan-registry.trust` product repo.
 - Near-term adoption bottleneck is thin catalog depth; release handoff is numan-plugins → numan-registry → numan client.
 - `numan registry sync` only refreshes the local catalog; it does not install packages (`list` stays empty until `install`).
@@ -239,4 +240,4 @@ Standard build/test/lint/run commands live in "Build & Test" above and in the RE
 - Prefers streamlining Nu-compat onboarding as honest search/install UX, a one-shot starter, and an offer-based managed Nu pin (never silent auto-switch of Nu).
 - Prefers the command name `numan try` for the prove-it-works starter (not `setup demo` / `setup starter`).
 - Product north star for Numan: make the Nushell package ecosystem more inviting for less experienced users.
-- PATH Nu can be newer than official-registry Windows plugin Nu constraints, so `search` can look fine while `install` fails; use compat-filtered search / `numan try` / `setup nu --version`.
+- PATH Nu can be newer than official-registry Windows plugin Nu constraints, so `search` can look fine while `install` fails; use compat-filtered search / `numan try` / `setup nu <version>`.
