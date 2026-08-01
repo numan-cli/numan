@@ -15,10 +15,16 @@ pub struct UseArgs {
 }
 
 pub fn execute(args: &UseArgs, _root: &Path) -> Result<()> {
+    let setup_command = if args.version == "latest" {
+        "numan setup nu".to_string()
+    } else {
+        format!("numan setup nu {}", args.version)
+    };
+
     bail!(
-        "'numan use {}' is reserved for side-by-side Nu version management (planned for 0.2).\n\
-         For now, use 'numan setup nu {}' to install a specific Nu version.",
+        "'numan use {}' is reserved for side-by-side Nu version management (planned post-1.0).\n\
+         For now, use '{}' to install a specific Nu version.",
         args.version,
-        args.version,
+        setup_command,
     )
 }

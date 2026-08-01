@@ -285,7 +285,7 @@ Ship 1.0 when **all** of the following are true:
 
 ---
 
-## Post-1.0 Features (0.2+)
+## Post-1.0 Features
 
 Captured from product discussion; subject to change.
 
@@ -325,7 +325,7 @@ Source: awesome-nu + manual discovery. Entries marked `NEEDS_RESEARCH` need
 their version history filled in before promotion.
 
 **Command reserved:** `numan use` exists as a stub in 0.1.x (prints a
-"coming in 0.2" message) so the UX shape is locked.
+"planned post-1.0" message) so the UX shape is locked.
 
 ### Explicitly NOT in scope for post-1.0 (requires Nu upstream)
 
