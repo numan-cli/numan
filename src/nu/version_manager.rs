@@ -65,7 +65,11 @@ pub fn versioned_nu_dir(root: &Path) -> PathBuf {
 /// Parse and normalize a Nu version, rejecting path-like values.
 pub fn normalize_version(version: &str) -> Result<String> {
     let version = version.strip_prefix('v').unwrap_or(version);
-    if version.is_empty() || version.contains('/') || version.contains('\\\\') || version.contains("..") {
+    if version.is_empty()
+        || version.contains('/')
+        || version.contains('\\')
+        || version.contains("..")
+    {
         bail!("Invalid Nu version '{}'; expected X.Y.Z", version)
     }
     let parsed = semver::Version::parse(version)

@@ -7,7 +7,6 @@
 
 use anyhow::{bail, Context, Result};
 
-use crate::util::hints;
 use clap::Args;
 use std::path::Path;
 
@@ -76,7 +75,7 @@ fn execute_latest(root: &Path) -> Result<()> {
 fn execute_switch(root: &Path, version: &str) -> Result<()> {
     let version = version_manager::normalize_version(version)?;
     // Validate the version is installed.
-    if !version_manager::is_version_installed(root, version) {
+    if !version_manager::is_version_installed(root, &version) {
         let installed = version_manager::list_installed_versions(root)?;
         let hint = if installed.is_empty() {
             format!(
@@ -98,7 +97,7 @@ fn execute_switch(root: &Path, version: &str) -> Result<()> {
     }
 
     // Switch to the requested version.
-    version_manager::write_active_version(root, version)
+    version_manager::write_active_version(root, &version)
         .with_context(|| format!("Failed to switch to Nu {}", version))?;
     println!("Switched to Nu {}.", version);
     Ok(())

@@ -240,6 +240,16 @@ fn execute_use_path(yes: bool, root: &Path) -> Result<()> {
 }
 
 fn execute_use_existing(path: &Path, yes: bool, root: &Path) -> Result<()> {
+    // Validate the replacement binary before removing the managed install.
+    let resolved = path
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve Nushell binary '{}'", path.display()))?;
+    if !resolved.is_file() {
+        bail!(
+            "'{}' is not an executable file. Pass the path to an existing nu binary.",
+            path.display()
+        );
+    }
     remove_managed_nu_if_present(root)?;
     let options = NuSetupOptions {
         yes,
