@@ -159,7 +159,35 @@ pub fn execute_nu(args: &NuSetupArgs, root: &Path) -> Result<()> {
     execute_nu_impl(args, root)
 }
 
+/// Execute [`execute_nu_impl`] with the root mutation lock held.
+///
+/// Doctor's repair path used to call `execute_nu_impl` directly. The doctor's
+/// own lock was released before invoke, contradicting AGENTS.md ("Every mutating
+/// code path must acquire the mutation lock"). This wrapper re-acquires the
+/// lock so the repair path stays single-writer and races safely with `install`
+/// and `activate`.
+pub fn execute_nu_repair(args: &NuSetupArgs, root: &Path) -> Result<()> {
+    let _lock = acquire_mutation_lock(root)?;
+    execute_nu_impl(args, root)
+}
+
 /// Setup Nu without acquiring the mutation lock (caller must hold it).
+/// Reject combining `--skip-path` with an off-PATH registration command.
+///
+/// Off-PATH registration (`use <path>` / `use path` / `--use-path`) MUST persist
+/// the new binary's parent directory to PATH; otherwise Numan reports success
+/// while the shell still resolves the wrong binary. Centralised so the legacy
+/// flag path and the subcommand path can't drift apart.
+fn reject_skip_path_for_off_path_registration(skip_path: bool) -> Result<()> {
+    if skip_path {
+        bail!(
+            "numan setup nu use cannot be combined with --skip-path. \
+             Off-PATH registration must persist the binary directory to PATH."
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn execute_nu_impl(args: &NuSetupArgs, root: &Path) -> Result<()> {
     // COMPAT: remove in v0.3.0 — translate hidden legacy flags to subcommands
     if args.remove {
@@ -170,14 +198,10 @@ pub(crate) fn execute_nu_impl(args: &NuSetupArgs, root: &Path) -> Result<()> {
         eprintln!("warning: --use-path is deprecated, use 'numan setup nu path' instead");
         return execute_use_path(args.yes, root, ExecuteUseOpts::default());
     }
+    reject_skip_path_for_off_path_registration(args.skip_path)?;
+
     if let Some(existing) = &args.use_existing {
         eprintln!("warning: --use-existing is deprecated, use 'numan setup nu use <path>' instead");
-        if args.skip_path {
-            bail!(
-                "numan setup nu use cannot be combined with --skip-path. \
-                 Off-PATH registration must persist the binary directory to PATH."
-            );
-        }
         return execute_use_existing(existing, args.yes, root, ExecuteUseOpts::default());
     }
 
@@ -185,12 +209,7 @@ pub(crate) fn execute_nu_impl(args: &NuSetupArgs, root: &Path) -> Result<()> {
         Some(NuAction::Remove) => remove_managed_nu(root, args.yes),
         Some(NuAction::Path) => execute_use_path(args.yes, root, ExecuteUseOpts::default()),
         Some(NuAction::Use { path }) => {
-            if args.skip_path {
-                bail!(
-                    "numan setup nu use cannot be combined with --skip-path. \
-                     Off-PATH registration must persist the binary directory to PATH."
-                );
-            }
+            reject_skip_path_for_off_path_registration(args.skip_path)?;
             execute_use_existing(path, args.yes, root, ExecuteUseOpts::default())
         }
         None => {

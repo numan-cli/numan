@@ -1685,12 +1685,9 @@ mod tests {
     #[test]
     fn non_tty_auto_confirms() {
         // With the shared confirm utility, non-TTY sessions auto-confirm
-        // instead of bailing. Verify confirm_or_auto returns Ok(true)
-        // when stdin is not a terminal (as in CI/test environments).
-        use std::io::IsTerminal;
-        if !std::io::stdin().is_terminal() {
-            let result = crate::util::confirm::confirm_or_auto("test?", false);
-            assert!(result.unwrap(), "non-TTY should auto-confirm");
-        }
+        // instead of bailing. Use the *_with_tty variant so the assertion
+        // doesn't depend on the host machine's stdin state.
+        let result = crate::util::confirm::confirm_or_auto_with_tty("test?", false, false);
+        assert!(result.unwrap(), "non-TTY should auto-confirm");
     }
 }

@@ -327,6 +327,9 @@ Global flag: `--root <path>` — override the Numan root directory (all commands
 | `numan setup nu remove` | Remove the managed Nushell install and fall back to PATH Nu |
 | `numan setup nu path` | Use the Nushell already on PATH (removes managed install) |
 | `numan setup nu use <path>` | Register a specific existing Nushell binary |
+| `numan use <version>` | Switch the active managed Nu to a pinned version (no auto-install; errors with a hint to run `numan setup nu <version>` if missing) |
+| `numan use latest` | Switch the active managed Nu to the latest installed version |
+| `numan use list` | List installed managed Nu versions and mark the active one |
 | `numan nupm status` | Summarize nupm home and import eligibility |
 | `numan nupm inspect [--all] [path]` | Classify nupm packages at a path |
 | `numan nupm import [--as owner/name] [path]` | One-way import into Numan |
