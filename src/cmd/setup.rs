@@ -657,6 +657,10 @@ fn install_loader_file(loader_path: &Path, args: &LoaderArgs) -> Result<()> {
         assert_managed_file_owned(loader_path)?;
 
         if !args.force {
+            // Overwriting a divergent loader rewrites user-visible state.
+            // `confirm_or_bail` would auto-confirm on a pipe; require TTY or
+            // `--yes` so CI cannot clobber an existing loader silently.
+            require_tty_or_yes(args.yes, "loader.nu overwrite")?;
             confirm_or_bail(
                 &format!(
                     "loader.nu already exists at '{}'. Overwrite with the vendored copy?",
@@ -701,6 +705,10 @@ fn configure_config_nu(config_path: &Path, args: &LoaderArgs) -> Result<()> {
             return Ok(());
         }
 
+        // Appending to an existing config.nu is user-visible mutation.
+        // Fail closed in non-TTY sessions without `--yes` (confirm_or_auto
+        // would otherwise auto-confirm on a pipe).
+        require_tty_or_yes(args.yes, "config.nu loader source append")?;
         if !crate::util::confirm::confirm_or_auto(
             &format!("Append loader source line to '{}'?", config_path.display()),
             args.yes,
@@ -822,6 +830,41 @@ mod tests {
         assert_eq!(
             std::fs::read(&loader_path).unwrap(),
             VENDOR_LOADER.as_bytes()
+        );
+    }
+
+    #[test]
+    fn install_loader_refuses_divergent_overwrite_without_yes_on_non_tty() {
+        use std::io::IsTerminal as _;
+        if std::io::stdin().is_terminal() {
+            // Guard is only observable on non-TTY hosts; interactive sessions
+            // would prompt via confirm_or_bail instead of bailing here.
+            return;
+        }
+
+        let dir = TempDir::new().unwrap();
+        let loader_path = dir.path().join("loader.nu");
+        // Owned but divergent content so we reach the overwrite confirm path.
+        write_bytes_atomic(
+            &loader_path,
+            format!(
+                "{}# divergent managed loader\n",
+                crate::util::fs_safety::OWNERSHIP_MARKER
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+
+        let args = LoaderArgs {
+            force: false,
+            configure: false,
+            yes: false,
+        };
+        let err = install_loader_file(&loader_path, &args).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("non-interactive") || msg.contains("--yes"),
+            "expected fail-closed non-TTY guard, got: {msg}"
         );
     }
 
