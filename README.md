@@ -308,7 +308,7 @@ Global flag: `--root <path>` — override the Numan root directory (all commands
 | Command | Description |
 |---------|-------------|
 | `numan init [--refresh]` | Probe Nu and cache paths for activation |
-| `numan try [--yes] [--no-activate]` | Install and activate a curated starter package for your Nu + platform (prefers Nu 0.114 starters; suggests managed Nu pin or search if no compatible starter) |
+| `numan try [--no-activate]` | Install and activate a curated starter package for your Nu + platform (prefers Nu 0.114 starters; suggests managed Nu pin or search if no compatible starter) |
 | `numan search <query>` | Search registry by name, description, or tags |
 | `numan info <owner/name>` | Show package metadata and available versions |
 | `numan install <owner/name[@version]>` | Download, verify, extract, and lock |

@@ -1948,6 +1948,10 @@ mod tests {
         true
     }
 
+    fn confirm_repairs_never(_args: &DoctorArgs) -> bool {
+        false
+    }
+
     /// Skip network and never exec a real `nu` during doctor unit tests.
     /// Force confirm-tier repairs so non-TTY unit tests can exercise them.
     fn test_doctor_options() -> DoctorOptions {
@@ -2216,10 +2220,9 @@ mod tests {
     }
 
     #[test]
-    fn doctor_found_off_path_repair_preserves_managed_install_in_non_tty() {
+    fn doctor_found_off_path_repair_preserves_managed_install_when_not_confirmed() {
         // Regression test: found_off_path repair should not destroy an existing
-        // managed installation when running in a non-TTY session (where confirm
-        // returns false and the repair is skipped).
+        // managed installation when confirm-tier repairs are skipped.
         let _guard = TEST_PATH_GUARD.lock().unwrap();
         let dir = TempDir::new().unwrap();
         let root = dir.path();
@@ -2235,26 +2238,25 @@ mod tests {
         std::fs::write(&off_path_binary, b"external nu").unwrap();
         *TEST_OFF_PATH.lock().unwrap() = Some(off_path_binary);
 
-        // Run doctor in non-TTY mode (confirm_repairs will return false).
-        // The found_off_path repair should be skipped, not attempted.
+        // Force the confirm-tier gate closed so this test is deterministic even
+        // when cargo test has a TTY attached locally.
         let args = DoctorArgs {
             scan: false,
             json: false,
             nupm_home: None,
         };
 
-        // Keep production confirm gate (`None`) so non-TTY skips confirm-tier.
         let options = DoctorOptions {
             skip_network: true,
             nu_version_probe: Some(probe_fixed_version),
             discover_off_path: Some(discover_off_path_test),
             nu_setup_repair: Some(test_noop_setup_repair),
-            confirm_repairs: None,
+            confirm_repairs: Some(confirm_repairs_never),
             ..DoctorOptions::default()
         };
 
-        // Since confirm_repairs now checks TTY (and we're in a test which is non-TTY),
-        // the repair should be skipped and test_noop_setup_repair should not panic.
+        // confirm_repairs_never skips confirm-tier; test_noop_setup_repair must
+        // not panic.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             execute_with_options(&args, root, options).ok();
         }));
@@ -2264,7 +2266,7 @@ mod tests {
         // Verify the managed installation was NOT removed.
         assert!(
             managed_binary.exists(),
-            "managed installation should be preserved when repair is skipped in non-TTY"
+            "managed installation should be preserved when confirm-tier repair is skipped"
         );
     }
 }

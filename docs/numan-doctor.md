@@ -28,7 +28,7 @@ numan doctor [--scan] [--json] [--nupm-home PATH]
 | Flag | Behavior |
 |------|----------|
 | `--scan` | Report findings without applying repairs (dry-run mode) |
-| `--json` | Emit a single JSON object (schema versioned); no ANSI styling. Includes `repairs` attempted/applied |
+| `--json` | Emit a single JSON object (schema versioned); no ANSI styling. Includes a `repairs` array when repairs ran; omitted under `--scan` |
 | `--nupm-home PATH` | Override nupm home for the optional coexistence section (same resolution order as `numan nupm status`) |
 
 Global `--root` applies as for all commands.
