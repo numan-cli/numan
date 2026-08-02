@@ -416,7 +416,7 @@ fn remove_managed_nu_if_present(root: &Path) -> Result<()> {
             )
         })?;
         println!(
-            "Removed managed Nushell at '{}' (replaced by --use-existing).",
+            "Removed managed Nushell at '{}' (replaced by user-supplied Nu).",
             managed_dir.display()
         );
     }

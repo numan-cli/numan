@@ -127,6 +127,23 @@ pub fn versioned_nu_dir(root: &Path) -> PathBuf {
     root.join("tools").join("nushell")
 }
 
+/// Validate a version string that becomes a path component.
+///
+/// Returns the normalized form on success. Rejects traversal, separators,
+/// and anything `semver` can't parse so the result is safe to join into
+/// `versioned_nu_dir(root)` without escaping the managed root.
+///
+/// This is the entry point CodeRabbit's PR 67 review (Critical finding:
+/// "Validate the version string before you join it into a path") asks
+/// install paths to use before any path build. Callers that hand a
+/// caller-supplied version straight to `version_install_dir` /
+/// `version_binary` should `normalize_version(...)` first (or call this
+/// helper) so `numan setup nu ../../tmp/pwn` cannot escape `$NUMAN_ROOT`.
+pub fn validate_version_for_path(version: &str) -> Result<String> {
+    let normalized = normalize_version(version.strip_prefix('v').unwrap_or(version))?;
+    Ok(normalized)
+}
+
 /// Parse and normalize a Nu version, rejecting path-like values.
 pub fn normalize_version(version: &str) -> Result<String> {
     let version = version.strip_prefix('v').unwrap_or(version);
