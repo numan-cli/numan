@@ -23,7 +23,7 @@ jobs:
       # Roadmap contract v1 pin. Bumping requires scripts/bump-contract.sh
       # in tonythethompson/numan — never edit this in isolation.
       CONTRACT_TAG: numan-roadmap-contract/v1
-      CONTRACT_SHA: 99aa695c6ecbb059020efc689b59a8a8d6c490f8
+      CONTRACT_SHA: f220940d3158bdcb86542f38458e401073fa0806
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify pinned SHA still resolves to tag

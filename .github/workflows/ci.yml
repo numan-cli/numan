@@ -67,7 +67,7 @@ jobs:
       # human-readable handle; SHA is the literal fetch target so a
       # force-pushed tag can never silently change the guardrail.
       CONTRACT_TAG: numan-roadmap-contract/v1
-      CONTRACT_SHA: 99aa695c6ecbb059020efc689b59a8a8d6c490f8
+      CONTRACT_SHA: f220940d3158bdcb86542f38458e401073fa0806
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Fetch consolidated roadmap from pin (numan@$CONTRACT_TAG)
