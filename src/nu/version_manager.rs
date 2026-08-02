@@ -237,10 +237,15 @@ pub fn list_installed_versions(root: &Path) -> Result<Vec<String>> {
             let entry = entry?;
             if entry.file_type()?.is_dir() {
                 if let Some(name) = entry.file_name().to_str() {
+                    // Only well-formed versions are installable selections;
+                    // a stray directory must not become `numan use latest`.
+                    let Ok(name) = normalize_version(name) else {
+                        continue;
+                    };
                     // Check if this directory contains a Nu binary.
                     let binary_name = if cfg!(windows) { "nu.exe" } else { "nu" };
-                    if entry.path().join(binary_name).exists() {
-                        versions.push(name.to_string());
+                    if entry.path().join(binary_name).is_file() {
+                        versions.push(name);
                     }
                 }
             }
