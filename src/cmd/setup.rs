@@ -218,18 +218,22 @@ pub(crate) fn execute_nu_impl(args: &NuSetupArgs, root: &Path) -> Result<()> {
     }
     if args.use_path {
         eprintln!("warning: --use-path is deprecated, use 'numan setup nu path' instead");
+        reject_skip_path_for_off_path_registration(args.skip_path)?;
         return execute_use_path(args.yes, root, ExecuteUseOpts::default());
     }
-    reject_skip_path_for_off_path_registration(args.skip_path)?;
 
     if let Some(existing) = &args.use_existing {
         eprintln!("warning: --use-existing is deprecated, use 'numan setup nu use <path>' instead");
+        reject_skip_path_for_off_path_registration(args.skip_path)?;
         return execute_use_existing(existing, args.yes, root, ExecuteUseOpts::default());
     }
 
     match &args.action {
         Some(NuAction::Remove) => remove_managed_nu(root, args.yes),
-        Some(NuAction::Path) => execute_use_path(args.yes, root, ExecuteUseOpts::default()),
+        Some(NuAction::Path) => {
+            reject_skip_path_for_off_path_registration(args.skip_path)?;
+            execute_use_path(args.yes, root, ExecuteUseOpts::default())
+        }
         Some(NuAction::Use { path }) => {
             reject_skip_path_for_off_path_registration(args.skip_path)?;
             execute_use_existing(path, args.yes, root, ExecuteUseOpts::default())
@@ -285,7 +289,7 @@ fn validate_user_supplied_nu(
         .with_context(|| format!("Failed to resolve Nushell binary '{}'", path.display()))?;
     match validate_fn {
         Some(validator) => validator(&resolved),
-        None => validate_nushell_binary(&resolved),
+        None => validate_nushell_binary(&resolved).map(|_| ()),
     }
     .with_context(|| format!("'{}' is not a runnable Nushell binary", path.display()))?;
     Ok(())
@@ -355,7 +359,7 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
         // collected consent for both the delete AND the PATH add.
         caller_consented_destructive: managed_dir_was_present,
     };
-    bootstrap::register_existing_nu(Path::new(&path_nu), &options)?;
+    bootstrap::register_existing_nu(Path::new(&path_nu), root, &options)?;
     Ok(())
 }
 
@@ -409,7 +413,7 @@ fn execute_use_existing(
         // collected consent for both the delete AND the PATH add.
         caller_consented_destructive: managed_dir_was_present,
     };
-    bootstrap::register_existing_nu(path, &options)?;
+    bootstrap::register_existing_nu(path, root, &options)?;
     Ok(())
 }
 

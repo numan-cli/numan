@@ -424,7 +424,9 @@ pub fn probe_nu_config_path(nu_exe: &str) -> Result<PathBuf> {
 }
 
 /// Validate that a path is an executable Nushell binary before PATH mutation.
-pub fn validate_nushell_binary(path: &Path) -> Result<()> {
+///
+/// Returns the Nu version string on success.
+pub fn validate_nushell_binary(path: &Path) -> Result<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -440,8 +442,8 @@ pub fn validate_nushell_binary(path: &Path) -> Result<()> {
         }
     }
 
-    probe_nu(&path.to_string_lossy())?;
-    Ok(())
+    let output = probe_nu(&path.to_string_lossy())?;
+    Ok(output.version)
 }
 
 /// Run a single Nu invocation and parse the resulting JSON probe output.

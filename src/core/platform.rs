@@ -9,7 +9,7 @@ const LIBC: &str = "gnu";
 #[cfg(target_env = "musl")]
 const LIBC: &str = "musl";
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_env = "gnu", target_env = "musl")))]
 const LIBC: &str = "";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

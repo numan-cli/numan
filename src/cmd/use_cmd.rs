@@ -71,7 +71,14 @@ fn execute_latest(root: &Path) -> Result<()> {
     let latest = version_manager::latest_installed_version(root)?;
     match latest {
         Some(version) => {
-            version_manager::write_active_version(root, &version)?;
+            let installed_binary = version_manager::resolve_installed_version(root, &version)
+                .with_context(|| format!("Nu {} is no longer present", version))?;
+            let on_tree = version_manager::version_binary(root, &version);
+            if installed_binary == on_tree {
+                version_manager::write_active_version(root, &version)?;
+            } else {
+                version_manager::write_active_version_with_binary(root, &version, &installed_binary)?;
+            }
             println!("Switched to Nu {} (latest installed).", version);
             Ok(())
         }
@@ -87,31 +94,37 @@ fn execute_latest(root: &Path) -> Result<()> {
 /// Switch to a specific Nu version.
 fn execute_switch(root: &Path, version: &str) -> Result<()> {
     let version = version_manager::normalize_version(version)?;
-    // Validate the version is installed.
-    if !version_manager::is_version_installed(root, &version) {
-        let installed = version_manager::list_installed_versions(root)?;
-        let hint = if installed.is_empty() {
-            format!(
-                "No Nu versions installed.\n\
-                 Run 'numan setup nu {}' to install.",
-                version
-            )
-        } else {
-            format!(
-                "Nu {} is not installed.\n\
-                 Installed versions: {}\n\
-                 Run 'numan setup nu {}' to install, or 'numan use list' to see available versions.",
-                version,
-                installed.join(", "),
-                version
-            )
-        };
-        bail!("{}", hint);
-    }
+    // Validate the version is installed (on-tree or off-tree).
+    let installed_binary = version_manager::resolve_installed_version(root, &version)
+        .with_context(|| {
+            let installed = version_manager::list_installed_versions(root).unwrap_or_default();
+            if installed.is_empty() {
+                format!(
+                    "No Nu versions installed.\n\
+                     Run 'numan setup nu {}' to install.",
+                    version
+                )
+            } else {
+                format!(
+                    "Nu {} is not installed.\n\
+                     Installed versions: {}\n\
+                     Run 'numan setup nu {}' to install, or 'numan use list' to see available versions.",
+                    version,
+                    installed.join(", "),
+                    version
+                )
+            }
+        })?;
 
-    // Switch to the requested version.
-    version_manager::write_active_version(root, &version)
-        .with_context(|| format!("Failed to switch to Nu {}", version))?;
+    // Switch to the requested version, preserving an off-tree binary path.
+    let on_tree = version_manager::version_binary(root, &version);
+    if installed_binary == on_tree {
+        version_manager::write_active_version(root, &version)
+            .with_context(|| format!("Failed to switch to Nu {}", version))?;
+    } else {
+        version_manager::write_active_version_with_binary(root, &version, &installed_binary)
+            .with_context(|| format!("Failed to switch to Nu {}", version))?;
+    }
     println!("Switched to Nu {}.", version);
     Ok(())
 }

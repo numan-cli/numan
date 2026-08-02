@@ -310,7 +310,7 @@ fn install_release(root: &Path, platform: &Platform, version: Option<&str>) -> R
     verify_downloaded_archive(&archive_path, asset)?;
 
     let installed = install_from_archive(&archive_path, root, &release.tag_name)?;
-    validate_nushell_binary(&installed).with_context(|| {
+    let _version = validate_nushell_binary(&installed).with_context(|| {
         format!(
             "Installed Nushell binary at '{}' failed validation",
             installed.display()
@@ -443,7 +443,7 @@ fn path_parent_for_registration(input: &Path, resolved: &Path) -> Result<PathBuf
 }
 
 /// Register an existing Nushell binary: prepend its directory to PATH and persist when allowed.
-pub fn register_existing_nu(binary: &Path, options: &NuSetupOptions) -> Result<PathBuf> {
+pub fn register_existing_nu(binary: &Path, root: &Path, options: &NuSetupOptions) -> Result<PathBuf> {
     let input = binary.to_path_buf();
     let resolved = input
         .canonicalize()
@@ -455,7 +455,7 @@ pub fn register_existing_nu(binary: &Path, options: &NuSetupOptions) -> Result<P
         );
     }
 
-    validate_nushell_binary(&resolved)
+    let version = validate_nushell_binary(&resolved)
         .with_context(|| format!("'{}' is not a runnable Nushell binary", binary.display()))?;
 
     let parent = path_parent_for_registration(input.as_path(), &resolved)?;
@@ -504,6 +504,9 @@ pub fn register_existing_nu(binary: &Path, options: &NuSetupOptions) -> Result<P
             resolved.display()
         );
     }
+
+    version_manager::write_active_version_with_binary(root, &version, &resolved)
+        .with_context(|| format!("Failed to persist active Nu version '{}'", version))?;
 
     println!();
     println!("Next steps:");
