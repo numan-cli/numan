@@ -1,0 +1,19 @@
+src/nu/bootstrap.rs
+  s_2c2edb4d1914f0::t_8f9b926cfdb2f0 979-984,986-989
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "cea6efd3d458249164daf5150ccd35559a76ddf5",
+  "prompts": {},
+  "sessions": {
+    "s_2c2edb4d1914f0": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "1ffc829e-2cd0-4321-ab21-1ba92b30fb1f",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}
