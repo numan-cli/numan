@@ -797,9 +797,9 @@ esac\n";
     /// Save/restore process-global PATH around a closure so `prepend_*`
     /// calls don't leak across tests.
     #[cfg_attr(not(unix), allow(dead_code))]
-    fn run_with_path_snapshot<F>(body: F)
+    fn run_with_path_snapshot<F, T>(body: F) -> T
     where
-        F: FnOnce() + std::panic::UnwindSafe,
+        F: FnOnce() -> T + std::panic::UnwindSafe,
     {
         let saved = std::env::var("PATH").ok();
         let result = std::panic::catch_unwind(body);
@@ -807,8 +807,9 @@ esac\n";
             Some(p) => std::env::set_var("PATH", p),
             None => std::env::remove_var("PATH"),
         }
-        if let Err(panic) = result {
-            std::panic::resume_unwind(panic);
+        match result {
+            Ok(v) => v,
+            Err(panic) => std::panic::resume_unwind(panic),
         }
     }
 
