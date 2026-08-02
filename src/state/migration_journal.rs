@@ -121,12 +121,13 @@ impl PendingMigration {
     /// absent.
     pub fn delete(root: &Path) -> Result<()> {
         let path = Self::journal_path(root);
-        if path.exists() {
-            std::fs::remove_file(&path).with_context(|| {
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e).with_context(|| {
                 format!("Failed to remove migration journal at '{}'", path.display())
-            })?;
+            }),
         }
-        Ok(())
     }
 }
 
