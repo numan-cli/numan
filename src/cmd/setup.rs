@@ -1,4 +1,4 @@
-use crate::util::confirm::confirm_or_bail;
+use crate::util::confirm::{confirm_or_bail, require_tty_or_yes};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use std::path::{Path, PathBuf};
@@ -338,6 +338,10 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
             nu_parent,
         );
         let cancel_msg = "Switch to PATH Nu cancelled; managed install kept intact.";
+        // Fail closed in non-interactive sessions without `--yes`: this step
+        // wipes every managed Nu version and mutates PATH, so `confirm_or_bail`'s
+        // non-TTY auto-confirm must not silently proceed.
+        require_tty_or_yes(yes, "managed Nushell wipe + PATH update")?;
         // Gate on `!yes` so `confirm_or_bail`'s yes-skip contract holds
         // when callers inject a confirm seam for telemetry/audit.
         if !yes {
@@ -394,6 +398,10 @@ fn execute_use_existing(
             nu_parent,
         );
         let cancel_msg = "Switch to existing Nushell cancelled; managed install kept intact.";
+        // Fail closed in non-interactive sessions without `--yes` (mirrors
+        // `execute_use_path`): this step wipes every managed Nu version and
+        // mutates PATH, so the non-TTY auto-confirm must not silently proceed.
+        require_tty_or_yes(yes, "managed Nushell wipe + PATH update")?;
         if !yes {
             match opts.confirm {
                 Some(confirm_fn) => confirm_fn(&prompt, cancel_msg)?,
@@ -437,6 +445,10 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
         "Managed Nushell removal cancelled.",
     )?;
 
+    // Clear the active-version marker before removing the versioned tree so
+    // it cannot dangle at a now-missing binary (see `clear_active_version`).
+    crate::nu::version_manager::clear_active_version(root)?;
+
     std::fs::remove_dir_all(&managed_dir).with_context(|| {
         format!(
             "Failed to remove managed Nushell directory '{}'",
@@ -454,6 +466,13 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
 fn remove_managed_nu_if_present(root: &Path) -> Result<()> {
     let managed_dir = bootstrap::managed_nu_dir(root);
     if managed_dir.is_dir() {
+        // Clear the active-version marker before removing the versioned tree so
+        // it cannot dangle at a now-missing binary. The caller
+        // (`execute_use_path`/`execute_use_existing`) writes a fresh off-tree
+        // marker afterwards via `register_existing_nu`; clearing first keeps
+        // state consistent even if that later write fails.
+        crate::nu::version_manager::clear_active_version(root)?;
+
         std::fs::remove_dir_all(&managed_dir).with_context(|| {
             format!(
                 "Failed to remove managed Nushell directory '{}'",
