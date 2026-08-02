@@ -11,7 +11,7 @@ use crate::nu::paths::{
 use crate::nu::version_manager;
 use crate::util::atomic::write_bytes_atomic;
 use crate::util::fs_safety::{
-    acquire_mutation_lock, assert_managed_file_owned, assert_not_symlink,
+    assert_managed_file_owned, assert_not_symlink, setup_subcommand_lock,
 };
 
 const VENDOR_LOADER: &str = include_str!("../../assets/nushell-loader/loader.nu");
@@ -156,12 +156,50 @@ pub fn execute(cmd: SetupCommands, root: &Path) -> Result<()> {
 }
 
 pub fn execute_nu(args: &NuSetupArgs, root: &Path) -> Result<()> {
-    let _lock = acquire_mutation_lock(root)?;
-    execute_nu_impl(args, root)
+    // PR69 WCr: every destructive setup entry acquires the root mutation
+    // lock through `setup_subcommand_lock`. The helper audit-logs the
+    // entry so safe-batch automation can grep one consistent `(audit)`
+    // prefix across the destructive setup surface. Direct callers of
+    // `execute_nu_impl` (e.g. `cmd::doctor::apply_repairs`) get the same
+    // guarantee because `execute_nu_impl` itself acquires the lock.
+    let what = setup_action_lock_label(args);
+    setup_subcommand_lock(root, what, || execute_nu_impl_locked(args, root))
 }
 
-/// Setup Nu without acquiring the mutation lock (caller must hold it).
+/// Short, audit-friendly label describing which destructive setup
+/// subcommand is requesting the mutation lock.
+fn setup_action_lock_label(args: &NuSetupArgs) -> &'static str {
+    // Legacy hidden flags take precedence in `execute_nu_impl` and route
+    // to the same leaf helpers as the explicit subcommands. We need the
+    // lock label to reflect the *effective* action, not the literal
+    // `args.action` field, so peek at the legacy flags first.
+    if args.remove {
+        return "managed Nushell removal";
+    }
+    if args.use_path {
+        return "PATH Nu registration";
+    }
+    if args.use_existing.is_some() {
+        return "off-path Nu registration";
+    }
+    match &args.action {
+        Some(NuAction::Remove) => "managed Nushell removal",
+        Some(NuAction::Path) => "PATH Nu registration",
+        Some(NuAction::Use { .. }) => "off-path Nu registration",
+        None => "Nushell install",
+    }
+}
+
+/// Setup Nu under the root mutation lock. Public callers go through
+/// [`execute_nu`] (which audit-labels the lock); direct callers of this
+/// function are responsible for emitting their own audit prefix (e.g.
+/// `cmd::doctor::apply_repairs` already logs `(doctor)` repair records).
 pub(crate) fn execute_nu_impl(args: &NuSetupArgs, root: &Path) -> Result<()> {
+    let what = setup_action_lock_label(args);
+    setup_subcommand_lock(root, what, || execute_nu_impl_locked(args, root))
+}
+
+fn execute_nu_impl_locked(args: &NuSetupArgs, root: &Path) -> Result<()> {
     // COMPAT: remove in v0.3.0 — translate hidden legacy flags to subcommands
     if args.remove {
         eprintln!("warning: --remove is deprecated, use 'numan setup nu remove' instead");

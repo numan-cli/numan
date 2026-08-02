@@ -244,10 +244,24 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
                     let _ = std::fs::remove_file(&legacy_binary);
                 }
             } else {
-                // Best-effort removal of an orphan empty version directory.
+                // PR69 WCq: surface remove_dir failures instead of ignoring
+                // them. A half-migrated state whose empty version directory
+                // cannot be removed (permissions, foreign file inside) must
+                // retain the journal so a follow-up reconcile can succeed
+                // once the user resolves the underlying issue. Discarding
+                // both the orphan dir AND the journal would silently lose
+                // the recoverable crash window.
                 let version_dir = version_install_dir(root, &journal.version);
                 if version_dir.is_dir() {
-                    let _ = std::fs::remove_dir(&version_dir);
+                    if let Err(e) = std::fs::remove_dir(&version_dir) {
+                        bail!(
+                            "Migration journal at '{}' has '{}' as Prepared-but-orphan,                              but the empty version directory '{}' could not be removed: {}.                              Journal retained so a follow-up `numan use` (or                              `numan doctor --fix`) can recover once permissions or                              the directory contents are resolved.",
+                            PendingMigration::journal_path(root).display(),
+                            journal.version,
+                            version_dir.display(),
+                            e
+                        );
+                    }
                 }
             }
             PendingMigration::delete(root)?;
@@ -418,6 +432,49 @@ mod tests {
         let recovered = reconcile(root).unwrap().unwrap();
         assert_eq!(recovered.stage, MigrationStage::Prepared);
         assert!(PendingMigration::load(root).unwrap().is_none());
+    }
+
+    /// PR69 WCq regression: a `Prepared`-stage journal whose orphan
+    /// version directory cannot be removed (here: a stray file inside
+    /// makes `remove_dir` fail with ENOTEMPTY) must NOT silently clear
+    /// the journal. The Err path keeps the journal intact so a follow-up
+    /// reconcile can recover once the user resolves the underlying issue.
+    #[test]
+    fn reconcile_prepared_retains_journal_when_remove_dir_fails() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        // Half-migrated state: journal at Prepared + a populated version
+        // subdir (the directory cannot be removed because it has content).
+        let version_dir = version_install_dir(root, "0.113.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        // Plant a stray file so `remove_dir(version_dir)` returns ENOTEMPTY
+        // on Unix and STATUS_DIRECTORY_NOT_EMPTY on Windows.
+        std::fs::write(version_dir.join("stray.dat"), b"foreign").unwrap();
+        write_journal(root, "0.113.1", MigrationStage::Prepared);
+
+        let err = reconcile(root).expect_err("reconcile must Err when remove_dir fails");
+        // The error message must name the version + the directory + the
+        // underlying I/O kind so safe-batch automation can decide whether
+        // to refuse or auto-recover.
+        let msg = err.to_string();
+        assert!(msg.contains("Prepared-but-orphan"), "msg: {msg}");
+        assert!(msg.contains("0.113.1"), "msg: {msg}");
+        assert!(
+            msg.contains(&version_dir.display().to_string()),
+            "msg must include version_dir: {msg}"
+        );
+
+        // The journal must still be present — discarded-journal state
+        // would lose the recoverable crash window.
+        let loaded = PendingMigration::load(root)
+            .unwrap()
+            .expect("journal must survive a failed reconcile");
+        assert_eq!(loaded.stage, MigrationStage::Prepared);
+        assert_eq!(loaded.version, "0.113.1");
+
+        // And the orphan subdir is still on disk so the user can resolve it.
+        assert!(version_dir.is_dir(), "version_dir must remain on disk");
+        assert!(version_dir.join("stray.dat").exists());
     }
 
     #[test]
