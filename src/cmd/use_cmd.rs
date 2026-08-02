@@ -11,6 +11,7 @@ use clap::Args;
 use std::path::Path;
 
 use crate::nu::version_manager;
+use crate::util::fs_safety::acquire_mutation_lock;
 
 #[derive(Args, Debug)]
 pub struct UseArgs {
@@ -20,6 +21,10 @@ pub struct UseArgs {
 }
 
 pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
+    // Hold the mutation lock for the entire operation to prevent races
+    // between concurrent `numan setup nu` and `numan use` invocations.
+    let _lock = acquire_mutation_lock(root)?;
+
     // Attempt migration of legacy single-binary install before any operation.
     // This is a no-op if migration has already occurred or no legacy install exists.
     version_manager::migrate_legacy_install(root)

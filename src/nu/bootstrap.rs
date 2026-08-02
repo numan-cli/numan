@@ -665,7 +665,24 @@ where
         .map(normalize_release_tag)
         .unwrap_or_else(|| "latest".to_string());
 
-    if dest.is_file() && !options.force {
+    // When an active version already matches the request, skip the download.
+    // If a different version was requested, fall through to the full install flow.
+    let active_matches_request = || -> bool {
+        let active = match crate::nu::version_manager::read_active_version(root) {
+            Ok(Some(a)) => a,
+            _ => return false,
+        };
+        match &options.version {
+            Some(requested) => {
+                crate::nu::version_manager::normalize_version(requested)
+                    .map(|v| v == active.version)
+                    .unwrap_or(false)
+            }
+            None => true, // "latest" with any active version → skip
+        }
+    };
+
+    if dest.is_file() && !options.force && active_matches_request() {
         if options.yes {
             let tools_dir = managed_nu_dir(root);
             prepend_process_path(&tools_dir)?;
@@ -684,7 +701,7 @@ where
                 "Nushell is already installed at '{}'. Reinstall {version_label} release?",
                 dest.display()
             ),
-            false,
+            options.yes,
             "Nushell setup cancelled.",
         )?;
     }
@@ -721,7 +738,7 @@ where
     println!("Next steps:");
     println!("  {}", crate::util::hints::CMD_INIT_REFRESH);
     println!("  numan doctor");
-    println!("  Re-activate packages you still want: numan activate --yes");
+    println!("  Re-activate packages you still want: numan activate");
     Ok(installed)
 }
 
