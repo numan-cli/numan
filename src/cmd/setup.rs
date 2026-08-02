@@ -338,10 +338,13 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
             nu_parent,
         );
         let cancel_msg = "Switch to PATH Nu cancelled; managed install kept intact.";
-        // Fail closed in non-interactive sessions without `--yes`: this step
-        // wipes every managed Nu version and mutates PATH, so `confirm_or_bail`'s
-        // non-TTY auto-confirm must not silently proceed.
-        require_tty_or_yes(yes, "managed Nushell wipe + PATH update")?;
+        // Fail closed in non-interactive sessions without `--yes` unless a
+        // confirm seam is being used for testing/audit. This step wipes every
+        // managed Nu version and mutates PATH, so `confirm_or_bail`'s non-TTY
+        // auto-confirm must not silently proceed.
+        if opts.confirm.is_none() {
+            require_tty_or_yes(yes, "managed Nushell wipe + PATH update")?;
+        }
         // Gate on `!yes` so `confirm_or_bail`'s yes-skip contract holds
         // when callers inject a confirm seam for telemetry/audit.
         if !yes {
@@ -398,10 +401,13 @@ fn execute_use_existing(
             nu_parent,
         );
         let cancel_msg = "Switch to existing Nushell cancelled; managed install kept intact.";
-        // Fail closed in non-interactive sessions without `--yes` (mirrors
-        // `execute_use_path`): this step wipes every managed Nu version and
-        // mutates PATH, so the non-TTY auto-confirm must not silently proceed.
-        require_tty_or_yes(yes, "managed Nushell wipe + PATH update")?;
+        // Fail closed in non-interactive sessions without `--yes` unless a
+        // confirm seam is being used for testing/audit. This step wipes every
+        // managed Nu version and mutates PATH, so `confirm_or_bail`'s non-TTY
+        // auto-confirm must not silently proceed.
+        if opts.confirm.is_none() {
+            require_tty_or_yes(yes, "managed Nushell wipe + PATH update")?;
+        }
         if !yes {
             match opts.confirm {
                 Some(confirm_fn) => confirm_fn(&prompt, cancel_msg)?,
