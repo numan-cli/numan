@@ -267,3 +267,34 @@ fn setup_nu_rejects_legacy_use_existing_with_skip_path() {
         "unexpected error: {err}"
     );
 }
+
+/// Golden-string stability test for the hoisted-consent audit trail.
+///
+/// The literal text emitted by `bootstrap::register_existing_nu` in the
+/// `caller_consented_destructive` branch is part of the public contract:
+/// safe-batch automation greps `(audit)` lines out of stderr to reason about
+/// which consent decision was made. Any accidental copy-edit (a punctuation
+/// shift, a reword, a dropped space) would silently break that grep, so
+/// the literal string is pinned here. Update this test deliberately and in
+/// the same commit as the helper's text change.
+#[test]
+fn register_existing_nu_audit_text_is_stable() {
+    use numan_cli::nu::bootstrap::hoisted_audit_message;
+
+    let actual = hoisted_audit_message(std::path::Path::new("/usr/local/bin"));
+    assert_eq!(
+        actual,
+        "(audit) prompt hoisted; skipping internal PATH-confirmation prompt \
+         for '/usr/local/bin' (caller has already gathered destructive-step consent)."
+    );
+
+    // Empty parent path: a corner case the future hoist surfaces (setup nu
+    // remove, install <v> one-shot) might pass through. The helper must still
+    // return a stable shape; an empty `display()` renders as `""`.
+    let empty = hoisted_audit_message(std::path::Path::new(""));
+    assert_eq!(
+        empty,
+        "(audit) prompt hoisted; skipping internal PATH-confirmation prompt \
+         for '' (caller has already gathered destructive-step consent)."
+    );
+}
