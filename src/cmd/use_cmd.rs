@@ -37,10 +37,7 @@ pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
 
 /// Acquire the mutation lock and take a `PreMutation` snapshot before running a
 /// mutating `numan use` arm.
-fn with_mutation_guard(
-    root: &Path,
-    op: impl FnOnce(&Path) -> Result<()>,
-) -> Result<()> {
+fn with_mutation_guard(root: &Path, op: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
     // Hold the mutation lock for the entire operation to prevent races
     // between concurrent `numan setup nu` and `numan use` invocations.
     let _lock = acquire_mutation_lock(root)?;

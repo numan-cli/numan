@@ -52,7 +52,7 @@ fn setup_nu_uses_injected_installer_without_network() {
     let platform = Platform::detect();
 
     let installer = |install_root: &std::path::Path, _platform: &Platform| {
-        let binary = bootstrap::managed_nu_binary(install_root);
+        let binary = version_manager::version_binary(install_root, "0.113.1");
         std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
         std::fs::write(&binary, b"fake nu").unwrap();
         Ok(binary)
@@ -72,7 +72,7 @@ fn setup_nu_uses_injected_installer_without_network() {
     )
     .unwrap();
 
-    assert!(bootstrap::managed_nu_binary(root).is_file());
+    assert!(version_manager::version_binary(root, "0.113.1").is_file());
 }
 
 #[test]
