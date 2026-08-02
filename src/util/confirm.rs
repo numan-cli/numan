@@ -60,14 +60,25 @@ pub fn confirm_or_bail(prompt: &str, yes: bool, cancel_msg: &str) -> Result<()> 
 /// pattern (src/nu/bootstrap.rs); this helper makes the same rule uniform
 /// across the setup command surface.
 pub fn require_tty_or_yes(yes: bool, what: &str) -> Result<()> {
-    use std::io::IsTerminal as _;
+    require_tty_or_yes_with_seam(yes, what, std::io::stdin().is_terminal())
+}
+
+/// Same as [`require_tty_or_yes`] but lets the caller inject the TTY
+/// decision so unit tests can cover all three branches (explicit `--yes`,
+/// TTY-yes, TTY-no) without spawning a real TTY.
+///
+/// This addresses PR #69's WDr (in `src/util/confirm.rs`): the non-TTY bail
+/// branch was previously unreachable from a unit test because
+/// `std::io::stdin().is_terminal()` was not injectable. CI now exercises
+/// every branch via this seam.
+pub fn require_tty_or_yes_with_seam(yes: bool, what: &str, is_tty: bool) -> Result<()> {
     if yes {
         eprintln!(
             "(audit) explicit --yes accepted for {what}; proceeding without interactive prompt."
         );
         return Ok(());
     }
-    if !std::io::stdin().is_terminal() {
+    if !is_tty {
         eprintln!("(audit) implicit non-TTY session; refusing destructive {what} without --yes.");
         anyhow::bail!("Refusing destructive {what} in non-interactive session without --yes.");
     }
@@ -88,12 +99,37 @@ mod tests {
         assert!(confirm_or_bail("Proceed?", true, "Cancelled.").is_ok());
     }
 
+    // ── require_tty_or_yes (all three branches via the seam) ─────────────
+    // PR #69 WDr: every branch is now reachable from a unit test.
+
     #[test]
-    fn require_tty_or_yes_accepts_explicit_yes() {
-        // Locks the `yes = true` polarity: returns Ok(()) regardless of TTY.
-        // The non-TTY bail branch can't be unit-tested without a DI seam for
-        // `is_terminal()`; the same blind spot applies to `confirm_or_auto`,
-        // so it's a known gap rather than a regression.
-        assert!(require_tty_or_yes(true, "test op").is_ok());
+    fn require_tty_or_yes_accepts_explicit_yes_regardless_of_tty() {
+        // Yes-skip is the polarity that doesn't depend on stdin. Lock it
+        // across both TTY and non-TTY so a future regression that gates
+        // --yes on TTY would fail here.
+        assert!(require_tty_or_yes_with_seam(true, "test op", true).is_ok());
+        assert!(require_tty_or_yes_with_seam(true, "test op", false).is_ok());
+    }
+
+    #[test]
+    fn require_tty_or_yes_passes_on_tty_without_yes() {
+        // The interactive case: TTY is true, the destructive step is
+        // allowed to proceed (the caller is responsible for an
+        // interactive prompt downstream, e.g. via confirm_or_bail).
+        assert!(require_tty_or_yes_with_seam(false, "test op", true).is_ok());
+    }
+
+    #[test]
+    fn require_tty_or_yes_bails_on_non_tty_without_yes() {
+        // The CI / pipe case: non-TTY + no --yes must refuse the
+        // destructive step. The audit eprintln text is the contract
+        // safe-batch automation greps, so it's tested shape-equal.
+        let err = require_tty_or_yes_with_seam(false, "off-path registration", false)
+            .expect_err("must bail on non-TTY + no --yes");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Refusing destructive off-path registration"),
+            "bail message must include the `what` label: {msg}"
+        );
     }
 }

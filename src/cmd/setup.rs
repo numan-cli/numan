@@ -1,4 +1,4 @@
-use crate::util::confirm::confirm_or_bail;
+use crate::util::confirm::{confirm_or_bail, require_tty_or_yes};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use std::path::{Path, PathBuf};
@@ -289,6 +289,12 @@ fn validate_user_supplied_nu(
 }
 
 fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<()> {
+    // PR #69 WCt: the non-TTY guard must run before any destructive step.
+    // `register_existing_nu` mutates the user's PATH and `remove_managed_nu_if_present`
+    // deletes the entire managed tree, so refusing the operation on a pipe without
+    // `--yes` is non-negotiable.
+    require_tty_or_yes(yes, "PATH Nu registration")?;
+
     let path_nu = find_nu_on_path()?;
     println!("Found Nu on PATH: {path_nu}");
 
@@ -372,6 +378,10 @@ fn execute_use_existing(
     root: &Path,
     opts: ExecuteUseOpts<'_>,
 ) -> Result<()> {
+    // PR #69 WCt: refuse the operation on a non-TTY session without
+    // `--yes` *before* any PATH mutation or managed-tree removal.
+    require_tty_or_yes(yes, "off-path Nu registration")?;
+
     // Validate before any destructive removal: an invalid binary must
     // not leave us without a managed install.
     validate_user_supplied_nu(path, opts.validate)?;
@@ -432,6 +442,10 @@ fn execute_use_existing(
 
 /// Remove the managed Nushell install, prompting unless `--yes`.
 fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
+    // PR #69 WCt: refuse the operation on a non-TTY session without
+    // `--yes` *before* any marker write or directory deletion.
+    require_tty_or_yes(yes, "managed Nushell removal")?;
+
     // chatgpt PR69 S09: clear the active-version marker before deleting
     // the managed tree so the marker cannot dangle at a binary we are
     // about to remove.
