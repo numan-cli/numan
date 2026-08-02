@@ -16,8 +16,7 @@ use anyhow::{bail, Context, Result};
 use std::path::Path;
 
 use super::version_manager::{
-    normalize_version, read_active_version, version_binary, version_install_dir, versioned_nu_dir,
-    write_active_version,
+    normalize_version, version_binary, version_install_dir, versioned_nu_dir, write_active_version,
 };
 use crate::state::migration_journal::{
     self as migration_journal, MigrationStage, PendingMigration, SCHEMA_VERSION,
@@ -86,6 +85,7 @@ pub fn detect_legacy_version(binary: &Path) -> Result<String> {
     }
 
     parse_nu_version_from_output(&String::from_utf8_lossy(&output.stdout))
+}
 
 /// Migrate a legacy single-binary install to the versioned structure.
 ///
@@ -291,6 +291,7 @@ fn parse_nu_version_from_output(output: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::nu::version_manager::read_active_version;
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
 

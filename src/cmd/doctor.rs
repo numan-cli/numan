@@ -1337,9 +1337,6 @@ fn apply_repairs(
         .iter()
         .any(|f| f.id == "journal.migration_pending" && f.severity == Severity::Warn)
     {
-        // Reacquire the lock because the earlier repair phases deliberately
-        // released it before invoking subcommands that acquire their own lock.
-        lock = Some(acquire_mutation_lock(root)?);
         if PendingMigration::load(root)?.is_none() {
             return Ok(records);
         }

@@ -183,7 +183,10 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
             if versioned_binary_present(root, &journal.version) {
                 if read_active_version(root)?.is_none() {
                     write_active_version(root, &journal.version).with_context(|| {
-                        format!("Migration recovery: failed to write active version '{}'", journal.version)
+                        format!(
+                            "Migration recovery: failed to write active version '{}'",
+                            journal.version
+                        )
                     })?;
                 }
                 let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
