@@ -123,7 +123,6 @@ pub fn migrate_legacy_install_with_detector(
         root.join("tools").join("nushell").join("nu")
     };
 
-    // If legacy binary doesn't exist, nothing to migrate.
     if !legacy_binary.exists() {
         return Ok(false);
     }
