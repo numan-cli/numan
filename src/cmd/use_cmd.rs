@@ -22,6 +22,11 @@ pub struct UseArgs {
 }
 
 pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
+    // Listing is read-only: do not lock, snapshot, or migrate the install.
+    if args.version == "list" {
+        return execute_list(root);
+    }
+
     // Hold the mutation lock for the entire operation to prevent races
     // between concurrent `numan setup nu` and `numan use` invocations.
     let _lock = acquire_mutation_lock(root)?;
@@ -38,13 +43,10 @@ pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
     )
     .with_context(|| "Failed to create pre-mutation snapshot for `numan use`")?;
 
-    // Attempt migration of legacy single-binary install before any operation.
-    // This is a no-op if migration has already occurred or no legacy install exists.
     crate::nu::migrate_legacy::migrate_legacy_install(root)
         .with_context(|| "Failed to migrate legacy Nu installation")?;
 
     match args.version.as_str() {
-        "list" => execute_list(root),
         "latest" => execute_latest(root),
         version => execute_switch(root, version),
     }
