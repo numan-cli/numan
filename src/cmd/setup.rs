@@ -89,6 +89,28 @@ impl NuSetupArgs {
         }
     }
 
+    /// Construct args for an off-PATH registration test fixture.
+    ///
+    /// Mirrors `NuSetupArgs::install` shape so tests get one canonical entry
+    /// point instead of hand-listing the eight struct fields, which silently
+    /// drifts when fields are added.
+    ///
+    /// Note: integration tests build the lib without `cfg(test)` enabled, so
+    /// this is intentionally a public, unconditional function — its name
+    /// (`_for_test`) signals intent.
+    pub fn use_existing_for_test(path: std::path::PathBuf, skip_path: bool, yes: bool) -> Self {
+        Self {
+            action: Some(NuAction::Use { path }),
+            version: None,
+            force: false,
+            skip_path,
+            yes,
+            remove: false,
+            use_path: false,
+            use_existing: None,
+        }
+    }
+
     /// Construct args for switching to the PATH Nu.
     pub fn use_path(yes: bool) -> Self {
         Self {

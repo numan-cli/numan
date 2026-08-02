@@ -65,6 +65,7 @@ fn setup_nu_uses_injected_installer_without_network() {
             force: false,
             skip_path: true,
             version: None,
+            caller_consented_destructive: false,
         },
         installer,
     )
@@ -232,16 +233,7 @@ fn setup_nu_rejects_use_existing_with_skip_path() {
     let existing = root.join("nu");
     std::fs::write(&existing, b"fake nu").unwrap();
 
-    let args = NuSetupArgs {
-        action: Some(numan_cli::cmd::setup::NuAction::Use { path: existing }),
-        version: None,
-        force: false,
-        skip_path: true,
-        yes: true,
-        remove: false,
-        use_path: false,
-        use_existing: None,
-    };
+    let args = NuSetupArgs::use_existing_for_test(existing, true, true);
     let err = execute_nu(&args, root).unwrap_err();
     assert!(
         err.to_string()
