@@ -264,15 +264,20 @@ pub fn list_installed_versions(root: &Path) -> Result<Vec<String>> {
             let entry = entry?;
             if entry.file_type()?.is_dir() {
                 if let Some(name) = entry.file_name().to_str() {
-                    // Only well-formed versions are installable selections;
-                    // a stray directory must not become `numan use latest`.
-                    let Ok(name) = normalize_version(name) else {
+                    // Only well-formed, canonical version directories are installable
+                    // selections. Reject `v`-prefixed / alias names so a dir
+                    // named `v0.113.1` cannot be listed as `0.113.1` while the
+                    // binary lives under the original alias path.
+                    let Ok(normalized) = normalize_version(name) else {
                         continue;
                     };
+                    if normalized != name {
+                        continue;
+                    }
                     // Check if this directory contains a Nu binary.
                     let binary_name = if cfg!(windows) { "nu.exe" } else { "nu" };
                     if entry.path().join(binary_name).is_file() {
-                        versions.push(name);
+                        versions.push(normalized);
                     }
                 }
             }
@@ -417,6 +422,26 @@ mod tests {
         let versions = list_installed_versions(root).unwrap();
         // Should be sorted descending.
         assert_eq!(versions, vec!["0.114.0", "0.113.1", "0.112.0"]);
+    }
+
+    #[test]
+    fn list_installed_versions_skips_v_prefixed_and_alias_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let binary_name = if cfg!(windows) { "nu.exe" } else { "nu" };
+
+        // Canonical on-tree install.
+        let canonical = version_install_dir(root, "0.113.1");
+        std::fs::create_dir_all(&canonical).unwrap();
+        std::fs::write(canonical.join(binary_name), "fake").unwrap();
+
+        // Alias / legacy dir names must not appear (normalized name != dir name).
+        let aliased = versioned_nu_dir(root).join("v0.113.1");
+        std::fs::create_dir_all(&aliased).unwrap();
+        std::fs::write(aliased.join(binary_name), "fake").unwrap();
+
+        let versions = list_installed_versions(root).unwrap();
+        assert_eq!(versions, vec!["0.113.1"]);
     }
 
     #[test]

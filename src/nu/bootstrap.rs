@@ -753,6 +753,7 @@ where
                 return Ok(dest.clone());
             }
 
+            crate::util::confirm::require_tty_or_yes(options.yes, "Nushell reinstall")?;
             crate::util::confirm::confirm_or_bail(
                 &format!(
                     "Nushell is already installed at '{}'. Reinstall {version_label} release?",
