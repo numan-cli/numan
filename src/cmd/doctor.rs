@@ -1076,7 +1076,7 @@ fn apply_repairs(
                 reason: Some("not_confirmed".to_string()),
             });
         } else if let Some(off_path) = resolve_off_path(options) {
-            let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_impl);
+            let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
             match setup_fn(&NuSetupArgs::use_existing(off_path, true), root) {
                 Ok(()) => records.push(RepairRecord {
                     id,
@@ -1116,7 +1116,7 @@ fn apply_repairs(
                 reason: Some("skip_network".to_string()),
             });
         } else {
-            let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_impl);
+            let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
             match setup_fn(&NuSetupArgs::install(None, false, false, true), root) {
                 Ok(()) => records.push(RepairRecord {
                     id,

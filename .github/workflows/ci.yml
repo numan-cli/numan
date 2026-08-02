@@ -57,6 +57,20 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  roadmap-drift:
+    name: Roadmap drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run roadmap-drift check against consolidated roadmap
+        run: python scripts/check-roadmap-drift.py
+      - name: Mirror to numan-plugins/numan-registry
+        run: |
+          # CI intentionally also runs against this PR's siblings when
+          # those repos pass CONSOLIDATED_ROADMAP via workflow_call; the
+          # numan job here is the canonical reference build.
+          echo "see https://github.com/tonythethompson/numan-plugins and https://github.com/tonythethompson/numan-registry for mirrors"
+
   msrv:
     name: MSRV (1.88)
     runs-on: ubuntu-latest

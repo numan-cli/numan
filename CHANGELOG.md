@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Side-by-side Nu version management** via `numan use <version>|latest|list`:
+  - Switches the active managed Nushell install without re-downloading (errors with `numan setup nu <version>` hint when the requested version isn't installed yet)
+  - Writes `<root>/nu_state/active-version.json` so `numan use list` and downstream activation can resolve the selected Nu
+  - Acquires the root mutation lock and creates a PreMutation snapshot before any state change, matching `install`/`update`/`activate`/`deactivate`
+- **`numan setup nu` versioned layout**: binaries now install under `<root>/tools/nushell/<version>/nu` instead of the previous single-binary `<root>/tools/nushell/nu`. Re-installing one version no longer clobbers another. `numan doctor` reports markers whose on-tree binary is missing.
+- Strict version-path validation (`<root>/tools/nushell/<version>/...`): rejects components containing `/`, `\\`, `..`, or anything `semver` won't parse, so `numan setup nu ../../path` cannot escape `$NUMAN_ROOT`.
 - Shared confirmation utility (`src/util/confirm.rs`): consistent prompt/auto-confirm behavior across all commands
 
 ## [0.1.5] - 2026-07-29

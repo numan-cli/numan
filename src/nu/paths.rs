@@ -6,6 +6,7 @@ use crate::config::Config;
 use crate::core::integrity;
 use crate::core::platform::Platform;
 use crate::nu::bootstrap::managed_nu_binary;
+use crate::nu::version_manager;
 use crate::util::atomic::write_json_atomic;
 
 /// Nu environment state, cached to `<root>/nu_state/paths.json` at `numan init`.
@@ -281,10 +282,66 @@ pub fn find_nu_executable() -> Result<String> {
 }
 
 /// Locate `nu` under `<root>/tools/nushell/`, then on PATH.
+///
+/// Order note: the legacy-managed check at the top beats the active-version
+/// marker consult on purpose. Pre-migration users may keep a non-empty
+/// `<root>/tools/nushell/nu` single-binary install while the marker points
+/// elsewhere; honoring the legacy binary avoids breaking those users prior
+/// to their migration converging. After migration the legacy path is empty,
+/// and the marker consult handles the steady state.
+///
+/// Falls through the active-version marker as a hint table:
+///
+/// 1. Legacy managed `tools/nushell/nu` (covers pre-versioned installs).
+/// 2. The on-tree `<root>/tools/nushell/<version>/nu` named by the marker
+///    when `numan setup nu use <path>` or `numan use <version>` previously
+///    selected it.
+/// 3. The off-tree `binary_path` recorded by `numan setup nu use <path>`
+///    when the on-tree version-binary is absent (the common case after a
+///    PATH-Nu swap that removed the versioned layout).
+/// 4. PATH lookup.
+/// 5. Off-path discover (bail with a corrective hint).
+///
+/// The marker consultation is tolerant: if either record path is stale
+/// (file moved or replaced), we fall through to PATH rather than bail —
+/// keeping the lookup self-healing instead of surfacing a hard error for
+/// what is really a stale hint. Dangling markers are still surfaced by
+/// `active_nu_binary` / `numan doctor` for the on-tree authoritative check.
 pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
     let managed = managed_nu_binary(root);
     if managed.is_file() {
         return Ok(managed.to_string_lossy().into_owned());
+    }
+
+    // Consult the active-version marker as a hint table (see function doc).
+    if let Ok(Some(active)) = version_manager::read_active_version(root) {
+        // 1. on-tree version-binary, if the version is well-formed and its
+        //    installed binary still exists.
+        if let Ok(version) = version_manager::normalize_version(&active.version) {
+            let on_tree = version_manager::version_binary(root, &version);
+            if on_tree.is_file() {
+                return Ok(on_tree.to_string_lossy().into_owned());
+            }
+        }
+        // 2. off-tree binary_path recorded by an earlier `setup nu use <path>`.
+        if let Some(off_tree) = active.binary_path.as_ref() {
+            let off_tree_path = std::path::PathBuf::from(off_tree);
+            if off_tree_path.is_file() {
+                return Ok(off_tree_path.to_string_lossy().into_owned());
+            }
+        }
+    }
+
+    // 3. Any on-tree/off-tree installed version (covers direct installs where
+    //    no active marker has been written yet).
+    if let Ok(versions) = version_manager::list_installed_versions(root) {
+        for version in versions {
+            if let Some(binary) = version_manager::resolve_installed_version(root, &version) {
+                if binary.is_file() {
+                    return Ok(binary.to_string_lossy().into_owned());
+                }
+            }
+        }
     }
 
     if let Ok(path) = find_nu_on_path() {
@@ -294,7 +351,7 @@ pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
     if let Some(off_path) = discover_nu_off_path() {
         bail!(
             "Nu not found on PATH or in '{}', but an install exists at '{}'. \
-             Add it to PATH with: numan setup nu --use-existing {}",
+             Add it to PATH with: numan setup nu use {}",
             managed.display(),
             off_path.display(),
             off_path.display()
@@ -306,7 +363,6 @@ pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
         managed.display()
     );
 }
-
 /// Search PATH only (no Numan-managed fallback).
 pub fn find_nu_on_path() -> Result<String> {
     #[cfg(target_os = "windows")]
@@ -380,7 +436,9 @@ pub fn probe_nu_config_path(nu_exe: &str) -> Result<PathBuf> {
 }
 
 /// Validate that a path is an executable Nushell binary before PATH mutation.
-pub fn validate_nushell_binary(path: &Path) -> Result<()> {
+///
+/// Returns the Nu version string on success.
+pub fn validate_nushell_binary(path: &Path) -> Result<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -396,8 +454,8 @@ pub fn validate_nushell_binary(path: &Path) -> Result<()> {
         }
     }
 
-    probe_nu(&path.to_string_lossy())?;
-    Ok(())
+    let output = probe_nu(&path.to_string_lossy())?;
+    Ok(output.version)
 }
 
 /// Run a single Nu invocation and parse the resulting JSON probe output.
@@ -749,5 +807,94 @@ mod tests {
         assert_eq!(loaded.data_dir, None);
         assert!(loaded.vendor_autoload_dirs.is_empty());
         assert_eq!(loaded.vendor_autoload_dir, None);
+    }
+    // --- active-marker hint-table tests (D1 ordering) ---
+
+    #[test]
+    fn find_nu_executable_with_root_prefers_marker_ontree_hint() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("numan-root");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let on_tree = root
+            .join("tools")
+            .join("nushell")
+            .join("0.113.1")
+            .join(if cfg!(windows) { "nu.exe" } else { "nu" });
+        std::fs::create_dir_all(on_tree.parent().unwrap()).unwrap();
+        std::fs::write(&on_tree, b"placeholder on-tree").unwrap();
+
+        crate::nu::version_manager::write_active_version(&root, "0.113.1").unwrap();
+
+        let saved = std::env::var("PATH").ok();
+        std::env::set_var("PATH", "");
+        let resolved = find_nu_executable_with_root(&root).unwrap();
+        if let Some(p) = saved {
+            std::env::set_var("PATH", p)
+        } else {
+            std::env::remove_var("PATH");
+        }
+
+        assert_eq!(
+            std::fs::canonicalize(resolved).unwrap(),
+            std::fs::canonicalize(&on_tree).unwrap()
+        );
+    }
+
+    #[test]
+    fn find_nu_executable_with_root_uses_marker_offtree_when_ontree_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("numan-root");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let off_tree = dir.path().join("opt-nu").join("nu");
+        std::fs::create_dir_all(off_tree.parent().unwrap()).unwrap();
+        std::fs::write(&off_tree, b"placeholder off-tree").unwrap();
+
+        crate::nu::version_manager::write_active_version_with_binary(&root, "0.113.1", &off_tree)
+            .unwrap();
+
+        let saved = std::env::var("PATH").ok();
+        std::env::set_var("PATH", "");
+        let resolved = find_nu_executable_with_root(&root).unwrap();
+        if let Some(p) = saved {
+            std::env::set_var("PATH", p)
+        } else {
+            std::env::remove_var("PATH");
+        }
+
+        assert_eq!(
+            std::fs::canonicalize(resolved).unwrap(),
+            std::fs::canonicalize(&off_tree).unwrap()
+        );
+    }
+
+    #[test]
+    fn find_nu_executable_with_root_falls_through_when_marker_paths_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("numan-root");
+        std::fs::create_dir_all(&root).unwrap();
+
+        // Record an off-tree path that does NOT exist; the on-tree version-
+        // binary is also absent. Lookup must fall through to PATH-empty
+        // (which will fail with the standard discover/bail error).
+        crate::nu::version_manager::write_active_version_with_binary(
+            &root,
+            "0.113.1",
+            std::path::Path::new("/nonexistent/opt-nu"),
+        )
+        .unwrap();
+
+        let saved = std::env::var("PATH").ok();
+        std::env::set_var("PATH", "");
+        let result = find_nu_executable_with_root(&root);
+        if let Some(p) = saved {
+            std::env::set_var("PATH", p)
+        } else {
+            std::env::remove_var("PATH");
+        }
+
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("numan setup nu"));
     }
 }
