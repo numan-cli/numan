@@ -30,7 +30,19 @@ jobs:
         run: |
           tagged_sha=$(curl --fail-with-body --silent --show-error \
             https://api.github.com/repos/tonythethompson/numan/git/refs/tags/$CONTRACT_TAG \
-            | python -c "import sys,json; print(json.load(sys.stdin)['object']['sha'])")
+            | python -c "
+import json, sys, urllib.request
+ref = json.load(sys.stdin)
+sha = ref['object']['sha']
+if ref['object']['type'] == 'tag':
+    req = urllib.request.Request(
+        ref['object']['url'],
+        headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'numan-ci'},
+    )
+    tag = json.load(urllib.request.urlopen(req))
+    sha = tag['object']['sha']
+print(sha)
+")
           if [ "$tagged_sha" != "$CONTRACT_SHA" ]; then
             echo "::error::Tag $CONTRACT_TAG resolves to $tagged_sha but CONTRACT_SHA=$CONTRACT_SHA."
             echo "Run scripts/bump-contract.sh in numan to coordinate the bump across all three repos."

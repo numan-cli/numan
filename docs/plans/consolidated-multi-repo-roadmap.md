@@ -316,7 +316,9 @@ Nu version that has the plugins they need, and switching is instant.
 - > **Vision only — not yet shipped.** Persisted in Numan config; survives shell changes.
 - > **Vision only — not yet shipped.** Shell-level aliases (`alias nu113 = numan use 0.113.1`) remain a user option — this is the recommended mechanism until `numan alias` ships.
 
-**Catalog implication:** > **Vision only — not yet shipped.** Backfilling older Nu versions (0.112, 0.113) becomes valuable because each version is a switchable "profile" rather than a dead end. Pre-0.112 plugins remain deferred unless product re-scopes.
+**Catalog implication:**
+
+> **Vision only — not yet shipped.** Backfilling older Nu versions (0.112, 0.113) becomes valuable because each version is a switchable "profile" rather than a dead end. Pre-0.112 plugins remain deferred unless product re-scopes.
 
 **Backfill data:** `numan-plugins/docs/backlog.json` (schema v1; verified outside this repo) tracks ALL release versions per plugin with their Nu minor compatibility. The `backfill_targets` field lists Nu minors that have eligible plugin versions not yet in the registry. Source: awesome-nu + manual discovery. Entries marked `NEEDS_RESEARCH` need their version history filled in before promotion.
 

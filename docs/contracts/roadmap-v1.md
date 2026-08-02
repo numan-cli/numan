@@ -141,9 +141,9 @@ hold:
 * The author is not on the `numansh` GitHub org (or is not
   recognized by `gh auth status` as a maintainer of all three repos).
 * `BUMP_REASON` is empty.
-* A workflow yml that declares `CONTRACT_SHA` is pinned to a SHA other
-  than the local HEAD (sibling mirrors). numan's own CI pins by
-  `CONTRACT_TAG` only.
+* A workflow yml is missing `CONTRACT_TAG` or `CONTRACT_SHA`, or the
+  bump rewrite cannot set `CONTRACT_TAG` to the new tag / `CONTRACT_SHA`
+  to the frozen content commit.
 
 ### Reverting
 
