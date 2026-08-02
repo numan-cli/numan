@@ -68,6 +68,7 @@ pub fn detect_legacy_version(binary: &Path) -> Result<String> {
 
     let output = std::process::Command::new(binary)
         .arg("--version")
+        .stdin(std::process::Stdio::null())
         .output()
         .with_context(|| {
             format!(
@@ -85,7 +86,6 @@ pub fn detect_legacy_version(binary: &Path) -> Result<String> {
     }
 
     parse_nu_version_from_output(&String::from_utf8_lossy(&output.stdout))
-}
 
 /// Migrate a legacy single-binary install to the versioned structure.
 ///
