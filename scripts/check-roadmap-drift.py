@@ -245,6 +245,9 @@ def audit_local(path: Path, name: str) -> tuple[list[str], list[str]]:
 
 
 def main(argv: list[str]) -> int:
+    if argv[1:] and argv[1] in ("--help", "-h"):
+        print(__doc__)
+        return 0
     consolidated_path = (
         Path(argv[1]) if len(argv) > 1 else CONSOLIDATED_PATH
     )
