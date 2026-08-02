@@ -785,6 +785,28 @@ mod tests {
     }
 
     #[test]
+    fn remove_managed_nu_clears_active_version_marker() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        let managed_dir = bootstrap::managed_nu_dir(&root);
+        std::fs::create_dir_all(&managed_dir).unwrap();
+        std::fs::write(managed_dir.join("nu.exe"), b"fake").unwrap();
+
+        // Stage an active-version marker so removal must clear it, otherwise it
+        // dangles at a now-missing binary.
+        crate::nu::version_manager::write_active_version(&root, "0.113.1").unwrap();
+
+        remove_managed_nu(&root, true).unwrap();
+        assert!(!managed_dir.exists());
+        assert!(
+            crate::nu::version_manager::read_active_version(&root)
+                .unwrap()
+                .is_none(),
+            "active-version marker must be cleared after removal"
+        );
+    }
+
+    #[test]
     fn remove_managed_nu_noop_when_absent() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("numan-root");
