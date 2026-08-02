@@ -207,7 +207,7 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
         archive_path,
         &extract_root,
         &ExtractConfig {
-            max_uncompressed_bytes: Some(256 * 1024 * 1024),
+            max_uncompressed_bytes: Some(512 * 1024 * 1024),
             ..ExtractConfig::default()
         },
         format,
