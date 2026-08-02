@@ -38,11 +38,6 @@ pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
     )
     .with_context(|| "Failed to create pre-mutation snapshot for `numan use`")?;
 
-    // Attempt migration of legacy single-binary install before any operation.
-    // This is a no-op if migration has already occurred or no legacy install exists.
-    version_manager::migrate_legacy_install(root)
-        .with_context(|| "Failed to migrate legacy Nu installation")?;
-
     match args.version.as_str() {
         "list" => execute_list(root),
         "latest" => execute_latest(root),

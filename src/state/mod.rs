@@ -5,7 +5,6 @@ pub mod autoload_state;
 pub mod journal;
 pub mod lifecycle_journal;
 pub mod lockfile;
-pub mod migration_journal;
 pub mod nupm_import;
 pub mod plugin_deactivate_journal;
 pub mod rollback;
