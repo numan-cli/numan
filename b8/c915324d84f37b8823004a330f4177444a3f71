@@ -1,0 +1,21 @@
+src/util/test_paths.rs
+  s_463761de7f5816::t_440481e06ed0d3 9-16,30,33-34,39-43,46
+src/state/migration_journal.rs
+  s_463761de7f5816::t_ffdcb7e733e8a4 373
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b8c915324d84f37b8823004a330f4177444a3f71",
+  "prompts": {},
+  "sessions": {
+    "s_463761de7f5816": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "51dfbf17-dd54-4faa-8ccd-65418edec16b",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}
