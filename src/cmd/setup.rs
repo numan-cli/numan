@@ -889,7 +889,7 @@ esac\n";
             confirm: Some(&mock_confirm),
         };
         let result = run_with_path_snapshot(std::panic::AssertUnwindSafe(|| {
-            execute_use_existing(&fake_nu, true, &root, opts)
+            execute_use_existing(&fake_nu, false, &root, opts)
         }));
         let err_msg = match result {
             Ok(()) => panic!("expected Err from declined confirm"),
