@@ -715,9 +715,7 @@ where
     // Refuse to proceed without explicit consent in non-interactive sessions.
     // `confirm_or_bail` auto-confirms on a pipe otherwise, which would silently
     // trigger a download and subsequent PATH mutation.
-    if !options.yes && !std::io::stdin().is_terminal() {
-        bail!("Nushell setup cancelled.");
-    }
+    crate::util::confirm::require_tty_or_yes(options.yes, "Nushell setup")?;
     crate::util::confirm::confirm_or_bail("Proceed?", options.yes, "Nushell setup cancelled.")?;
 
     // Snapshot established state right before the download/install mutates the
