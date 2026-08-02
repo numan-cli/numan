@@ -1,9 +1,10 @@
 name: Roadmap drift
 
 # Mirror of numan/scripts/check-roadmap-drift.py runner. Fetches the
-# canonical consolidated roadmap from numan@master so the sibling repo
-# never holds a stale copy. Pinned actions-commit SHA matches
-# numan/.github/workflows/ci.yml so future audit passes change in lockstep.
+# canonical consolidated roadmap + drift script from numan pinned to
+# the roadmap-contract v1 SHA so the guardrail cannot drift silently.
+# Bumping the contract is a coordinated operation across all three
+# repos; see scripts/bump-contract.sh in numan.
 
 on:
   pull_request:
@@ -16,23 +17,39 @@ permissions:
 
 jobs:
   roadmap-drift:
-    name: Roadmap drift against numan consolidated roadmap
+    name: Roadmap drift against numan consolidated roadmap (contract v1)
     runs-on: ubuntu-latest
+    env:
+      # Roadmap contract v1 pin. Bumping requires scripts/bump-contract.sh
+      # in tonythethompson/numan — never edit this in isolation.
+      CONTRACT_TAG: numan-roadmap-contract/v1
+      CONTRACT_SHA: 99aa695c6ecbb059020efc689b59a8a8d6c490f8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Fetch consolidated roadmap from numan@master
+      - name: Verify pinned SHA still resolves to tag
+        run: |
+          tagged_sha=$(curl --fail-with-body --silent --show-error \
+            https://api.github.com/repos/tonythethompson/numan/git/refs/tags/$CONTRACT_TAG \
+            | python -c "import sys,json; print(json.load(sys.stdin)['object']['sha'])")
+          if [ "$tagged_sha" != "$CONTRACT_SHA" ]; then
+            echo "::error::Tag $CONTRACT_TAG resolves to $tagged_sha but CONTRACT_SHA=$CONTRACT_SHA."
+            echo "Run scripts/bump-contract.sh in numan to coordinate the bump across all three repos."
+            exit 1
+          fi
+          echo "OK: $CONTRACT_TAG pinned to $CONTRACT_SHA"
+      - name: Fetch consolidated roadmap from pin (numan@$CONTRACT_TAG -> $CONTRACT_SHA)
         run: |
           mkdir -p docs/plans
           curl --fail-with-body --silent --show-error --location \
-            https://raw.githubusercontent.com/tonythethompson/numan/master/docs/plans/consolidated-multi-repo-roadmap.md \
+            https://raw.githubusercontent.com/tonythethompson/numan/$CONTRACT_SHA/docs/plans/consolidated-multi-repo-roadmap.md \
             -o docs/plans/consolidated-multi-repo-roadmap.md
           test -s docs/plans/consolidated-multi-repo-roadmap.md
           grep -q "numan-registry/docs/roadmap.md" docs/plans/consolidated-multi-repo-roadmap.md
-      - name: Pull check-roadmap-drift.py from numan@master
+      - name: Pull check-roadmap-drift.py from pin (numan@$CONTRACT_TAG -> $CONTRACT_SHA)
         run: |
           mkdir -p scripts
           curl --fail-with-body --silent --show-error --location \
-            https://raw.githubusercontent.com/tonythethompson/numan/master/scripts/check-roadmap-drift.py \
+            https://raw.githubusercontent.com/tonythethompson/numan/$CONTRACT_SHA/scripts/check-roadmap-drift.py \
             -o scripts/check-roadmap-drift.py
           chmod +x scripts/check-roadmap-drift.py
       - name: Run drift check
