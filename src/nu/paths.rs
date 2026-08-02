@@ -302,11 +302,11 @@ pub fn find_nu_executable() -> Result<String> {
 /// 4. PATH lookup.
 /// 5. Off-path discover (bail with a corrective hint).
 ///
-/// The marker consultation is tolerant: if either record path is stale
-/// (file moved or replaced), we fall through to PATH rather than bail —
-/// keeping the lookup self-healing instead of surfacing a hard error for
-/// what is really a stale hint. Dangling markers are still surfaced by
-/// `active_nu_binary` / `numan doctor` for the on-tree authoritative check.
+/// Stale marker *paths* remain tolerant: if a recorded on-tree/off-tree path
+/// is missing (file moved or replaced), we fall through rather than bail —
+/// keeping the lookup self-healing. A present but unreadable/malformed marker
+/// fails loud (no silent PATH fallback). Dangling on-tree markers are also
+/// surfaced by `active_nu_binary` / `numan doctor`.
 pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
     let managed = managed_nu_binary(root);
     if managed.is_file() {
@@ -366,14 +366,26 @@ pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
         }
     }
 
+    // 3. Any on-tree/off-tree installed version (covers direct installs where
+    //    no active marker has been written yet).
+    if let Ok(versions) = version_manager::list_installed_versions(root) {
+        for version in versions {
+            if let Some(binary) = version_manager::resolve_installed_version(root, &version) {
+                if binary.is_file() {
+                    return Ok(binary.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+
     if let Ok(path) = find_nu_on_path() {
         return Ok(path);
     }
 
     if let Some(off_path) = discover_nu_off_path() {
         bail!(
-            "Nu not found on PATH or in '{}', but an install exists at '{}'. \\
-             Add it to PATH with: numan setup nu --use-existing {}",
+            "Nu not found on PATH or in '{}', but an install exists at '{}'. \
+             Add it to PATH with: numan setup nu use {}",
             managed.display(),
             off_path.display(),
             off_path.display()
@@ -458,7 +470,9 @@ pub fn probe_nu_config_path(nu_exe: &str) -> Result<PathBuf> {
 }
 
 /// Validate that a path is an executable Nushell binary before PATH mutation.
-pub fn validate_nushell_binary(path: &Path) -> Result<()> {
+///
+/// Returns the Nu version string on success.
+pub fn validate_nushell_binary(path: &Path) -> Result<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -474,8 +488,8 @@ pub fn validate_nushell_binary(path: &Path) -> Result<()> {
         }
     }
 
-    probe_nu(&path.to_string_lossy())?;
-    Ok(())
+    let output = probe_nu(&path.to_string_lossy())?;
+    Ok(output.version)
 }
 
 /// Run a single Nu invocation and parse the resulting JSON probe output.

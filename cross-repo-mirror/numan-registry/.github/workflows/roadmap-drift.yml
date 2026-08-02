@@ -1,0 +1,46 @@
+name: Roadmap drift
+
+# Mirror of numan/scripts/check-roadmap-drift.py runner. Fetches the
+# canonical consolidated roadmap from numan@master so the sibling repo
+# never holds a stale copy. Pinned actions-commit SHA matches
+# numan/.github/workflows/ci.yml so future audit passes change in lockstep.
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  roadmap-drift:
+    name: Roadmap drift against numan consolidated roadmap
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Fetch consolidated roadmap from numan@master
+        run: |
+          mkdir -p docs/plans
+          curl --fail-with-body --silent --show-error --location \
+            https://raw.githubusercontent.com/tonythethompson/numan/master/docs/plans/consolidated-multi-repo-roadmap.md \
+            -o docs/plans/consolidated-multi-repo-roadmap.md
+          test -s docs/plans/consolidated-multi-repo-roadmap.md
+          grep -q "numan-registry/docs/roadmap.md" docs/plans/consolidated-multi-repo-roadmap.md
+      - name: Pull check-roadmap-drift.py from numan@master
+        run: |
+          mkdir -p scripts
+          curl --fail-with-body --silent --show-error --location \
+            https://raw.githubusercontent.com/tonythethompson/numan/master/scripts/check-roadmap-drift.py \
+            -o scripts/check-roadmap-drift.py
+          chmod +x scripts/check-roadmap-drift.py
+      - name: Run drift check
+        env:
+          CONSOLIDATED_ROADMAP: docs/plans/consolidated-multi-repo-roadmap.md
+          LOCAL_ROADMAP: docs/roadmap.md
+        run: python scripts/check-roadmap-drift.py
+      - name: Verify repo-local roadmap cross-link (defense in depth)
+        run: |
+          test -f docs/roadmap.md
+          grep -q "consolidated-multi-repo-roadmap" docs/roadmap.md

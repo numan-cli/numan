@@ -148,6 +148,13 @@ pub fn versioned_nu_dir(root: &Path) -> PathBuf {
 }
 
 /// Parse and normalize a Nu version, rejecting path-like values.
+///
+/// Returns the normalized form on success. Rejects traversal, separators,
+/// and anything `semver` can't parse so the result is safe to join into
+/// `versioned_nu_dir(root)` without escaping the managed root. This is the
+/// single validation entry point that callers handing a caller-supplied
+/// version to `version_install_dir` / `version_binary` must call first, so
+/// `numan setup nu ../../tmp/pwn` cannot escape `$NUMAN_ROOT`.
 pub fn normalize_version(version: &str) -> Result<String> {
     let version = version.strip_prefix('v').unwrap_or(version);
     if version.is_empty()
@@ -299,17 +306,65 @@ pub fn list_installed_versions(root: &Path) -> Result<Vec<String>> {
     Ok(versions)
 }
 
+/// Resolve a version to an existing binary, preferring on-tree installs.
+///
+/// Falls back to the active-version marker's off-tree `binary_path` when
+/// the on-tree binary is absent, so `numan use <version>` can locate a
+/// version registered with `numan setup nu use <path>`.
+pub fn resolve_installed_version(root: &Path, version: &str) -> Option<PathBuf> {
+    let normalized = normalize_version(version).ok()?;
+
+    let on_tree = version_binary(root, &normalized);
+    if on_tree.exists() {
+        return Some(on_tree);
+    }
+
+    // Off-tree selection recorded in the active-version marker.
+    if let Ok(Some(active)) = read_active_version(root) {
+        if active.version == normalized {
+            if let Some(off_tree) = active.binary_path.as_ref() {
+                let off_tree_path = Path::new(off_tree);
+                if off_tree_path.is_file() {
+                    return Some(off_tree_path.to_path_buf());
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Check if a specific Nu version is installed.
 pub fn is_version_installed(root: &Path, version: &str) -> bool {
-    normalize_version(version)
-        .map(|version| version_binary(root, &version).exists())
-        .unwrap_or(false)
+    resolve_installed_version(root, version).is_some()
 }
 
 /// Get the latest installed Nu version, or `None` if no versions are installed.
 pub fn latest_installed_version(root: &Path) -> Result<Option<String>> {
     let versions = list_installed_versions(root)?;
     Ok(versions.into_iter().next())
+}
+
+/// Binary name for the managed Nu binary on the current target.
+/// Windows: `nu.exe`; posix: `nu`. Used by every versioned-layout
+/// helper below so we don't sprinkle the conditional across callers.
+pub(crate) fn nu_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "nu.exe"
+    } else {
+        "nu"
+    }
+}
+
+/// Legacy single-binary path that older installs wrote.
+///
+/// `<root>/tools/nushell/${bin}`. Tests pass `bin` so they don't have
+/// to re-derive the platform-specific binary name.
+pub(crate) fn legacy_managed_binary_with_bin(
+    root: &std::path::Path,
+    bin: &str,
+) -> std::path::PathBuf {
+    root.join("tools").join("nushell").join(bin)
 }
 
 #[cfg(test)]
@@ -581,26 +636,4 @@ mod tests {
         let versions = list_installed_versions(root).unwrap();
         assert!(versions.is_empty());
     }
-}
-
-/// Binary name for the managed Nu binary on the current target.
-/// Windows: `nu.exe`; posix: `nu`. Used by every versioned-layout
-/// helper below so we don't sprinkle the conditional across callers.
-pub(crate) fn nu_binary_name() -> &'static str {
-    if cfg!(windows) {
-        "nu.exe"
-    } else {
-        "nu"
-    }
-}
-
-/// Legacy single-binary path that older installs wrote.
-///
-/// `<root>/tools/nushell/${bin}`. Tests pass `bin` so they don't have
-/// to re-derive the platform-specific binary name.
-pub(crate) fn legacy_managed_binary_with_bin(
-    root: &std::path::Path,
-    bin: &str,
-) -> std::path::PathBuf {
-    root.join("tools").join("nushell").join(bin)
 }
