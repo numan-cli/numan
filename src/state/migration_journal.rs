@@ -363,6 +363,24 @@ mod tests {
     }
 
     #[test]
+    fn load_errors_on_unsupported_schema_version() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let path = PendingMigration::journal_path(root);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            br#"{"schema_version":99,"version":"0.113.1","stage":"prepared"}"#,
+        )
+        .unwrap();
+        let err = PendingMigration::load(root).unwrap_err().to_string();
+        assert!(
+            err.contains("99"),
+            "error must name the unsupported schema_version: {err}"
+        );
+    }
+
+    #[test]
     fn delete_removes_file() {
         let tmp = TempDir::new().unwrap();
         write_journal(tmp.path(), "0.113.1", MigrationStage::Prepared);

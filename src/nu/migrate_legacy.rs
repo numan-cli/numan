@@ -462,6 +462,10 @@ mod tests {
         );
         let active = read_active_version(root).unwrap().unwrap();
         assert_eq!(active.version, "0.113.1");
+        assert!(
+            PendingMigration::load(root).unwrap().is_none(),
+            "migration journal must be cleared after a successful recovery"
+        );
     }
 
     #[test]
@@ -508,6 +512,10 @@ mod tests {
         );
         let active = read_active_version(root).unwrap().unwrap();
         assert_eq!(active.version, "0.113.1");
+        assert!(
+            PendingMigration::load(root).unwrap().is_none(),
+            "migration journal must be cleared after a successful recovery"
+        );
     }
 
     #[test]

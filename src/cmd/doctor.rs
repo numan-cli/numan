@@ -18,6 +18,7 @@ use crate::nu::bootstrap::managed_nu_binary;
 use crate::nu::paths::{
     discover_nu_off_path, find_nu_executable_with_root, find_nu_on_path, NuPaths,
 };
+use crate::nu::version_manager;
 use crate::nupm_compat::NupmCompatibility;
 use crate::nupm_compat::{
     count_drifted_imports, resolve_nupm_home, scan_nupm_home, NupmHomeResolution,
@@ -196,6 +197,7 @@ pub fn run_checks_with_options(
     let mut findings = Vec::new();
 
     check_root_layout(root, &mut findings);
+    check_active_version_marker(root, &mut findings);
     let nu_paths = check_nu_paths(root, options, &mut findings);
     check_nu_environments(root, options, &mut findings);
     check_journals(root, nu_paths.as_ref(), &mut findings);
@@ -320,6 +322,27 @@ fn nu_is_available(root: &Path) -> bool {
         }
     }
     false
+}
+
+fn check_active_version_marker(root: &Path, findings: &mut Vec<Finding>) {
+    // Mirror `find_nu_executable_with_root`: a present but unreadable /
+    // malformed `active-version.json` must not be silent. Missing marker
+    // (`Ok(None)`) is a clean absence.
+    match version_manager::read_active_version(root) {
+        Ok(_) => {}
+        Err(e) => findings.push(finding(
+            "nu.active_version.invalid",
+            Severity::Error,
+            format!(
+                "Active-version marker at '{}' is unreadable: {e}. \
+                 Run `numan doctor --fix` to clear the stale marker so Nu \
+                 resolution can recover without silently falling back to PATH.",
+                root.join("nu_state").join("active-version.json").display()
+            ),
+            None,
+            RepairTier::Auto,
+        )),
+    }
 }
 
 fn check_nu_paths(
@@ -638,10 +661,12 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
             "journal.migration_invalid",
             Severity::Error,
             format!(
-                "Migration journal at '{}' is unreadable: {e}.                  Run `numan doctor --fix` (manual tier) or delete the stale                  journal to recover.",
+                "Migration journal at '{}' is unreadable: {e}. \
+                 Delete the stale journal file to recover (manual); \
+                 `numan use` cannot reconcile an unreadable journal.",
                 PendingMigration::journal_path(root).display()
             ),
-            Some(CMD_USE),
+            None,
             RepairTier::Manual,
         )),
     }
@@ -1376,6 +1401,28 @@ fn apply_repairs(
         }
     }
 
+    // Clear a torn / malformed active-version marker so subsequent Nu
+    // resolution can fall through cleanly instead of failing loud forever.
+    if findings
+        .iter()
+        .any(|f| f.id == "nu.active_version.invalid" && f.repair == RepairTier::Auto)
+    {
+        let id = "nu.active_version.repaired".to_string();
+        let _lock = acquire_mutation_lock(root)?;
+        match version_manager::clear_active_version(root) {
+            Ok(_) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Applied,
+                reason: None,
+            }),
+            Err(e) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Failed,
+                reason: Some(e.to_string()),
+            }),
+        }
+    }
+
     Ok(records)
 }
 
@@ -1412,6 +1459,7 @@ fn print_report(args: &DoctorArgs, root: &Path, report: &DoctorReport) -> Result
                 "nu_paths.drift",
                 "nu_paths.vendor_drift",
                 "nu_paths.vendor_missing",
+                "nu.active_version.invalid",
             ],
         ),
         (
@@ -2391,7 +2439,11 @@ mod tests {
             "finding must mention unreadable so safe-batch can grep it: {}",
             f.message
         );
-        assert_eq!(f.fix.as_deref(), Some(crate::util::hints::CMD_USE));
+        assert!(
+            f.fix.is_none(),
+            "unreadable journal must not advertise `numan use` as a fix; got {:?}",
+            f.fix
+        );
         // The well-formed pending finding must NOT be published for an
         // invalid journal — otherwise the user sees conflicting guidance.
         assert!(
@@ -2401,5 +2453,55 @@ mod tests {
                 .all(|f| f.id != "journal.migration_pending"),
             "invalid journal must NOT also produce a Pending finding"
         );
+    }
+
+    #[test]
+    fn doctor_reports_and_fixes_malformed_active_version_marker() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let marker = root.join("nu_state").join("active-version.json");
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, b"{ not json").unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                fix: false,
+                yes: false,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "nu.active_version.invalid")
+            .expect("malformed active-version must produce a finding");
+        assert_eq!(f.severity, Severity::Error);
+        assert_eq!(f.repair, RepairTier::Auto);
+
+        let args = DoctorArgs {
+            fix: true,
+            yes: true,
+            json: false,
+            nupm_home: None,
+        };
+        let repairs = apply_repairs(&args, root, &report.findings, &test_doctor_options()).unwrap();
+        assert!(
+            repairs.iter().any(|r| {
+                r.id == "nu.active_version.repaired" && r.status == RepairStatus::Applied
+            }),
+            "doctor --fix must clear the malformed marker: {repairs:?}"
+        );
+        assert!(
+            version_manager::read_active_version(root)
+                .unwrap()
+                .is_none(),
+            "marker must be absent after repair"
+        );
+        assert!(!marker.exists(), "marker file must be removed");
     }
 }

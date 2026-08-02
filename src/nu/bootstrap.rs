@@ -457,8 +457,20 @@ pub fn register_existing_nu(
         );
     }
 
-    let version = validate_nushell_binary(&resolved)
+    let probed = validate_nushell_binary(&resolved)
         .with_context(|| format!("'{}' is not a runnable Nushell binary", binary.display()))?;
+    // Prefer the probed Nu version; if it is not semver-safe for the marker,
+    // fall back to a valid build-metadata label instead of failing after PATH
+    // mutation or writing an unreadable marker.
+    let version = match version_manager::normalize_version(&probed) {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!(
+                "(audit) Nu version '{probed}' is not semver; recording active marker as 0.0.0+external."
+            );
+            "0.0.0+external".to_string()
+        }
+    };
 
     let parent = path_parent_for_registration(input.as_path(), &resolved)?;
 
@@ -716,6 +728,18 @@ where
     if let Some(dest) = already_installed.as_ref() {
         if !options.force {
             if options.yes {
+                // PATH/profile mutation still needs a PreMutation snapshot even
+                // when the managed binary itself is left in place.
+                create_snapshot(
+                    root,
+                    SnapshotReason::PreMutation,
+                    SnapshotTrigger::Install,
+                    None,
+                    None,
+                )
+                .with_context(|| {
+                    "Failed to create pre-mutation snapshot for already-installed `numan setup nu --yes`"
+                })?;
                 if let Some(parent) = dest.parent() {
                     prepend_process_path(parent)?;
                 }
