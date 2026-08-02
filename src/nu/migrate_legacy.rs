@@ -15,10 +15,9 @@
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 
-#[allow(unused_imports)]
 use super::version_manager::{
     normalize_version, read_active_version, version_binary, version_install_dir, versioned_nu_dir,
-    write_active_marker, write_active_version, write_active_version_with_binary,
+    write_active_version,
 };
 use crate::state::migration_journal::{
     self as migration_journal, MigrationStage, PendingMigration, SCHEMA_VERSION,
