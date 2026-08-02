@@ -12,22 +12,149 @@
 //! Extracted from `nu::version_manager` for the
 //! `pr-migrate-legacy-installs` PR.
 
-use anyhow::{bail, Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use thiserror::Error;
 
 use super::version_manager::{
     legacy_managed_binary_with_bin, normalize_version, nu_binary_name, version_binary,
-    version_install_dir, versioned_nu_dir, write_active_version,
+    version_install_dir, versioned_nu_dir, write_active_version, VersionManagerError,
 };
 use crate::state::migration_journal::{
-    self as migration_journal, MigrationStage, PendingMigration, SCHEMA_VERSION,
+    self as migration_journal, MigrationJournalError, MigrationStage, PendingMigration,
+    SCHEMA_VERSION,
 };
+
+/// Errors from legacy single-binary → versioned Nu migration.
+#[derive(Debug, Error)]
+pub enum MigrateLegacyError {
+    #[error(
+        "Refusing to migrate: managed Nushell directory '{}' is a symlink or reparse point. \
+         Run `numan setup nu` from a clean root before migrating.",
+        path.display()
+    )]
+    SymlinkedManagedDir { path: PathBuf },
+
+    #[error("Failed to check managed Nushell directory '{}': {message}", path.display())]
+    SymlinkCheck { path: PathBuf, message: String },
+
+    #[error(transparent)]
+    Journal(#[from] MigrationJournalError),
+
+    #[error(transparent)]
+    VersionManager(#[from] VersionManagerError),
+
+    #[error("{message}")]
+    Detector { message: String },
+
+    #[error("Failed to determine version of legacy Nu binary at '{}': {message}", path.display())]
+    DetectFailed { path: PathBuf, message: String },
+
+    #[error("Failed to read VERSION metadata at '{}'", path.display())]
+    ReadVersionFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("VERSION metadata at '{}' did not contain a parseable Nu version", path.display())]
+    UnparseableVersionFile { path: PathBuf },
+
+    #[error("Failed to execute legacy Nu binary at '{}'", path.display())]
+    ExecuteLegacy {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("Legacy Nu binary at '{}' exited with status {status}", path.display())]
+    LegacyExitStatus {
+        path: PathBuf,
+        status: std::process::ExitStatus,
+    },
+
+    #[error("Failed to parse Nu version from output: '{output}'")]
+    ParseVersionOutput { output: String },
+
+    #[error("Failed to read versioned Nu directory '{}'", path.display())]
+    ReadVersionedDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error(
+        "Failed to write migration journal (Prepared) before 'create_dir_all' for '{version}'"
+    )]
+    JournalPrepared {
+        version: String,
+        #[source]
+        source: MigrationJournalError,
+    },
+
+    #[error(
+        "Failed to create version directory '{}' (migration journal at Prepared: '{}')",
+        path.display(),
+        journal_path.display()
+    )]
+    CreateVersionDir {
+        path: PathBuf,
+        journal_path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("Post-create hook blocked migration for '{}': {message}", path.display())]
+    PostCreateHook { path: PathBuf, message: String },
+
+    #[error(
+        "Failed to move '{}' to '{}' (migration journal at Prepared: a future reconcile will clean up '<{version}>/')",
+        from.display(),
+        to.display()
+    )]
+    Rename {
+        from: PathBuf,
+        to: PathBuf,
+        version: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error(
+        "Failed to advance migration journal to 'Renamed' (legacy binary already moved to '{}')",
+        binary.display()
+    )]
+    JournalRenamed {
+        binary: PathBuf,
+        #[source]
+        source: MigrationJournalError,
+    },
+
+    #[error(
+        "Failed to persist active Nu version marker for '{version}' (legacy binary already moved to '{}'; migration journal is at Renamed stage)",
+        binary.display()
+    )]
+    PersistActive {
+        version: String,
+        binary: PathBuf,
+        #[source]
+        source: VersionManagerError,
+    },
+
+    #[error(
+        "Failed to advance migration journal to 'Active' for '{version}' (active version is set; clearing journal)"
+    )]
+    JournalActive {
+        version: String,
+        #[source]
+        source: MigrationJournalError,
+    },
+}
 
 /// Injectable version-detection seam for [`migrate_legacy_install`].
 ///
 /// Tests inject a closure that returns a fixed version (or an error) so
 /// migration can be exercised without spawning a real `nu` process.
-pub type LegacyVersionDetector = dyn Fn(&Path) -> Result<String>;
+pub type LegacyVersionDetector = dyn Fn(&Path) -> Result<String, MigrateLegacyError>;
 
 /// Injectable post-create seam for [`migrate_legacy_install_with_detector`].
 ///
@@ -38,7 +165,7 @@ pub type LegacyVersionDetector = dyn Fn(&Path) -> Result<String>;
 /// empty versioned subdir behind on disk. A second migration attempt with no
 /// hook should clean up that artifact and succeed — the recovery test
 /// `migrate_legacy_recovers_from_post_create_hook_failure` proves that.
-pub type LegacyPostCreateHook = dyn Fn(&Path) -> Result<()>;
+pub type LegacyPostCreateHook = dyn Fn(&Path) -> Result<(), MigrateLegacyError>;
 
 /// Production detector: prefer the VERSION metadata file written by
 /// `install_from_archive`. Fall back to probing `nu --version` when no
@@ -46,22 +173,18 @@ pub type LegacyPostCreateHook = dyn Fn(&Path) -> Result<()>;
 ///
 /// We avoid an unbounded `Command::output` probe when metadata exists; the
 /// probe is best-effort and depends on the Nu process terminating quickly.
-pub fn detect_legacy_version(binary: &Path) -> Result<String> {
+pub fn detect_legacy_version(binary: &Path) -> Result<String, MigrateLegacyError> {
     if let Some(parent) = binary.parent() {
         let version_file = parent.join("VERSION");
         if version_file.is_file() {
-            let content = std::fs::read_to_string(&version_file).with_context(|| {
-                format!(
-                    "Failed to read VERSION metadata at '{}'",
-                    version_file.display()
-                )
+            let content = std::fs::read_to_string(&version_file).map_err(|source| {
+                MigrateLegacyError::ReadVersionFile {
+                    path: version_file.clone(),
+                    source,
+                }
             })?;
-            let version = parse_nu_version_from_output(&content).with_context(|| {
-                format!(
-                    "VERSION metadata at '{}' did not contain a parseable Nu version",
-                    version_file.display()
-                )
-            })?;
+            let version = parse_nu_version_from_output(&content)
+                .map_err(|_| MigrateLegacyError::UnparseableVersionFile { path: version_file })?;
             return Ok(version);
         }
     }
@@ -70,19 +193,16 @@ pub fn detect_legacy_version(binary: &Path) -> Result<String> {
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .output()
-        .with_context(|| {
-            format!(
-                "Failed to execute legacy Nu binary at '{}'",
-                binary.display()
-            )
+        .map_err(|source| MigrateLegacyError::ExecuteLegacy {
+            path: binary.to_path_buf(),
+            source,
         })?;
 
     if !output.status.success() {
-        bail!(
-            "Legacy Nu binary at '{}' exited with status {}",
-            binary.display(),
-            output.status
-        );
+        return Err(MigrateLegacyError::LegacyExitStatus {
+            path: binary.to_path_buf(),
+            status: output.status,
+        });
     }
 
     parse_nu_version_from_output(&String::from_utf8_lossy(&output.stdout))
@@ -94,7 +214,7 @@ pub fn detect_legacy_version(binary: &Path) -> Result<String> {
 /// detect its version and move it to `<root>/tools/nushell/<version>/nu`.
 ///
 /// Returns `Ok(true)` if migration occurred, `Ok(false)` otherwise.
-pub fn migrate_legacy_install(root: &Path) -> Result<bool> {
+pub fn migrate_legacy_install(root: &Path) -> Result<bool, MigrateLegacyError> {
     migrate_legacy_install_with_detector(root, &detect_legacy_version, None)
 }
 
@@ -110,18 +230,23 @@ pub fn migrate_legacy_install_with_detector(
     root: &Path,
     detect: &LegacyVersionDetector,
     post_create: Option<&LegacyPostCreateHook>,
-) -> Result<bool> {
+) -> Result<bool, MigrateLegacyError> {
     // cubic PR69 UzG: refuse to scan or mutate under a symlinked managed
     // directory. A symlink under `<root>/tools/nushell` could redirect the
     // rename or filesystem-truth cleanup outside `$NUMAN_ROOT` and silently
     // rewrite unrelated user-visible state.
     let legacy_dir = versioned_nu_dir(root);
-    if crate::util::fs_safety::is_symlink_or_reparse(&legacy_dir)? {
-        anyhow::bail!(
-            "Refusing to migrate: managed Nushell directory '{}' is a symlink or reparse point. \
-             Run `numan setup nu` from a clean root before migrating.",
-            legacy_dir.display(),
-        );
+    match crate::util::fs_safety::is_symlink_or_reparse(&legacy_dir) {
+        Ok(true) => {
+            return Err(MigrateLegacyError::SymlinkedManagedDir { path: legacy_dir });
+        }
+        Ok(false) => {}
+        Err(e) => {
+            return Err(MigrateLegacyError::SymlinkCheck {
+                path: legacy_dir,
+                message: e.to_string(),
+            });
+        }
     }
 
     // Self-heal any in-flight migration journal from a prior crashed attempt.
@@ -145,9 +270,25 @@ pub fn migrate_legacy_install_with_detector(
     if versioned_dir.exists() {
         let mut found_installed = false;
         let bin_name = nu_binary_name();
-        for entry in std::fs::read_dir(&versioned_dir)? {
-            let entry = entry?;
-            if !entry.file_type()?.is_dir() {
+        let entries = std::fs::read_dir(&versioned_dir).map_err(|source| {
+            MigrateLegacyError::ReadVersionedDir {
+                path: versioned_dir.clone(),
+                source,
+            }
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|source| MigrateLegacyError::ReadVersionedDir {
+                path: versioned_dir.clone(),
+                source,
+            })?;
+            let file_type =
+                entry
+                    .file_type()
+                    .map_err(|source| MigrateLegacyError::ReadVersionedDir {
+                        path: versioned_dir.clone(),
+                        source,
+                    })?;
+            if !file_type.is_dir() {
                 continue;
             }
             if entry.path().join(bin_name).exists() {
@@ -164,11 +305,9 @@ pub fn migrate_legacy_install_with_detector(
         }
     }
 
-    let version = detect(&legacy_binary).with_context(|| {
-        format!(
-            "Failed to determine version of legacy Nu binary at '{}'",
-            legacy_binary.display()
-        )
+    let version = detect(&legacy_binary).map_err(|e| MigrateLegacyError::DetectFailed {
+        path: legacy_binary.clone(),
+        message: e.to_string(),
     })?;
     let version = normalize_version(&version)?;
 
@@ -180,42 +319,38 @@ pub fn migrate_legacy_install_with_detector(
         version: version.clone(),
         stage: MigrationStage::Prepared,
     };
-    journal.save(root).with_context(|| {
-        format!(
-            "Failed to write migration journal (Prepared) before 'create_dir_all' for '{}'",
-            version
-        )
-    })?;
+    journal
+        .save(root)
+        .map_err(|source| MigrateLegacyError::JournalPrepared {
+            version: version.clone(),
+            source,
+        })?;
 
     let version_dir = version_install_dir(root, &version);
     let version_journal_path = PendingMigration::journal_path(root);
-    std::fs::create_dir_all(&version_dir).with_context(|| {
-        format!(
-            "Failed to create version directory '{}' (migration journal at Prepared: '{}')",
-            version_dir.display(),
-            version_journal_path.display()
-        )
+    std::fs::create_dir_all(&version_dir).map_err(|source| {
+        MigrateLegacyError::CreateVersionDir {
+            path: version_dir.clone(),
+            journal_path: version_journal_path,
+            source,
+        }
     })?;
 
     // Post-create seam (tests only). Real callers pass `None`; a failing
     // hook here simulates the original cross-device rename bug.
     if let Some(hook) = post_create {
-        hook(&version_dir).with_context(|| {
-            format!(
-                "Post-create hook blocked migration for '{}'",
-                version_dir.display()
-            )
+        hook(&version_dir).map_err(|e| MigrateLegacyError::PostCreateHook {
+            path: version_dir.clone(),
+            message: e.to_string(),
         })?;
     }
 
     let new_binary = version_binary(root, &version);
-    std::fs::rename(&legacy_binary, &new_binary).with_context(|| {
-        format!(
-            "Failed to move '{}' to '{}' (migration journal at Prepared: a future reconcile will clean up '<{}>/')",
-            legacy_binary.display(),
-            new_binary.display(),
-            version
-        )
+    std::fs::rename(&legacy_binary, &new_binary).map_err(|source| MigrateLegacyError::Rename {
+        from: legacy_binary.clone(),
+        to: new_binary.clone(),
+        version: version.clone(),
+        source,
     })?;
 
     // Journal `Renamed` BEFORE `write_active_version`. If we crash here,
@@ -225,20 +360,18 @@ pub fn migrate_legacy_install_with_detector(
         version: version.clone(),
         stage: MigrationStage::Renamed,
     };
-    journal.save(root).with_context(|| {
-        format!(
-            "Failed to advance migration journal to 'Renamed' (legacy binary already moved to '{}')",
-            new_binary.display()
-        )
-    })?;
+    journal
+        .save(root)
+        .map_err(|source| MigrateLegacyError::JournalRenamed {
+            binary: new_binary.clone(),
+            source,
+        })?;
 
     // Set as active version.
-    write_active_version(root, &version).with_context(|| {
-        format!(
-            "Failed to persist active Nu version marker for '{}' (legacy binary already moved to '{}'; migration journal is at Renamed stage)",
-            version,
-            new_binary.display()
-        )
+    write_active_version(root, &version).map_err(|source| MigrateLegacyError::PersistActive {
+        version: version.clone(),
+        binary: new_binary.clone(),
+        source,
     })?;
 
     // Set the journal stage to `Active` and immediately clear it — any
@@ -249,12 +382,12 @@ pub fn migrate_legacy_install_with_detector(
         version: version.clone(),
         stage: MigrationStage::Active,
     };
-    journal.save(root).with_context(|| {
-        format!(
-            "Failed to advance migration journal to 'Active' for '{}' (active version is set; clearing journal)",
-            version
-        )
-    })?;
+    journal
+        .save(root)
+        .map_err(|source| MigrateLegacyError::JournalActive {
+            version: version.clone(),
+            source,
+        })?;
     PendingMigration::delete(root)?;
 
     // Note: the legacy binary's parent (`<root>/tools/nushell/`) now contains
@@ -271,7 +404,7 @@ pub fn migrate_legacy_install_with_detector(
 /// - "Nushell 0.113.1 (abc123)"
 /// - "0.113.1"
 /// - "0.113.1\n"
-fn parse_nu_version_from_output(output: &str) -> Result<String> {
+fn parse_nu_version_from_output(output: &str) -> Result<String, MigrateLegacyError> {
     let trimmed = output.trim();
     // Strip an optional leading "Nushell " so the rest matches what
     // `NuVersion::parse` already accepts (semver with optional build
@@ -288,7 +421,9 @@ fn parse_nu_version_from_output(output: &str) -> Result<String> {
     if semver::Version::parse(body).is_ok() {
         return Ok(body.to_string());
     }
-    bail!("Failed to parse Nu version from output: '{}'", trimmed)
+    Err(MigrateLegacyError::ParseVersionOutput {
+        output: trimmed.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -385,8 +520,15 @@ mod tests {
         let root = tmp.path();
         let binary = create_legacy_binary(root, None);
 
-        let result =
-            migrate_legacy_install_with_detector(root, &|_| bail!("simulated probe failure"), None);
+        let result = migrate_legacy_install_with_detector(
+            root,
+            &|_| {
+                Err(MigrateLegacyError::Detector {
+                    message: "simulated probe failure".into(),
+                })
+            },
+            None,
+        );
 
         assert!(result.is_err());
         assert!(
@@ -423,7 +565,11 @@ mod tests {
         let first = migrate_legacy_install_with_detector(
             root,
             &|_| Ok("0.113.1".to_string()),
-            Some(&|_| bail!("simulated cross-device rename failure")),
+            Some(&|_| {
+                Err(MigrateLegacyError::Detector {
+                    message: "simulated cross-device rename failure".into(),
+                })
+            }),
         );
         assert!(
             first.is_err(),

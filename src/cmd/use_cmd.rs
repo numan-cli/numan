@@ -46,12 +46,15 @@ fn with_mutation_guard(root: &Path, op: impl FnOnce(&Path) -> Result<()>) -> Res
 /// Test seam for [`with_mutation_guard`]: inject the legacy-migration step so
 /// unit tests can cover success and failure without spawning Nu or touching
 /// a real legacy layout. Signature matches [`migrate_legacy_install`]
-/// (`Result<bool>`: whether a migration ran).
-fn with_mutation_guard_and_migrator(
+/// (`Result<bool, _>`: whether a migration ran).
+fn with_mutation_guard_and_migrator<E>(
     root: &Path,
     op: impl FnOnce(&Path) -> Result<()>,
-    migrate: fn(&Path) -> Result<bool>,
-) -> Result<()> {
+    migrate: impl FnOnce(&Path) -> std::result::Result<bool, E>,
+) -> Result<()>
+where
+    E: Into<anyhow::Error>,
+{
     // Hold the mutation lock for the entire operation to prevent races
     // between concurrent `numan setup nu` and `numan use` invocations.
     let _lock = acquire_mutation_lock(root)?;
@@ -68,7 +71,9 @@ fn with_mutation_guard_and_migrator(
     )
     .with_context(|| "Failed to create pre-mutation snapshot for `numan use`")?;
 
-    migrate(root).with_context(|| "Failed to migrate legacy Nu installation")?;
+    migrate(root)
+        .map_err(Into::into)
+        .with_context(|| "Failed to migrate legacy Nu installation")?;
 
     op(root)
 }

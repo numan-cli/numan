@@ -4,11 +4,85 @@
 //! The "active" version is tracked in `<root>/nu_state/active-version.json` and determines
 //! which Nu binary is used for plugin registration, module autoload, and other operations.
 
-use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use thiserror::Error;
 
 use crate::util::atomic::write_json_atomic;
+
+/// Errors from managed-Nu version layout and active-marker operations.
+#[derive(Debug, Error)]
+pub enum VersionManagerError {
+    #[error("Invalid Nu version '{version}'; expected X.Y.Z")]
+    InvalidVersion { version: String },
+
+    #[error("Failed to read active version from '{}'", path.display())]
+    ReadActiveMarker {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("Malformed active-version.json at '{}'", path.display())]
+    MalformedActiveMarker {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+
+    #[error("Failed to create nu_state directory '{}'", path.display())]
+    CreateNuState {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("Failed to write active version to '{}': {message}", path.display())]
+    WriteActiveMarker { path: PathBuf, message: String },
+
+    #[error("Failed to clear active-version marker at '{}'", path.display())]
+    ClearActiveMarker {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error(
+        "Refusing to persist active-version marker with `..` in binary path '{}' \
+         (path-traversal segments would let a tampered marker escape the managed tree).",
+        path.display()
+    )]
+    BinaryPathTraversal { path: PathBuf },
+
+    #[error(
+        "Active Nu version '{version}' is set but neither the on-tree binary at '{}' \
+         nor the recorded off-tree path '{}' is present. \
+         Run 'numan setup nu' to install the selected version or \
+         'numan use <version>' / 'numan use latest' to choose a different one.",
+        on_tree.display(),
+        off_tree.display()
+    )]
+    ActiveBinaryMissingBoth {
+        version: String,
+        on_tree: PathBuf,
+        off_tree: PathBuf,
+    },
+
+    #[error(
+        "Active Nu version '{version}' is set but the on-tree binary at '{}' is missing. \
+         Run 'numan setup nu' to install the selected version or \
+         'numan use <version>' / 'numan use latest' to choose a different one.",
+        on_tree.display()
+    )]
+    ActiveBinaryMissingOnTree { version: String, on_tree: PathBuf },
+
+    #[error("Failed to read Nu versions directory '{}'", path.display())]
+    ListInstalled {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
 
 /// Active version marker file location.
 fn active_version_path(root: &Path) -> PathBuf {
@@ -42,20 +116,23 @@ pub struct ActiveVersion {
 /// marker is propagated as a contextual error so callers can distinguish
 /// "no selection" from "broken selection" — `numan doctor` relies on the
 /// distinction to report dangling active-version state.
-pub fn read_active_version(root: &Path) -> Result<Option<ActiveVersion>> {
+pub fn read_active_version(root: &Path) -> Result<Option<ActiveVersion>, VersionManagerError> {
     let path = active_version_path(root);
     if !path.exists() {
         return Ok(None);
     }
-    let content = std::fs::read_to_string(&path)
-        .with_context(|| format!("Failed to read active version from '{}'", path.display()))?;
+    let content =
+        std::fs::read_to_string(&path).map_err(|source| VersionManagerError::ReadActiveMarker {
+            path: path.clone(),
+            source,
+        })?;
     let active: ActiveVersion = serde_json::from_str(&content)
-        .with_context(|| format!("Malformed active-version.json at '{}'", path.display()))?;
+        .map_err(|source| VersionManagerError::MalformedActiveMarker { path, source })?;
     Ok(Some(active))
 }
 
 /// Write the active Nu version to the marker file.
-pub fn write_active_version(root: &Path, version: &str) -> Result<()> {
+pub fn write_active_version(root: &Path, version: &str) -> Result<(), VersionManagerError> {
     let normalized = normalize_version(version)?;
     write_active_marker(
         root,
@@ -78,7 +155,7 @@ pub fn write_active_version_with_binary(
     root: &Path,
     version: &str,
     binary_path: &Path,
-) -> Result<()> {
+) -> Result<(), VersionManagerError> {
     let normalized = normalize_version(version)?;
 
     // Refuse any `..` segment: the marker is later read by
@@ -92,11 +169,9 @@ pub fn write_active_version_with_binary(
     // `offtree_*` test fixtures below prove it).
     for component in binary_path.components() {
         if matches!(component, std::path::Component::ParentDir) {
-            bail!(
-                "Refusing to persist active-version marker with `..` in binary path '{}' \
-                 (path-traversal segments would let a tampered marker escape the managed tree).",
-                binary_path.display(),
-            );
+            return Err(VersionManagerError::BinaryPathTraversal {
+                path: binary_path.to_path_buf(),
+            });
         }
     }
 
@@ -109,16 +184,22 @@ pub fn write_active_version_with_binary(
     )
 }
 
-pub(crate) fn write_active_marker(root: &Path, active: &ActiveVersion) -> Result<()> {
+pub(crate) fn write_active_marker(
+    root: &Path,
+    active: &ActiveVersion,
+) -> Result<(), VersionManagerError> {
     let path = active_version_path(root);
     // Ensure parent directory exists.
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| {
-            format!("Failed to create nu_state directory '{}'", parent.display())
+        std::fs::create_dir_all(parent).map_err(|source| VersionManagerError::CreateNuState {
+            path: parent.to_path_buf(),
+            source,
         })?;
     }
-    write_json_atomic(&path, active)
-        .with_context(|| format!("Failed to write active version to '{}'", path.display()))?;
+    write_json_atomic(&path, active).map_err(|e| VersionManagerError::WriteActiveMarker {
+        path,
+        message: e.to_string(),
+    })?;
     Ok(())
 }
 
@@ -128,17 +209,12 @@ pub(crate) fn write_active_marker(root: &Path, active: &ActiveVersion) -> Result
 /// existed. Other I/O errors are propagated with context. Callers that
 /// destructively remove the versioned Nu tree should call this first so the
 /// marker cannot dangle at a missing binary.
-pub fn clear_active_version(root: &Path) -> Result<bool> {
+pub fn clear_active_version(root: &Path) -> Result<bool, VersionManagerError> {
     let path = active_version_path(root);
     match std::fs::remove_file(&path) {
         Ok(()) => Ok(true),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(e).with_context(|| {
-            format!(
-                "Failed to clear active-version marker at '{}'",
-                path.display()
-            )
-        }),
+        Err(source) => Err(VersionManagerError::ClearActiveMarker { path, source }),
     }
 }
 
@@ -155,17 +231,21 @@ pub fn versioned_nu_dir(root: &Path) -> PathBuf {
 /// single validation entry point that callers handing a caller-supplied
 /// version to `version_install_dir` / `version_binary` must call first, so
 /// `numan setup nu ../../tmp/pwn` cannot escape `$NUMAN_ROOT`.
-pub fn normalize_version(version: &str) -> Result<String> {
+pub fn normalize_version(version: &str) -> Result<String, VersionManagerError> {
     let version = version.strip_prefix('v').unwrap_or(version);
     if version.is_empty()
         || version.contains('/')
         || version.contains('\\')
         || version.contains("..")
     {
-        bail!("Invalid Nu version '{}'; expected X.Y.Z", version)
+        return Err(VersionManagerError::InvalidVersion {
+            version: version.to_string(),
+        });
     }
-    let parsed = semver::Version::parse(version)
-        .with_context(|| format!("Invalid Nu version '{}'; expected X.Y.Z", version))?;
+    let parsed =
+        semver::Version::parse(version).map_err(|_| VersionManagerError::InvalidVersion {
+            version: version.to_string(),
+        })?;
     Ok(parsed.to_string())
 }
 
@@ -195,7 +275,7 @@ pub fn version_binary(root: &Path, version: &str) -> PathBuf {
 ///     2. The off-tree `binary_path` recorded by an earlier
 ///        `numan setup nu use <path>` swap (when the on-tree version-binary
 ///        is absent and the recorded binary path still resolves).
-pub fn active_nu_binary(root: &Path) -> Result<Option<PathBuf>> {
+pub fn active_nu_binary(root: &Path) -> Result<Option<PathBuf>, VersionManagerError> {
     let Some(active) = read_active_version(root)? else {
         return Ok(None);
     };
@@ -222,23 +302,13 @@ pub fn active_nu_binary(root: &Path) -> Result<Option<PathBuf>> {
     // off-tree path is recorded. The literal "<none>" placeholder previously
     // rendered here was clunky in `numan doctor` output.
     match active.binary_path.as_ref() {
-        Some(off_tree) => Err(anyhow::anyhow!(
-            "Active Nu version '{}' is set but neither the on-tree binary at '{}' \
-             nor the recorded off-tree path '{}' is present. \
-             Run 'numan setup nu' to install the selected version or \
-             'numan use <version>' / 'numan use latest' to choose a different one.",
+        Some(off_tree) => Err(VersionManagerError::ActiveBinaryMissingBoth {
             version,
-            on_tree.display(),
-            std::path::PathBuf::from(off_tree).display(),
-        )),
-        None => Err(anyhow::anyhow!(
-            // pre-migration `nu_state/active-version.json` markers have no off-tree field
-            "Active Nu version '{}' is set but the on-tree binary at '{}' is missing. \
-             Run 'numan setup nu' to install the selected version or \
-             'numan use <version>' / 'numan use latest' to choose a different one.",
-            version,
-            on_tree.display(),
-        )),
+            on_tree,
+            off_tree: PathBuf::from(off_tree),
+        }),
+        // pre-migration `nu_state/active-version.json` markers have no off-tree field
+        None => Err(VersionManagerError::ActiveBinaryMissingOnTree { version, on_tree }),
     }
 }
 
@@ -254,15 +324,28 @@ pub fn active_nu_binary(root: &Path) -> Result<Option<PathBuf>> {
 ///     is absent, the marker version is appended and deduped.
 ///
 /// The vec is sorted semver-descending (newest first), same as before.
-pub fn list_installed_versions(root: &Path) -> Result<Vec<String>> {
+pub fn list_installed_versions(root: &Path) -> Result<Vec<String>, VersionManagerError> {
     let dir = versioned_nu_dir(root);
     let mut versions = Vec::new();
     if dir.exists() {
-        for entry in std::fs::read_dir(&dir)
-            .with_context(|| format!("Failed to read Nu versions directory '{}'", dir.display()))?
-        {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
+        let entries =
+            std::fs::read_dir(&dir).map_err(|source| VersionManagerError::ListInstalled {
+                path: dir.clone(),
+                source,
+            })?;
+        for entry in entries {
+            let entry = entry.map_err(|source| VersionManagerError::ListInstalled {
+                path: dir.clone(),
+                source,
+            })?;
+            let file_type =
+                entry
+                    .file_type()
+                    .map_err(|source| VersionManagerError::ListInstalled {
+                        path: dir.clone(),
+                        source,
+                    })?;
+            if file_type.is_dir() {
                 if let Some(name) = entry.file_name().to_str() {
                     // Only well-formed, canonical version directories are installable
                     // selections. Reject `v`-prefixed / alias names so a dir
@@ -290,9 +373,7 @@ pub fn list_installed_versions(root: &Path) -> Result<Vec<String>> {
     // (binary_path is Some) AND its version is not already in the on-tree
     // scan — we dedupe so a user who runs `setup nu <version>` after an
     // off-tree swap sees a clean list. Propagate marker read failures.
-    if let Some(marker) = read_active_version(root)
-        .with_context(|| "Failed to read active-version marker while listing Nu versions")?
-    {
+    if let Some(marker) = read_active_version(root)? {
         // Only well-formed versions are listed as selectable.
         if let Ok(normalized) = normalize_version(&marker.version) {
             if let Some(off_tree) = marker.binary_path.as_ref() {
@@ -350,7 +431,7 @@ pub fn is_version_installed(root: &Path, version: &str) -> bool {
 }
 
 /// Get the latest installed Nu version, or `None` if no versions are installed.
-pub fn latest_installed_version(root: &Path) -> Result<Option<String>> {
+pub fn latest_installed_version(root: &Path) -> Result<Option<String>, VersionManagerError> {
     let versions = list_installed_versions(root)?;
     Ok(versions.into_iter().next())
 }
