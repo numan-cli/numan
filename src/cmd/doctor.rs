@@ -617,8 +617,13 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
         ));
     }
 
-    if let Ok(Some(j)) = PendingMigration::load(root) {
-        findings.push(finding(
+    // PR69 WCk: surface read/parse errors instead of silently dropping them.
+    // A malformed `migration-journal.json` previously produced no finding at
+    // all, so `doctor --fix` could report a clean result while the recovery
+    // state is unreadable. Each Err branch carries the journal path so the
+    // fix hint is unambiguous.
+    match PendingMigration::load(root) {
+        Ok(Some(j)) => findings.push(finding(
             "journal.migration_pending",
             Severity::Warn,
             format!(
@@ -627,7 +632,20 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
             ),
             Some(CMD_USE),
             RepairTier::Auto,
-        ));
+        )),
+        Ok(None) => {}
+        Err(e) => findings.push(finding(
+            "journal.migration_invalid",
+            Severity::Error,
+            format!(
+                "Migration journal at '{}' is unreadable: {e}. \
+                 Run `numan doctor --fix` (manual tier) or delete the stale \
+                 journal to recover.",
+                PendingMigration::journal_path(root).display()
+            ),
+            Some(CMD_USE),
+            RepairTier::Manual,
+        )),
     }
 }
 
@@ -2332,6 +2350,57 @@ mod tests {
         assert!(
             PendingMigration::load(root).unwrap().is_none(),
             "journal must be cleared by reconcile"
+        );
+    }
+
+    /// PR69 WCk regression: a malformed `migration-journal.json` must
+    /// surface a `journal.migration_invalid` finding at Error severity with
+    /// a Manual repair tier. Previously the report silently dropped the
+    /// Err branch, so `doctor --fix` could report a clean result while
+    /// recovery state was unreadable.
+    #[test]
+    fn doctor_reports_malformed_migration_journal_as_invalid() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        // Lay down a journal-shaped file with garbage content so
+        // `PendingMigration::load` returns Err (parse failure).
+        let journal_path = PendingMigration::journal_path(root);
+        std::fs::create_dir_all(journal_path.parent().unwrap()).unwrap();
+        std::fs::write(&journal_path, b"{ this is not valid json").unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                fix: false,
+                yes: false,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_invalid")
+            .expect("journal.migration_invalid finding must be published on parse Err");
+        assert_eq!(f.severity, Severity::Error);
+        assert_eq!(f.repair, RepairTier::Manual);
+        assert!(
+            f.message.contains("unreadable"),
+            "finding must mention unreadable so safe-batch can grep it: {}",
+            f.message
+        );
+        assert_eq!(f.fix.as_deref(), Some(crate::util::hints::CMD_USE));
+        // The well-formed pending finding must NOT be published for an
+        // invalid journal — otherwise the user sees conflicting guidance.
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.id != "journal.migration_pending"),
+            "invalid journal must NOT also produce a Pending finding"
         );
     }
 }

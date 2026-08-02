@@ -65,6 +65,7 @@ fn setup_nu_uses_injected_installer_without_network() {
             force: false,
             skip_path: true,
             version: None,
+            caller_consented_destructive: false,
         },
         installer,
     )
