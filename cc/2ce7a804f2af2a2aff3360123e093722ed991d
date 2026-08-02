@@ -1,0 +1,19 @@
+src/nu/bootstrap.rs
+  s_732abe60fcd00a::t_e2d15ee2d90efd 207
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "cc2ce7a804f2af2a2aff3360123e093722ed991d",
+  "prompts": {},
+  "sessions": {
+    "s_732abe60fcd00a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "15700b71-41ec-4826-b1a4-7b09b3d499fb",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}
