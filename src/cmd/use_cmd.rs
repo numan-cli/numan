@@ -77,7 +77,11 @@ fn execute_latest(root: &Path) -> Result<()> {
             if installed_binary == on_tree {
                 version_manager::write_active_version(root, &version)?;
             } else {
-                version_manager::write_active_version_with_binary(root, &version, &installed_binary)?;
+                version_manager::write_active_version_with_binary(
+                    root,
+                    &version,
+                    &installed_binary,
+                )?;
             }
             println!("Switched to Nu {} (latest installed).", version);
             Ok(())

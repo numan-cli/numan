@@ -831,7 +831,7 @@ mod tests {
         let bin = tmp.join("fake-nu");
         let script: &[u8] = b"#!/bin/sh\n\
 case $1 in\n\
-  -c|--version) printf '{ \"version\":\"0.113.1\", \"plugin_path\":\"\", \"data_dir\":\"\", \"vendor_autoload_dirs\":[] }\n' ;;\n\
+  -c|--version) printf '{ \"version\":\"0.113.1\", \"plugin_path\":\"/tmp\", \"data_dir\":\"/tmp\", \"vendor_autoload_dirs\":[\"/tmp/vendor/autoload\"] }\n' ;;\n\
 esac\n";
         std::fs::write(&bin, script).expect("write fake-nu script");
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))
@@ -842,9 +842,9 @@ esac\n";
     /// Save/restore process-global PATH around a closure so `prepend_*`
     /// calls don't leak across tests.
     #[cfg_attr(not(unix), allow(dead_code))]
-    fn run_with_path_snapshot<F>(body: F)
+    fn run_with_path_snapshot<F, R>(body: F) -> R
     where
-        F: FnOnce() + std::panic::UnwindSafe,
+        F: FnOnce() -> R + std::panic::UnwindSafe,
     {
         let saved = std::env::var("PATH").ok();
         let result = std::panic::catch_unwind(body);
@@ -852,8 +852,9 @@ esac\n";
             Some(p) => std::env::set_var("PATH", p),
             None => std::env::remove_var("PATH"),
         }
-        if let Err(panic) = result {
-            std::panic::resume_unwind(panic);
+        match result {
+            Ok(output) => output,
+            Err(panic) => std::panic::resume_unwind(panic),
         }
     }
 
@@ -933,7 +934,7 @@ esac\n";
             confirm: Some(&mock_confirm),
         };
         let result = run_with_path_snapshot(std::panic::AssertUnwindSafe(|| {
-            execute_use_existing(&fake_nu, true, &root, opts)
+            execute_use_existing(&fake_nu, false, &root, opts)
         }));
         let err_msg = match result {
             Ok(()) => panic!("expected Err from declined confirm"),

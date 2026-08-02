@@ -332,6 +332,18 @@ pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
         }
     }
 
+    // 3. Any on-tree/off-tree installed version (covers direct installs where
+    //    no active marker has been written yet).
+    if let Ok(versions) = version_manager::list_installed_versions(root) {
+        for version in versions {
+            if let Some(binary) = version_manager::resolve_installed_version(root, &version) {
+                if binary.is_file() {
+                    return Ok(binary.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+
     if let Ok(path) = find_nu_on_path() {
         return Ok(path);
     }

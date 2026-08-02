@@ -220,9 +220,8 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
     // is a pure payload write: the caller (`execute_nu_setup_with_installer`)
     // owns active-marker persistence; per AGENTS.md, only `activate`/`deactivate`
     // modify Nu integration state.
-    let normalized = version_manager::normalize_version(version).with_context(|| {
-        format!("Invalid Nu version '{}' for installation", version)
-    })?;
+    let normalized = version_manager::normalize_version(version)
+        .with_context(|| format!("Invalid Nu version '{}' for installation", version))?;
     let dest_dir = version_manager::version_install_dir(root, &normalized);
     std::fs::create_dir_all(&dest_dir).with_context(|| {
         format!(
@@ -443,7 +442,11 @@ fn path_parent_for_registration(input: &Path, resolved: &Path) -> Result<PathBuf
 }
 
 /// Register an existing Nushell binary: prepend its directory to PATH and persist when allowed.
-pub fn register_existing_nu(binary: &Path, root: &Path, options: &NuSetupOptions) -> Result<PathBuf> {
+pub fn register_existing_nu(
+    binary: &Path,
+    root: &Path,
+    options: &NuSetupOptions,
+) -> Result<PathBuf> {
     let input = binary.to_path_buf();
     let resolved = input
         .canonicalize()

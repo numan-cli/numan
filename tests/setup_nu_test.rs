@@ -9,6 +9,7 @@ use numan_cli::cmd::setup::{execute_nu, NuAction, NuSetupArgs};
 use numan_cli::core::platform::Platform;
 use numan_cli::nu::bootstrap::{self, install_from_archive, NuSetupOptions};
 use numan_cli::nu::paths::{find_nu_executable_with_root, validate_nushell_binary};
+use numan_cli::nu::version_manager;
 use std::io::Write;
 use std::path::PathBuf;
 use zip::write::SimpleFileOptions;
@@ -37,7 +38,7 @@ fn managed_nu_is_discovered_after_install() {
     install_from_archive(&zip_path, root, "0.0.0-test").unwrap();
 
     let resolved = find_nu_executable_with_root(root).unwrap();
-    let expected = bootstrap::managed_nu_binary(root);
+    let expected = version_manager::version_binary(root, "0.0.0-test");
     assert_eq!(
         std::fs::canonicalize(&resolved).unwrap(),
         std::fs::canonicalize(&expected).unwrap(),
