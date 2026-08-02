@@ -767,20 +767,34 @@ where
 
     let installed = install(root, platform)?;
 
-    // Persist the freshly installed (pinned) version as the active version so
-    // `numan use list` and downstream activation see it as the selected Nu.
-    // `latest` is left to `numan use latest` — the user explicitly resolves the
-    // release tag there.
-    if let Some(version) = &options.version {
-        let pinned = version_manager::normalize_version(version)
-            .with_context(|| format!("Failed to normalize requested version '{}'", version))?;
-        version_manager::write_active_version(root, &pinned).with_context(|| {
+    // Persist the freshly installed version as the active version so
+    // `numan use list`, `find_nu_executable_with_root`, and downstream
+    // activation see it as the selected Nu. This must run for BOTH a pinned
+    // `--version` install and a plain `latest` install: the installer wrote
+    // into `<root>/tools/nushell/<version>/nu`, so the concrete version is the
+    // name of the binary's parent directory regardless of how it was resolved.
+    let installed_version = installed
+        .parent()
+        .and_then(|dir| dir.file_name())
+        .and_then(|name| name.to_str())
+        .with_context(|| {
             format!(
-                "Failed to persist installed Nu version '{}' as active",
-                pinned
+                "Could not derive installed Nu version from install path '{}'",
+                installed.display()
             )
         })?;
-    }
+    let normalized = version_manager::normalize_version(installed_version).with_context(|| {
+        format!(
+            "Failed to normalize installed Nu version '{}'",
+            installed_version
+        )
+    })?;
+    version_manager::write_active_version(root, &normalized).with_context(|| {
+        format!(
+            "Failed to persist installed Nu version '{}' as active",
+            normalized
+        )
+    })?;
 
     // Prepend the directory that actually contains the freshly installed
     // binary (`<root>/tools/nushell/<version>/`), not the layout root, so the
