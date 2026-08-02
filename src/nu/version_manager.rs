@@ -272,6 +272,20 @@ pub fn list_installed_versions(root: &Path) -> Result<Vec<String>> {
         }
     }
 
+    // Include the legacy single-binary layout without migrating it: listing
+    // must remain read-only. The installer records its version in VERSION.
+    let legacy_binary = dir.join(if cfg!(windows) { "nu.exe" } else { "nu" });
+    let legacy_version_file = dir.join("VERSION");
+    if legacy_binary.is_file() {
+        if let Ok(raw) = std::fs::read_to_string(&legacy_version_file) {
+            if let Ok(version) = normalize_version(raw.trim()) {
+                if !versions.iter().any(|v| v == &version) {
+                    versions.push(version);
+                }
+            }
+        }
+    }
+
     // Augment with the off-tree marker's version so the user's chosen
     // version appears in `numan use list` even when no on-tree install
     // exists. Only append when the marker names an OFF-TREE selection
