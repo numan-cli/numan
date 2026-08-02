@@ -22,13 +22,30 @@ pub struct UseArgs {
 }
 
 pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
+    match args.version.as_str() {
+        // `list` is read-only: no lock, no snapshot. Taking the non-blocking
+        // mutation lock here would make a pure read fail under contention with
+        // a concurrent `install`/`setup`, and the snapshot would be clutter.
+        "list" => execute_list(root),
+        // The mutating arms flip the active-version marker, so they hold the
+        // lock for the whole operation (to prevent races with concurrent
+        // `numan setup nu` / `numan use`) and snapshot established state first.
+        "latest" => with_mutation_guard(root, execute_latest),
+        version => with_mutation_guard(root, |root| execute_switch(root, version)),
+    }
+}
+
+/// Acquire the mutation lock and take a `PreMutation` snapshot before running a
+/// mutating `numan use` arm.
+fn with_mutation_guard(
+    root: &Path,
+    op: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
     // Hold the mutation lock for the entire operation to prevent races
     // between concurrent `numan setup nu` and `numan use` invocations.
     let _lock = acquire_mutation_lock(root)?;
 
-    // Snapshot established state before any mutation. This covers both the
-    // legacy-migration step (rename + active-version write) and the version
-    // switch below.
+    // Snapshot established state before any mutation.
     create_snapshot(
         root,
         SnapshotReason::PreMutation,
@@ -38,11 +55,7 @@ pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
     )
     .with_context(|| "Failed to create pre-mutation snapshot for `numan use`")?;
 
-    match args.version.as_str() {
-        "list" => execute_list(root),
-        "latest" => execute_latest(root),
-        version => execute_switch(root, version),
-    }
+    op(root)
 }
 
 /// List all installed Nu versions, marking the active one.
