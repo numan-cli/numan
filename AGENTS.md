@@ -88,6 +88,8 @@ src/
     bootstrap.rs        — download/install official Nushell release under tools/nushell
     paths.rs           — Nu path cache (detect, load, save, validate_drift)
     autoload.rs        — render_use_statement, generate_autoload_content, FakeCandidateRunner, managed-file ops (Phase 4)
+    migrate_legacy.rs  — Legacy single-binary Nu → versioned-layout transition (journaled; Phase-1 cleanup; see docs/numan-doctor.md)
+    version_manager.rs — Managed-Nu versioned layout (`tools/nushell/<version>/`), active marker (`nu_state/active-version.json`), on/off-tree resolution
   util/
     atomic.rs          — write_json_atomic helper (tempfile+persist)
     fs_safety.rs       — OWNERSHIP_MARKER, acquire_mutation_lock (advisory fd_lock mutex), assert_managed_file_owned (Phase 4)

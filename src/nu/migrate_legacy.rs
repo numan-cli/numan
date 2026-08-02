@@ -254,10 +254,10 @@ pub fn migrate_legacy_install_with_detector(
     })?;
     PendingMigration::delete(root)?;
 
-    // Try to remove the now-empty legacy directory (ignore errors if not empty).
-    if let Some(parent) = legacy_binary.parent() {
-        let _ = std::fs::remove_dir(parent);
-    }
+    // Note: the legacy binary's parent (`<root>/tools/nushell/`) now contains
+    // the versioned install we just moved into it, so it cannot be removed.
+    // The versioned `<version>/` subtree is the authoritative location from
+    // this point forward; `tools/nushell/nu` will not be recreated.
 
     Ok(true)
 }
