@@ -40,7 +40,7 @@ pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
 
     // Attempt migration of legacy single-binary install before any operation.
     // This is a no-op if migration has already occurred or no legacy install exists.
-    version_manager::migrate_legacy_install(root)
+    crate::nu::migrate_legacy::migrate_legacy_install(root)
         .with_context(|| "Failed to migrate legacy Nu installation")?;
 
     match args.version.as_str() {
