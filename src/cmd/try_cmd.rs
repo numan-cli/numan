@@ -20,6 +20,12 @@ use crate::util::hints::{self, CMD_REGISTRY_SYNC};
 /// a matching managed Nu version or searching for another package with `numan search`.
 #[derive(Parser, Debug)]
 pub struct TryArgs {
+    /// Skip confirmation prompts. Does NOT consent to a managed-Nu install or
+    /// version switch via `nu_pin_offer`; that path is hard-gated against
+    /// silent switching even with `--yes`.
+    #[arg(long)]
+    pub yes: bool,
+
     /// Install only; do not activate
     #[arg(long)]
     pub no_activate: bool,

@@ -608,14 +608,9 @@ fn test_activate_stale_journal_requires_refresh() {
 #[test]
 fn test_activate_auto_confirms_on_no_tty() {
     // With the shared confirm utility, non-TTY sessions auto-confirm instead of
-    // bailing. Without --yes and no TTY, activate should proceed (auto-confirm).
-    //
-    // In CI (non-TTY), this test verifies auto-confirm works.
-    // In interactive dev (TTY), this test is skipped by the `is_terminal` check.
-    if std::io::stdin().is_terminal() {
-        // Running interactively — cannot test non-TTY path here; skip
-        return;
-    }
+    // bailing. Without --yes and no TTY, activate should proceed. The TTY
+    // branches of `confirm_or_auto` are covered by the unconditional unit tests
+    // in `src/util/confirm.rs`; this end-to-end path now runs everywhere.
 
     let env = TestEnv::new();
     env.write_nu_paths();

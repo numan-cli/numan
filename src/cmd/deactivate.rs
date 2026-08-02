@@ -1591,11 +1591,10 @@ mod tests {
 
     #[test]
     fn non_tty_auto_confirms() {
-        use std::io::IsTerminal;
-        if !std::io::stdin().is_terminal() {
-            let result = crate::util::confirm::confirm_or_auto("test?", false);
-            assert!(result.unwrap(), "non-TTY should auto-confirm");
-        }
+        // Use the *_with_tty variant so the assertion doesn't depend on the
+        // host machine's stdin state; preserves both branches' coverage.
+        let result = crate::util::confirm::confirm_or_auto_with_tty("test?", false, false);
+        assert!(result.unwrap(), "non-TTY should auto-confirm");
     }
 
     // ── fake unregistrar integration ──────────────────────────────────────────

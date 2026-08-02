@@ -65,7 +65,7 @@ src/
     completions.rs     — `numan completions <shell>`: bash/fish/zsh/powershell/nushell scripts (Phase 7.3)
     setup.rs           — `numan setup nu [VERSION]|remove|path|use <path>` + `setup loader`: Nushell bootstrap + nushell-loader install
     try_cmd.rs         — `numan try [--yes] [--no-activate]`: curated starter install + activate for current Nu
-    use_cmd.rs         — `numan use <version>`: reserved stub for side-by-side Nu version management (post-1.0)
+    use_cmd.rs         — `numan use <version>|latest|list`: activates a previously installed managed Nu version (no auto-download); writes the active-version marker after a PreMutation snapshot under the root mutation lock
     nu_pin_offer.rs    — Shared TTY offer to `setup nu <version>` + `init --refresh` on Nu mismatch
   install/
     download.rs        — HTTP download with progress
@@ -141,6 +141,7 @@ tests/
 - **Activation scope**: `PluginActivation` struct stores `(nu_executable_sha256, nu_version, plugin_registry_path)`; a plugin is "active" only when all three match the current `NuPaths` — bare `bool` would go stale after `numan init --refresh`
 - **Journal**: `state/pending-activation.json` written as all-`prepared` before first registration; each entry advances to `registered` atomically before lockfile update; reconciled on next `activate` run if process is interrupted
 - **Plugin deactivate journal**: `state/pending-plugin-deactivate.json` (`Prepared` → `Unregistered` → clear lockfile `activation`); reconciled on next `deactivate`; doctor warns `journal.plugin_deactivate_pending`
+- **Active version marker**: `nu_state/active-version.json` (`{ "version": "X.Y.Z" }`, optionally `{ "version": "X.Y.Z", "binary_path": "/abs/path/to/nu" }` for off-tree selections). Sole authority for which `tools/nushell/<v>/` is selected. Written by `numan setup nu` and `numan use <version>|latest`. The optional `binary_path` records the resolved off-tree binary when `numan setup nu use <path>` swaps to a user-supplied Nu so subsequent `numan use list` and `find_nu_executable_with_root` can resolve the chosen version even when no on-tree install exists (the field uses `#[serde(default, skip_serializing_if = "Option::is_none")]` so the on-disk shape stays `{ "version": ... }` for on-tree selections and pre-existing markers still load).
 - **Atomic writes**: all JSON state files (lockfile, journal, nu_state/paths.json) use `write_json_atomic` (tempfile in same dir + persist) — no partial-write corruption
 - **Function signatures**: use `&Path` not `&PathBuf` in function parameters (clippy::ptr_arg is CI-enforced)
 
