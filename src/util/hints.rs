@@ -63,6 +63,7 @@ pub fn shell_quote(s: &str) -> String {
                         | '~'
                         | '#'
                         | '!'
+                        | '\\'
                 )
         });
     if !needs_quoting {
@@ -228,6 +229,13 @@ mod tests {
     #[test]
     fn shell_quote_escapes_embedded_quotes() {
         assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn shell_quote_wraps_paths_with_backslashes() {
+        // Windows-style paths must stay copy-pasteable in shell hints.
+        assert_eq!(shell_quote(r"C:\tools\nu"), r"'C:\tools\nu'");
+        assert_eq!(shell_quote(r"/tmp/nu\bin"), r"'/tmp/nu\bin'");
     }
 
     #[test]

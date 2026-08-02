@@ -31,6 +31,7 @@ use crate::state::lockfile::Lockfile;
 use crate::state::migration_journal::{self as migration_journal, PendingMigration};
 use crate::state::nupm_import::NupmImportsFile;
 use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
+use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::fs_safety::{acquire_mutation_lock, assert_managed_file_owned};
 use crate::util::hints::{
     self, active_plugin_mutation_gated_doctor_message, registry_none_fix, setup_nu_use_existing,
@@ -1382,11 +1383,23 @@ fn apply_repairs(
             return Ok(records);
         }
         let id = "journal.migration_repaired".to_string();
-        // chatgpt PR69 S1A: reacquire the root mutation lock before the
-        // self-healing reconcile so concurrent `numan use` cannot race the
-        // journal stage advance + directory rename the same way AGENTS.md
-        // requires install/remove/activate/deactivate/numan-use to.
-        acquire_mutation_lock(root)?;
+        // Bind the lock guard so it lives through reconcile (a bare
+        // `acquire_mutation_lock(root)?` drops immediately). Snapshot first.
+        let _lock = acquire_mutation_lock(root)?;
+        if let Err(e) = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Doctor,
+            None,
+            None,
+        ) {
+            records.push(RepairRecord {
+                id,
+                status: RepairStatus::Failed,
+                reason: Some(format!("pre-mutation snapshot failed: {e:#}")),
+            });
+            return Ok(records);
+        }
         match migration_journal::reconcile(root) {
             Ok(_) => records.push(RepairRecord {
                 id,

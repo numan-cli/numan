@@ -412,6 +412,19 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
         }
     }
 
+    // PATH registration mutates user state even when no managed tree exists.
+    // Fail closed without `--yes` / TTY unless a confirm seam is injected.
+    if opts.confirm.is_none() {
+        require_tty_or_yes(
+            yes,
+            if managed_dir_was_present {
+                "managed Nushell wipe + PATH update"
+            } else {
+                "Nu PATH registration"
+            },
+        )?;
+    }
+
     snapshot_setup_mutation(root, SnapshotTrigger::Install)?;
     let options = NuSetupOptions {
         yes,
@@ -487,6 +500,19 @@ fn execute_use_existing(
                 None => confirm_or_bail(&prompt, false, cancel_msg)?,
             }
         }
+    }
+
+    // PATH registration mutates user state even when no managed tree exists.
+    // Fail closed without `--yes` / TTY unless a confirm seam is injected.
+    if opts.confirm.is_none() {
+        require_tty_or_yes(
+            yes,
+            if managed_dir_was_present {
+                "managed Nushell wipe + PATH update"
+            } else {
+                "Nu PATH registration"
+            },
+        )?;
     }
 
     snapshot_setup_mutation(root, SnapshotTrigger::Install)?;

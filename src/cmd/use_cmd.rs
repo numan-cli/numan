@@ -40,6 +40,18 @@ pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
 /// mutating `numan use` arm. Also runs journaled legacy-install migration so a
 /// single-binary layout is versioned before the active-marker flip.
 fn with_mutation_guard(root: &Path, op: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
+    with_mutation_guard_and_migrator(root, op, crate::nu::migrate_legacy::migrate_legacy_install)
+}
+
+/// Test seam for [`with_mutation_guard`]: inject the legacy-migration step so
+/// unit tests can cover success and failure without spawning Nu or touching
+/// a real legacy layout. Signature matches [`migrate_legacy_install`]
+/// (`Result<bool>`: whether a migration ran).
+fn with_mutation_guard_and_migrator(
+    root: &Path,
+    op: impl FnOnce(&Path) -> Result<()>,
+    migrate: fn(&Path) -> Result<bool>,
+) -> Result<()> {
     // Hold the mutation lock for the entire operation to prevent races
     // between concurrent `numan setup nu` and `numan use` invocations.
     let _lock = acquire_mutation_lock(root)?;
@@ -56,8 +68,7 @@ fn with_mutation_guard(root: &Path, op: impl FnOnce(&Path) -> Result<()>) -> Res
     )
     .with_context(|| "Failed to create pre-mutation snapshot for `numan use`")?;
 
-    crate::nu::migrate_legacy::migrate_legacy_install(root)
-        .with_context(|| "Failed to migrate legacy Nu installation")?;
+    migrate(root).with_context(|| "Failed to migrate legacy Nu installation")?;
 
     op(root)
 }
@@ -116,26 +127,32 @@ fn execute_latest(root: &Path) -> Result<()> {
 fn execute_switch(root: &Path, version: &str) -> Result<()> {
     let version = version_manager::normalize_version(version)?;
     // Validate the version is installed (on-tree or off-tree).
-    let installed_binary = version_manager::resolve_installed_version(root, &version)
-        .with_context(|| {
-            let installed = version_manager::list_installed_versions(root).unwrap_or_default();
-            if installed.is_empty() {
+    let installed_binary = match version_manager::resolve_installed_version(root, &version) {
+        Some(path) => path,
+        None => {
+            let installed = version_manager::list_installed_versions(root).with_context(|| {
                 format!(
+                    "Nu {} is not installed, and listing installed versions also failed",
+                    version
+                )
+            })?;
+            if installed.is_empty() {
+                bail!(
                     "No Nu versions installed.\n\
                      Run 'numan setup nu {}' to install.",
                     version
-                )
-            } else {
-                format!(
-                    "Nu {} is not installed.\n\
-                     Installed versions: {}\n\
-                     Run 'numan setup nu {}' to install, or 'numan use list' to see available versions.",
-                    version,
-                    installed.join(", "),
-                    version
-                )
+                );
             }
-        })?;
+            bail!(
+                "Nu {} is not installed.\n\
+                 Installed versions: {}\n\
+                 Run 'numan setup nu {}' to install, or 'numan use list' to see available versions.",
+                version,
+                installed.join(", "),
+                version
+            );
+        }
+    };
 
     // Switch to the requested version, preserving an off-tree binary path.
     let on_tree = version_manager::version_binary(root, &version);
@@ -283,6 +300,65 @@ mod tests {
         assert!(
             root.join("state/snapshots").exists(),
             "a version switch must create a PreMutation snapshot"
+        );
+    }
+
+    #[test]
+    fn test_use_runs_migration_before_version_selection() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static MIGRATED: AtomicBool = AtomicBool::new(false);
+
+        fn migrate_ok(_root: &Path) -> Result<bool> {
+            MIGRATED.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.113.1");
+        MIGRATED.store(false, Ordering::SeqCst);
+
+        with_mutation_guard_and_migrator(root, |root| execute_switch(root, "0.113.1"), migrate_ok)
+            .unwrap();
+
+        assert!(
+            MIGRATED.load(Ordering::SeqCst),
+            "legacy migration must run before version selection"
+        );
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.113.1");
+    }
+
+    #[test]
+    fn test_use_propagates_migration_error() {
+        fn migrate_err(_root: &Path) -> Result<bool> {
+            bail!("simulated migration failure")
+        }
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.113.1");
+
+        let err = with_mutation_guard_and_migrator(
+            root,
+            |root| execute_switch(root, "0.113.1"),
+            migrate_err,
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Failed to migrate legacy Nu installation"),
+            "migration error must keep context, got: {msg}"
+        );
+        assert!(
+            msg.contains("simulated migration failure"),
+            "underlying migration error must surface, got: {msg}"
+        );
+        assert!(
+            version_manager::read_active_version(root)
+                .unwrap()
+                .is_none(),
+            "failed migration must not flip the active marker"
         );
     }
 }

@@ -289,12 +289,17 @@ pub fn list_installed_versions(root: &Path) -> Result<Vec<String>> {
     // exists. Only append when the marker names an OFF-TREE selection
     // (binary_path is Some) AND its version is not already in the on-tree
     // scan — we dedupe so a user who runs `setup nu <version>` after an
-    // off-tree swap sees a clean list.
-    if let Ok(Some(marker)) = read_active_version(root) {
-        if let Some(off_tree) = marker.binary_path.as_ref() {
-            let off_tree_path = std::path::Path::new(off_tree);
-            if off_tree_path.is_file() && !versions.iter().any(|v| v == &marker.version) {
-                versions.push(marker.version.clone());
+    // off-tree swap sees a clean list. Propagate marker read failures.
+    if let Some(marker) = read_active_version(root)
+        .with_context(|| "Failed to read active-version marker while listing Nu versions")?
+    {
+        // Only well-formed versions are listed as selectable.
+        if let Ok(normalized) = normalize_version(&marker.version) {
+            if let Some(off_tree) = marker.binary_path.as_ref() {
+                let off_tree_path = std::path::Path::new(off_tree);
+                if off_tree_path.is_file() && !versions.iter().any(|v| v == &normalized) {
+                    versions.push(normalized);
+                }
             }
         }
     }

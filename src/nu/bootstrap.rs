@@ -222,6 +222,17 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
     let normalized = version_manager::normalize_version(version)
         .with_context(|| format!("Invalid Nu version '{}' for installation", version))?;
     let dest_dir = version_manager::version_install_dir(root, &normalized);
+    // Never overwrite an existing versioned payload in place (including
+    // `--force` reinstalls). Callers must remove the version first or install
+    // a different version so the original binary remains intact.
+    if dest_dir.exists() {
+        bail!(
+            "managed Nu {} already exists at {}; refuse to overwrite in place \
+             (run `numan setup nu remove` or install a different version)",
+            normalized,
+            dest_dir.display()
+        );
+    }
     std::fs::create_dir_all(&dest_dir).with_context(|| {
         format!(
             "Failed to create managed Nushell version directory '{}'",
@@ -726,43 +737,56 @@ where
     .filter(|dest| dest.is_file());
 
     if let Some(dest) = already_installed.as_ref() {
-        if !options.force {
-            if options.yes {
-                // PATH/profile mutation still needs a PreMutation snapshot even
-                // when the managed binary itself is left in place.
-                create_snapshot(
-                    root,
-                    SnapshotReason::PreMutation,
-                    SnapshotTrigger::Install,
-                    None,
-                    None,
-                )
-                .with_context(|| {
-                    "Failed to create pre-mutation snapshot for already-installed `numan setup nu --yes`"
-                })?;
-                if let Some(parent) = dest.parent() {
-                    prepend_process_path(parent)?;
-                }
-                if !options.skip_path {
-                    persist_user_path(dest)?;
-                }
-                println!(
-                    "Nushell already installed at '{}' (unchanged).",
-                    dest.display()
-                );
-                return Ok(dest.clone());
-            }
-
-            crate::util::confirm::require_tty_or_yes(options.yes, "Nushell reinstall")?;
-            crate::util::confirm::confirm_or_bail(
-                &format!(
-                    "Nushell is already installed at '{}'. Reinstall {version_label} release?",
-                    dest.display()
-                ),
-                false,
-                "Nushell setup cancelled.",
-            )?;
+        // Never overwrite an existing managed payload in place — even `--force`.
+        // Users must remove first (`numan setup nu remove`) or pick another version.
+        if options.force {
+            bail!(
+                "Nushell is already installed at '{}'; refusing in-place overwrite even with --force. \
+                 Run `numan setup nu remove` then install again, or choose a different version.",
+                dest.display()
+            );
         }
+
+        if options.yes {
+            // PATH/profile mutation still needs a PreMutation snapshot even
+            // when the managed binary itself is left in place.
+            create_snapshot(
+                root,
+                SnapshotReason::PreMutation,
+                SnapshotTrigger::Install,
+                None,
+                None,
+            )
+            .with_context(|| {
+                "Failed to create pre-mutation snapshot for already-installed `numan setup nu --yes`"
+            })?;
+            if let Some(parent) = dest.parent() {
+                prepend_process_path(parent)?;
+            }
+            if !options.skip_path {
+                persist_user_path(dest)?;
+            }
+            println!(
+                "Nushell already installed at '{}' (unchanged).",
+                dest.display()
+            );
+            return Ok(dest.clone());
+        }
+
+        crate::util::confirm::require_tty_or_yes(options.yes, "Nushell reinstall")?;
+        crate::util::confirm::confirm_or_bail(
+            &format!(
+                "Nushell is already installed at '{}'. Reinstall {version_label} release?",
+                dest.display()
+            ),
+            false,
+            "Nushell setup cancelled.",
+        )?;
+        bail!(
+            "Refusing in-place overwrite of '{}'. \
+             Run `numan setup nu remove` then install again, or choose a different version.",
+            dest.display()
+        );
     }
 
     println!(
@@ -1012,6 +1036,70 @@ mod tests {
             version_manager::version_binary(root, "0.0.0-test")
         );
         assert!(installed.is_file());
+    }
+
+    #[test]
+    fn forced_reinstall_refuses_in_place_overwrite_and_preserves_payload() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let zip_path = root.join("nu-test.zip");
+        let original = b"original-nu-payload-v1";
+
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zip = ZipWriter::new(file);
+            let options = SimpleFileOptions::default();
+            let inner = format!("nu-0.108.0/{}", nu_binary_name());
+            zip.start_file(&inner, options).unwrap();
+            zip.write_all(original).unwrap();
+            zip.finish().unwrap();
+        }
+
+        let installed = install_from_archive(&zip_path, root, "0.108.0").unwrap();
+        assert_eq!(std::fs::read(&installed).unwrap(), original);
+
+        // Second archive would clobber if copy-over-existing were allowed.
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zip = ZipWriter::new(file);
+            let options = SimpleFileOptions::default();
+            let inner = format!("nu-0.108.0/{}", nu_binary_name());
+            zip.start_file(&inner, options).unwrap();
+            zip.write_all(b"replacement-payload-v2").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let err = install_from_archive(&zip_path, root, "0.108.0").unwrap_err();
+        assert!(
+            err.to_string().contains("refuse to overwrite in place"),
+            "unexpected error: {err:#}"
+        );
+        assert_eq!(
+            std::fs::read(&installed).unwrap(),
+            original,
+            "original managed payload must remain unchanged after refused reinstall"
+        );
+
+        // Orchestrator `--force` path must also refuse before mutating.
+        let platform = Platform::detect();
+        let options = NuSetupOptions {
+            yes: true,
+            force: true,
+            skip_path: true,
+            version: Some("0.108.0".to_string()),
+            caller_consented_destructive: false,
+        };
+        let force_err = execute_nu_setup_with_installer(root, &platform, &options, |_, _| {
+            panic!("installer must not run when force reinstall is refused");
+        })
+        .unwrap_err();
+        assert!(
+            force_err
+                .to_string()
+                .contains("refusing in-place overwrite even with --force"),
+            "unexpected force error: {force_err:#}"
+        );
+        assert_eq!(std::fs::read(&installed).unwrap(), original);
     }
 
     #[test]
