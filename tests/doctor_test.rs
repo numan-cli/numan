@@ -34,8 +34,8 @@ fn nu_setup_repair_test(
 ) -> anyhow::Result<()> {
     let expected = TEST_OFF_PATH.lock().unwrap();
     // The doctor passes the off-path binary via NuSetupArgs::use_existing(),
-    // which sets action = Some(NuAction::Use { path }) and leaves use_existing unset.
-    let Some(numan_cli::cmd::setup::NuAction::Use { path }) = &args.action else {
+    // which sets action = Some(NuAction::Use { path, force }) and leaves use_existing unset.
+    let Some(numan_cli::cmd::setup::NuAction::Use { path, .. }) = &args.action else {
         panic!("expected NuAction::Use, got {:?}", args.action);
     };
     assert_eq!(Some(path.as_path()), expected.as_ref().map(|p| p.as_path()));

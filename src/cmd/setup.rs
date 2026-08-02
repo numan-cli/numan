@@ -72,6 +72,12 @@ pub enum NuAction {
     Use {
         /// Path to the Nu binary
         path: PathBuf,
+        /// Opt into the destructive two-step flow (delete the managed
+        /// Nushell install at NUMAN_ROOT, then adopt the user-supplied
+        /// binary as the active Nu). Required when a managed install
+        /// exists; without it, the call refuses with a hint.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -105,9 +111,9 @@ impl NuSetupArgs {
     }
 
     /// Construct args for registering a specific existing Nu binary.
-    pub fn use_existing(path: PathBuf, yes: bool) -> Self {
+    pub fn use_existing(path: PathBuf, yes: bool, force: bool) -> Self {
         Self {
-            action: Some(NuAction::Use { path }),
+            action: Some(NuAction::Use { path, force }),
             version: None,
             force: false,
             skip_path: false,
@@ -216,20 +222,20 @@ fn execute_nu_impl_locked(args: &NuSetupArgs, root: &Path) -> Result<()> {
                  Off-PATH registration must persist the binary directory to PATH."
             );
         }
-        return execute_use_existing(existing, args.yes, root, ExecuteUseOpts::default());
+        return execute_use_existing(existing, args.yes, root, false, ExecuteUseOpts::default());
     }
 
     match &args.action {
         Some(NuAction::Remove) => remove_managed_nu(root, args.yes),
         Some(NuAction::Path) => execute_use_path(args.yes, root, ExecuteUseOpts::default()),
-        Some(NuAction::Use { path }) => {
+        Some(NuAction::Use { path, force }) => {
             if args.skip_path {
                 bail!(
                     "numan setup nu use cannot be combined with --skip-path. \
                      Off-PATH registration must persist the binary directory to PATH."
                 );
             }
-            execute_use_existing(path, args.yes, root, ExecuteUseOpts::default())
+            execute_use_existing(path, args.yes, root, *force, ExecuteUseOpts::default())
         }
         None => {
             // Default: install (latest or pinned version)
@@ -376,6 +382,7 @@ fn execute_use_existing(
     path: &Path,
     yes: bool,
     root: &Path,
+    force: bool,
     opts: ExecuteUseOpts<'_>,
 ) -> Result<()> {
     // PR #69 WCt: refuse the operation on a non-TTY session without
@@ -388,9 +395,25 @@ fn execute_use_existing(
 
     // Consolidate the destructive-removal confirm + the
     // register_existing_nu PATH-add prompt into one (mirrors
-    // `execute_use_path`'s gate).
+    // `execute_use_path`'s gate). With a managed tree in place, the
+    // `--force` flag is required to *enter* this path at all — the
+    // merged warn-and-confirm below is the second stage of the
+    // destructive two-step opt-in.
     let managed_dir = bootstrap::managed_nu_dir(root);
     let managed_dir_was_present = managed_dir.is_dir();
+    if managed_dir_was_present && !force {
+        bail!(
+            "Refusing `numan setup nu use` while a managed Nushell install at '{}' exists.\n\n\
+             The destructive two-step flow (delete the managed tree + adopt '{}') would \
+             discard every installed version and the active-version marker. Re-run with \
+             `--force` to opt into it, or run `numan setup nu remove` first to stage the \
+             removal out-of-band so this subcommand can register the off-path Nu without \
+             touching managed state.\n\n\
+             Both flows are reversible only by `numan setup nu install <version>`.",
+            managed_dir.display(),
+            path.display(),
+        );
+    }
     if managed_dir_was_present {
         let resolved_path = std::fs::canonicalize(path)
             .with_context(|| format!("Failed to resolve Nushell binary '{}'", path.display()))?;

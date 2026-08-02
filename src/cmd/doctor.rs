@@ -1109,7 +1109,7 @@ fn apply_repairs(
             });
         } else if let Some(off_path) = resolve_off_path(options) {
             let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_impl);
-            match setup_fn(&NuSetupArgs::use_existing(off_path, true), root) {
+            match setup_fn(&NuSetupArgs::use_existing(off_path, true, false), root) {
                 Ok(()) => records.push(RepairRecord {
                     id,
                     status: RepairStatus::Applied,
