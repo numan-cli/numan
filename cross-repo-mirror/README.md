@@ -68,12 +68,19 @@ cp "$NUMAN_ROOT/cross-repo-mirror/$SIBLING/docs/roadmap.md" \
 cp "$NUMAN_ROOT/cross-repo-mirror/$SIBLING/.github/workflows/roadmap-drift.yml" \
    "$SIBLING_ROOT/.github/workflows/roadmap-drift.yml"
 
+# Stage the pinned consolidated roadmap so the offline smoke test
+# matches sibling CI (which curls the same path from CONTRACT_SHA).
+mkdir -p "$SIBLING_ROOT/docs/plans"
+curl -sSfL \
+    "https://raw.githubusercontent.com/tonythethompson/numan/${CONTRACT_SHA}/docs/plans/consolidated-multi-repo-roadmap.md" \
+    -o "$SIBLING_ROOT/docs/plans/consolidated-multi-repo-roadmap.md"
+
 # Smoke-test locally before pushing (from the sibling working tree):
 cd "$SIBLING_ROOT"
-# Stage a local copy of the consolidated roadmap for offline dry-runs,
-# or rely on CI to curl it from the pin.
-python scripts/check-roadmap-drift.py
-# expect: 0 errors when CONSOLIDATED_ROADMAP points at a fetched copy.
+CONSOLIDATED_ROADMAP=docs/plans/consolidated-multi-repo-roadmap.md \
+  LOCAL_ROADMAP=docs/roadmap.md \
+  python scripts/check-roadmap-drift.py
+# expect: 0 errors
 ```
 
 ## Mirror contract

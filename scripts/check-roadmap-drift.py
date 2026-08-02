@@ -152,19 +152,15 @@ def audit_consolidated(path: Path) -> tuple[list[str], list[str]]:
             )
 
     # Forbidden phrases in shipped-feel bullets outside deferral scope.
+    # Heading depth is handled here (not via a continue-before-pop path) so a
+    # deferred section cannot leak into later non-deferred sections.
     heading_stack: list[str] = []
     for n, raw in enumerate(lines, start=1):
         line = raw.rstrip()
-        if HEAD_RE.match(line):
-            heading_stack.append(line)
-            continue
 
         # Pop headings as we leave their scope. The markdown is single-level
-        # for our purposes: if we see an H2, pop everything above H2; an H3
-        # pops H3+ above; H1 resets everything.
-        # Treat consecutive headings as a stack.
-        # Cheap implementation: drop trailing headings shorter (lower
-        # depth) than current heading level. We re-derive from raw line.
+        # for our purposes: if we see an H2, pop everything at H2+; an H3
+        # pops H3+; H1 resets everything.
         head_match = HEAD_RE.match(line)
         if head_match:
             depth = len(head_match.group(1))
