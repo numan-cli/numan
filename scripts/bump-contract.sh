@@ -128,21 +128,27 @@ if [ "$INIT" -eq 0 ] && [ "$NEW_VERSION" -lt 2 ]; then
     exit 2
 fi
 
-NEW_TAG="numan-roadmap-contract/v${INIT:-${NEW_VERSION}}"
-OLD_TAG="numan-roadmap-contract/v$(( ${INIT:-${NEW_VERSION}} - 1 ))"
-[ "$INIT" -eq 1 ] && OLD_TAG="numan-roadmap-contract/v0-pre"
+if [ "$INIT" -eq 1 ]; then
+    VERSION_LABEL=1
+    NEW_TAG="numan-roadmap-contract/v1"
+    OLD_TAG="numan-roadmap-contract/v0-pre"
+else
+    VERSION_LABEL="$NEW_VERSION"
+    NEW_TAG="numan-roadmap-contract/v${NEW_VERSION}"
+    OLD_TAG="numan-roadmap-contract/v$(( NEW_VERSION - 1 ))"
+fi
 
 log "contract bump: $OLD_TAG  --[$REASON]-->  $NEW_TAG"
 
 # --- 1. Drift pass on the local copy of the consolidated roadmap ---------
-if [ -f "$DRIFT_SCRIPT" ]; then
-    log "running scripts/check-roadmap-drift.py against the local consolidated roadmap"
-    if ! python3 "$DRIFT_SCRIPT"; then
-        err "drift check failed — fix the consolidated roadmap before bumping"
-        exit 3
-    fi
-else
-    warn "drift script not found at $DRIFT_SCRIPT; skipping pre-flight check"
+if [ ! -f "$DRIFT_SCRIPT" ]; then
+    err "drift script not found at $DRIFT_SCRIPT; refusing to bump without sentinel validation"
+    exit 3
+fi
+log "running scripts/check-roadmap-drift.py against the local consolidated roadmap"
+if ! python3 "$DRIFT_SCRIPT"; then
+    err "drift check failed — fix the consolidated roadmap before bumping"
+    exit 3
 fi
 
 # --- 2. Compute SHA + verify pin consistency ----------------------------
@@ -150,16 +156,26 @@ NEW_SHA="$(git rev-parse HEAD)"
 log "new contract SHA = $NEW_SHA"
 log "new contract TAG = $NEW_TAG"
 
-# Are the workflow yml files already pinned to the local head?
+# Workflow pins must already match HEAD before the bump (apply the freeze /
+# pin-update commit first). numan's ci.yml pins by CONTRACT_TAG only;
+# sibling mirrors also pin CONTRACT_SHA for immutable fetches.
 verify_yml_pin() {
     local yml="$1"
-    grep -E '^[[:space:]]*CONTRACT_SHA:[[:space:]]*[0-9a-f]{40,}' "$yml" >/dev/null || {
-        err "$yml is missing CONTRACT_SHA pin; refuse — apply the contract-freeze PR first"; return 1; }
-    local pinned
-    pinned="$(grep -E '^[[:space:]]*CONTRACT_SHA:[[:space:]]*[0-9a-f]{40,}' "$yml" | head -1 | awk '{print $2}')"
-    if [ "$pinned" != "$NEW_SHA" ]; then
-        err "$yml is pinned to $pinned but HEAD is $NEW_SHA; refuse"
+    grep -E '^[[:space:]]*CONTRACT_TAG:[[:space:]]*' "$yml" >/dev/null || {
+        err "$yml is missing CONTRACT_TAG pin; refuse — apply the contract-freeze PR first"
         return 1
+    }
+    if grep -E '^[[:space:]]*CONTRACT_SHA:[[:space:]]*' "$yml" >/dev/null; then
+        grep -E '^[[:space:]]*CONTRACT_SHA:[[:space:]]*[0-9a-f]{40,}' "$yml" >/dev/null || {
+            err "$yml has a malformed CONTRACT_SHA pin; refuse"
+            return 1
+        }
+        local pinned
+        pinned="$(grep -E '^[[:space:]]*CONTRACT_SHA:[[:space:]]*[0-9a-f]{40,}' "$yml" | head -1 | awk '{print $2}')"
+        if [ "$pinned" != "$NEW_SHA" ]; then
+            err "$yml is pinned to $pinned but HEAD is $NEW_SHA; refuse"
+            return 1
+        fi
     fi
 }
 verify_yml_pin "$NUMAN_CI"
@@ -174,13 +190,13 @@ if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
     exit 4
 fi
 
-log "creating annotated tag $NEW_TAG at HEAD"
-git tag -a "$NEW_TAG" -m "Roadmap contract v${INIT:-${NEW_VERSION}}.
+log "creating annotated tag $NEW_TAG at HEAD (local only; push after numan PR merges)"
+git tag -a "$NEW_TAG" -m "Roadmap contract v${VERSION_LABEL}.
 
 Frozen at commit: ${NEW_SHA}
 Reason: ${REASON}
 
-See docs/contracts/roadmap-v${INIT:-${NEW_VERSION}}.md for what this version freezes."
+See docs/contracts/roadmap-v${VERSION_LABEL}.md for what this version freezes."
 
 log "backing up old tag $OLD_TAG -> $OLD_TAG.bak"
 if git rev-parse "$OLD_TAG" >/dev/null 2>&1; then
@@ -188,20 +204,19 @@ if git rev-parse "$OLD_TAG" >/dev/null 2>&1; then
 fi
 
 # --- 4. Refresh contract doc --------------------------------------------
-if [ -f "$CONTRACT_DOC_DIR/roadmap-v${INIT:-${NEW_VERSION}}.md" ]; then
-    log "contract doc already exists at docs/contracts/roadmap-v${INIT:-${NEW_VERSION}}.md — leaving as-is"
+if [ -f "$CONTRACT_DOC_DIR/roadmap-v${VERSION_LABEL}.md" ]; then
+    log "contract doc already exists at docs/contracts/roadmap-v${VERSION_LABEL}.md — leaving as-is"
 else
     log "creating contract doc from v1 template"
-    sed "s/^v1$/v${INIT:-${NEW_VERSION}}/g; s/Roadmap Contract v1/Roadmap Contract v${INIT:-${NEW_VERSION}}/g" \
+    sed "s/^v1$/v${VERSION_LABEL}/g; s/Roadmap Contract v1/Roadmap Contract v${VERSION_LABEL}/g" \
         "$CONTRACT_DOC_DIR/roadmap-v1.md" \
-        > "$CONTRACT_DOC_DIR/roadmap-v${INIT:-${NEW_VERSION}}.md"
+        > "$CONTRACT_DOC_DIR/roadmap-v${VERSION_LABEL}.md"
 fi
 
-# --- 5. Push branch + tag -----------------------------------------------
+# --- 5. Push numan branch (tag is published after the numan PR merges) ---
 log "pushing branch $BRANCH_NAME (HEAD) to numan"
 git push origin "HEAD:refs/heads/$BRANCH_NAME"
-log "pushing new contract tag $NEW_TAG to numan"
-git push origin "refs/tags/$NEW_TAG"
+log "NOT pushing $NEW_TAG yet — publish with: git push origin refs/tags/$NEW_TAG after the numan PR merges"
 
 # --- 6. Issue the three PRs ---------------------------------------------
 gh_auth_check() {
@@ -248,5 +263,6 @@ issue_pr "$REPO_PLUGINS"  "$BRANCH_NAME" \
 issue_pr "$REPO_REGISTRY" "$BRANCH_NAME" \
     "Bump roadmap contract to ${NEW_TAG}: ${REASON}" "$PR_BODY"
 
-log "bump complete: ${OLD_TAG} -> ${NEW_TAG}"
-log "release the branch + tag remains live at: https://github.com/${REPO_NUMAN}/releases/tag/${NEW_TAG}"
+log "bump complete: ${OLD_TAG} -> ${NEW_TAG} (tag local until post-merge push)"
+log "After the numan PR merges, publish the tag: git push origin refs/tags/${NEW_TAG}"
+log "Then merge sibling PRs once CI can resolve the new pin."
