@@ -240,6 +240,9 @@ fn rollback(root: &Path, id: &str, yes: bool) -> Result<()> {
 }
 
 fn confirm(prompt: &str) -> Result<()> {
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        anyhow::bail!("Interactive confirmation required for non-TTY sessions. Pass --yes to proceed without prompting.");
+    }
     crate::util::confirm::confirm_or_bail(prompt, false, "Cancelled.")
 }
 
