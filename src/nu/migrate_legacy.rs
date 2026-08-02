@@ -150,12 +150,22 @@ pub fn migrate_legacy_install_with_detector(
             if !entry.file_type()?.is_dir() {
                 continue;
             }
-            if entry.path().join(bin_name).exists() {
+            // Only treat normalized semver directory names as migration
+            // debris. Unrelated user-created subdirs under tools/nushell
+            // must stay untouched.
+            let dir_name = entry.file_name();
+            let Some(name) = dir_name.to_str() else {
+                continue;
+            };
+            if normalize_version(name).is_err() {
+                continue;
+            }
+            if entry.path().join(bin_name).is_file() {
                 found_installed = true;
             } else {
-                // Empty subdir — likely from an aborted previous migration.
-                // Remove it so the user is not permanently stuck with an
-                // empty <version>/ blocking every future attempt.
+                // Empty version subdir — likely from an aborted previous
+                // migration. Remove it so the user is not permanently stuck
+                // with an empty <version>/ blocking every future attempt.
                 let _ = std::fs::remove_dir(entry.path());
             }
         }

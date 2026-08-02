@@ -169,8 +169,7 @@ pub fn version_install_dir(root: &Path, version: &str) -> PathBuf {
 
 /// Binary path for a specific Nu version.
 pub fn version_binary(root: &Path, version: &str) -> PathBuf {
-    let binary_name = if cfg!(windows) { "nu.exe" } else { "nu" };
-    version_install_dir(root, version).join(binary_name)
+    version_install_dir(root, version).join(nu_binary_name())
 }
 
 /// Binary path for the currently active Nu version.
@@ -199,7 +198,7 @@ pub fn active_nu_binary(root: &Path) -> Result<Option<PathBuf>> {
     // on-tree install (e.g. the user ran `setup nu <version>` to give the
     // off-tree selection a versioned home).
     let on_tree = version_binary(root, &version);
-    if on_tree.exists() {
+    if on_tree.is_file() {
         return Ok(Some(on_tree));
     }
 
@@ -263,8 +262,7 @@ pub fn list_installed_versions(root: &Path) -> Result<Vec<String>> {
                         continue;
                     };
                     // Check if this directory contains a Nu binary.
-                    let binary_name = if cfg!(windows) { "nu.exe" } else { "nu" };
-                    if entry.path().join(binary_name).is_file() {
+                    if entry.path().join(nu_binary_name()).is_file() {
                         versions.push(name);
                     }
                 }
@@ -274,14 +272,27 @@ pub fn list_installed_versions(root: &Path) -> Result<Vec<String>> {
 
     // Include the legacy single-binary layout without migrating it: listing
     // must remain read-only. The installer records its version in VERSION.
-    let legacy_binary = dir.join(if cfg!(windows) { "nu.exe" } else { "nu" });
+    // When versioned installs already exist, omit the flat VERSION so
+    // `numan use` cannot select a non-resolvable mixed-layout entry
+    // (`migrate_legacy_install` returns early once any versioned binary is
+    // present, so the flat install is never turned into `<version>/nu`).
+    let legacy_binary = dir.join(nu_binary_name());
     let legacy_version_file = dir.join("VERSION");
-    if legacy_binary.is_file() {
-        if let Ok(raw) = std::fs::read_to_string(&legacy_version_file) {
-            if let Ok(version) = normalize_version(raw.trim()) {
-                if !versions.iter().any(|v| v == &version) {
+    if legacy_binary.is_file() && versions.is_empty() {
+        match std::fs::read_to_string(&legacy_version_file) {
+            Ok(raw) => {
+                if let Ok(version) = normalize_version(raw.trim()) {
                     versions.push(version);
                 }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "Failed to read legacy Nu VERSION file '{}'",
+                        legacy_version_file.display()
+                    )
+                });
             }
         }
     }
@@ -292,7 +303,7 @@ pub fn list_installed_versions(root: &Path) -> Result<Vec<String>> {
     // (binary_path is Some) AND its version is not already in the on-tree
     // scan — we dedupe so a user who runs `setup nu <version>` after an
     // off-tree swap sees a clean list.
-    if let Ok(Some(marker)) = read_active_version(root) {
+    if let Some(marker) = read_active_version(root)? {
         if let Some(off_tree) = marker.binary_path.as_ref() {
             let off_tree_path = std::path::Path::new(off_tree);
             if off_tree_path.is_file() && !versions.iter().any(|v| v == &marker.version) {

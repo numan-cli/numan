@@ -67,7 +67,13 @@ pub enum NuAction {
     /// Remove the managed Nushell install and fall back to PATH Nu
     Remove,
     /// Use the Nushell already on PATH (remove managed install, no download)
-    Path,
+    Path {
+        /// Opt into deleting an existing managed Nushell tree before adopting
+        /// PATH Nu. Required when a managed install exists; without it, the
+        /// call refuses with a hint (same gate as `setup nu use --force`).
+        #[arg(long)]
+        force: bool,
+    },
     /// Use a specific existing Nushell binary
     Use {
         /// Path to the Nu binary
@@ -98,8 +104,14 @@ impl NuSetupArgs {
 
     /// Construct args for switching to the PATH Nu.
     pub fn use_path(yes: bool) -> Self {
+        Self::use_path_with_force(yes, false)
+    }
+
+    /// Construct args for switching to the PATH Nu, optionally forcing
+    /// replacement of an existing managed tree.
+    pub fn use_path_with_force(yes: bool, force: bool) -> Self {
         Self {
-            action: Some(NuAction::Path),
+            action: Some(NuAction::Path { force }),
             version: None,
             force: false,
             skip_path: false,
@@ -211,7 +223,7 @@ fn setup_action_lock_label(args: &NuSetupArgs) -> &'static str {
     }
     match &args.action {
         Some(NuAction::Remove) => "managed Nushell removal",
-        Some(NuAction::Path) => "PATH Nu registration",
+        Some(NuAction::Path { .. }) => "PATH Nu registration",
         Some(NuAction::Use { .. }) => "off-path Nu registration",
         None => "Nushell install",
     }
@@ -243,17 +255,25 @@ fn execute_nu_impl_locked(args: &NuSetupArgs, root: &Path) -> Result<()> {
     }
     if args.use_path {
         eprintln!("warning: --use-path is deprecated, use 'numan setup nu path' instead");
-        return execute_use_path(args.yes, root, ExecuteUseOpts::default());
+        return execute_use_path(args.yes, root, args.force, ExecuteUseOpts::default());
     }
     if let Some(existing) = &args.use_existing {
         eprintln!("warning: --use-existing is deprecated, use 'numan setup nu use <path>' instead");
         reject_skip_path_for_off_path_registration(args.skip_path)?;
-        return execute_use_existing(existing, args.yes, root, false, ExecuteUseOpts::default());
+        return execute_use_existing(
+            existing,
+            args.yes,
+            root,
+            args.force,
+            ExecuteUseOpts::default(),
+        );
     }
 
     match &args.action {
         Some(NuAction::Remove) => remove_managed_nu(root, args.yes),
-        Some(NuAction::Path) => execute_use_path(args.yes, root, ExecuteUseOpts::default()),
+        Some(NuAction::Path { force }) => {
+            execute_use_path(args.yes, root, *force, ExecuteUseOpts::default())
+        }
         Some(NuAction::Use { path, force }) => {
             reject_skip_path_for_off_path_registration(args.skip_path)?;
             execute_use_existing(path, args.yes, root, *force, ExecuteUseOpts::default())
@@ -315,7 +335,7 @@ fn validate_user_supplied_nu(
     Ok(())
 }
 
-fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<()> {
+fn execute_use_path(yes: bool, root: &Path, force: bool, opts: ExecuteUseOpts<'_>) -> Result<()> {
     // PR #69 WCt: the non-TTY guard must run before any destructive step.
     // `register_existing_nu` mutates the user's PATH and `remove_managed_nu_if_present`
     // deletes the entire managed tree, so refusing the operation on a pipe without
@@ -331,8 +351,28 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
     // Nu must not leave us without a managed install.
     validate_user_supplied_nu(Path::new(&path_nu), opts.validate)?;
 
+    // Resolve and normalize the version *before* any destructive step, so a
+    // detection failure never leaves the managed tree deleted / PATH mutated.
+    let normalized_version = {
+        let detected = crate::core::nu_version::NuVersion::from_binary(Path::new(&path_nu))
+            .with_context(|| format!("Failed to determine Nu version for '{path_nu}'"))?;
+        version_manager::normalize_version(&detected.version)?
+    };
+
     let managed_dir = bootstrap::managed_nu_dir(root);
     let managed_dir_was_present = managed_dir.is_dir();
+    if managed_dir_was_present && !force {
+        bail!(
+            "Refusing `numan setup nu path` while a managed Nushell install at '{}' exists.\n\n\
+             The destructive two-step flow (delete the managed tree + adopt PATH Nu) would \
+             discard every installed version and the active-version marker. Re-run with \
+             `--force` to opt into it, or run `numan setup nu remove` first to stage the \
+             removal out-of-band so this subcommand can register PATH Nu without \
+             touching managed state.\n\n\
+             Both flows are reversible only by `numan setup nu <version>`.",
+            managed_dir.display(),
+        );
+    }
     if managed_dir_was_present {
         let resolved_path_nu = Path::new(&path_nu)
             .canonicalize()
@@ -390,19 +430,7 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
     let registered = bootstrap::register_existing_nu(Path::new(&path_nu), &options)?;
     // chatgpt PR69 S08: persist the registered binary as the active version
     // marker so `numan use list` reports it as the selection.
-    let external_label = crate::core::nu_version::NuVersion::from_binary(&registered)
-        .with_context(|| {
-            format!(
-                "Failed to determine Nu version for '{}'",
-                registered.display()
-            )
-        })?
-        .version;
-    version_manager::write_active_version_with_binary(
-        root,
-        &version_manager::normalize_version(&external_label)?,
-        &registered,
-    )?;
+    version_manager::write_active_version_with_binary(root, &normalized_version, &registered)?;
     Ok(())
 }
 
@@ -439,7 +467,7 @@ fn execute_use_existing(
              `--force` to opt into it, or run `numan setup nu remove` first to stage the \
              removal out-of-band so this subcommand can register the off-path Nu without \
              touching managed state.\n\n\
-             Both flows are reversible only by `numan setup nu install <version>`.",
+             Both flows are reversible only by `numan setup nu <version>`.",
             managed_dir.display(),
             path.display(),
         );
@@ -468,6 +496,14 @@ fn execute_use_existing(
         }
     }
 
+    // Resolve and normalize the version *before* any destructive step, so a
+    // detection failure never leaves the managed tree deleted / PATH mutated.
+    let normalized_version = {
+        let detected = crate::core::nu_version::NuVersion::from_binary(path)
+            .with_context(|| format!("Failed to determine Nu version for '{}'", path.display()))?;
+        version_manager::normalize_version(&detected.version)?
+    };
+
     remove_managed_nu_if_present(root)?;
     let options = NuSetupOptions {
         yes,
@@ -482,19 +518,7 @@ fn execute_use_existing(
     let registered = bootstrap::register_existing_nu(path, &options)?;
     // chatgpt PR69 S08: persist the registered binary as the active version
     // marker so `numan use list` reports it as the selection.
-    let external_label = crate::core::nu_version::NuVersion::from_binary(&registered)
-        .with_context(|| {
-            format!(
-                "Failed to determine Nu version for '{}'",
-                registered.display()
-            )
-        })?
-        .version;
-    version_manager::write_active_version_with_binary(
-        root,
-        &version_manager::normalize_version(&external_label)?,
-        &registered,
-    )?;
+    version_manager::write_active_version_with_binary(root, &normalized_version, &registered)?;
     Ok(())
 }
 
@@ -504,12 +528,11 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
     // `--yes` *before* any marker write or directory deletion.
     require_tty_or_yes(yes, "managed Nushell removal")?;
 
-    // chatgpt PR69 S09: clear the active-version marker before deleting
-    // the managed tree so the marker cannot dangle at a binary we are
-    // about to remove.
-    version_manager::clear_active_version(root)?;
     let managed_dir = bootstrap::managed_nu_dir(root);
     if !managed_dir.is_dir() {
+        // No tree to delete; still drop a stale marker so resolvers do not keep
+        // pointing at a missing binary.
+        version_manager::clear_active_version(root)?;
         println!(
             "No managed Nushell install found at '{}'.",
             managed_dir.display()
@@ -526,6 +549,9 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
         "Managed Nushell removal cancelled.",
     )?;
 
+    // chatgpt PR69 S09: clear the marker only after confirmation succeeds, so a
+    // declined prompt leaves both the managed tree and the selection intact.
+    version_manager::clear_active_version(root)?;
     std::fs::remove_dir_all(&managed_dir).with_context(|| {
         format!(
             "Failed to remove managed Nushell directory '{}'",
@@ -541,12 +567,13 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
 
 /// Silently remove the managed Nu directory if it exists (used by --use-existing).
 fn remove_managed_nu_if_present(root: &Path) -> Result<()> {
-    // chatgpt PR69 S09: clear the active-version marker before deleting
-    // the managed tree so the marker cannot dangle at a binary we are
-    // about to remove.
-    version_manager::clear_active_version(root)?;
     let managed_dir = bootstrap::managed_nu_dir(root);
+    // chatgpt PR69 S09: clear the active-version marker immediately before
+    // deleting the managed tree (confirm was already handled by the caller).
+    // Skip the clear when there is nothing to remove so a no-op path cannot
+    // wipe a still-valid off-tree selection.
     if managed_dir.is_dir() {
+        version_manager::clear_active_version(root)?;
         std::fs::remove_dir_all(&managed_dir).with_context(|| {
             format!(
                 "Failed to remove managed Nushell directory '{}'",

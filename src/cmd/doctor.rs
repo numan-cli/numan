@@ -634,18 +634,20 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
             RepairTier::Auto,
         )),
         Ok(None) => {}
-        Err(e) => findings.push(finding(
-            "journal.migration_invalid",
-            Severity::Error,
-            format!(
-                "Migration journal at '{}' is unreadable: {e}. \
-                 Run `numan doctor --fix` (manual tier) or delete the stale \
-                 journal to recover.",
-                PendingMigration::journal_path(root).display()
-            ),
-            Some(CMD_USE),
-            RepairTier::Manual,
-        )),
+        Err(e) => {
+            let journal_path = PendingMigration::journal_path(root);
+            let fix = format!("Delete the stale journal at '{}'", journal_path.display());
+            findings.push(finding(
+                "journal.migration_invalid",
+                Severity::Error,
+                format!(
+                    "Migration journal at '{}' is unreadable: {e}.                      Delete the stale journal to recover, then re-run `numan doctor`.",
+                    journal_path.display()
+                ),
+                Some(&fix),
+                RepairTier::Manual,
+            ));
+        }
     }
 }
 
@@ -1363,7 +1365,7 @@ fn apply_repairs(
         // self-healing reconcile so concurrent `numan use` cannot race the
         // journal stage advance + directory rename the same way AGENTS.md
         // requires install/remove/activate/deactivate/numan-use to.
-        acquire_mutation_lock(root)?;
+        let _migration_repair_lock = acquire_mutation_lock(root)?;
         match migration_journal::reconcile(root) {
             Ok(_) => records.push(RepairRecord {
                 id,
@@ -1428,6 +1430,7 @@ fn print_report(args: &DoctorArgs, root: &Path, report: &DoctorReport) -> Result
                 "journal.lifecycle_pending",
                 "journal.lifecycle_stale",
                 "journal.migration_pending",
+                "journal.migration_invalid",
             ],
         ),
         (
@@ -2392,7 +2395,8 @@ mod tests {
             "finding must mention unreadable so safe-batch can grep it: {}",
             f.message
         );
-        assert_eq!(f.fix.as_deref(), Some(crate::util::hints::CMD_USE));
+        let expected_fix = format!("Delete the stale journal at '{}'", journal_path.display());
+        assert_eq!(f.fix.as_deref(), Some(expected_fix.as_str()));
         // The well-formed pending finding must NOT be published for an
         // invalid journal — otherwise the user sees conflicting guidance.
         assert!(

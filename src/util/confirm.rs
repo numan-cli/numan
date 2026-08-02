@@ -61,9 +61,9 @@ pub fn confirm_or_bail(prompt: &str, yes: bool, cancel_msg: &str) -> Result<()> 
 /// - `--yes` set → `(audit) explicit --yes accepted for {what}; proceeding without interactive prompt.`
 /// - non-TTY + no `--yes` → `(audit) implicit non-TTY session; refusing destructive {what} without --yes.` followed by bail!
 ///
-/// Callers should `execute_nu_setup_with_installer` already follow this
-/// pattern (src/nu/bootstrap.rs); this helper makes the same rule uniform
-/// across the setup command surface.
+/// `execute_nu_setup_with_installer` (src/nu/bootstrap.rs) already follows
+/// this pattern; this helper makes the same rule uniform across the setup
+/// command surface.
 pub fn require_tty_or_yes(yes: bool, what: &str) -> Result<()> {
     require_tty_or_yes_with_seam(yes, what, std::io::stdin().is_terminal())
 }

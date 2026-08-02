@@ -113,19 +113,20 @@ fn execute_latest(root: &Path) -> Result<()> {
 /// Switch to a specific Nu version.
 fn execute_switch(root: &Path, version: &str) -> Result<()> {
     let version = version_manager::normalize_version(version)?;
-    // Validate the version is installed.
-    if !version_manager::is_version_installed(root, &version) {
+    // Resolve on-tree or off-tree so versions shown by `numan use list`
+    // (including off-tree marker selections) remain switchable.
+    let Some(resolved) = version_manager::resolve_installed_version(root, &version) else {
         let installed = version_manager::list_installed_versions(root)?;
         let hint = if installed.is_empty() {
             format!(
-                "No Nu versions installed.\n\
+                "No Nu versions installed.
                  Run 'numan setup nu {}' to install.",
                 version
             )
         } else {
             format!(
-                "Nu {} is not installed.\n\
-                 Installed versions: {}\n\
+                "Nu {} is not installed.
+                 Installed versions: {}
                  Run 'numan setup nu {}' to install, or 'numan use list' to see available versions.",
                 version,
                 installed.join(", "),
@@ -133,11 +134,16 @@ fn execute_switch(root: &Path, version: &str) -> Result<()> {
             )
         };
         bail!("{}", hint);
-    }
+    };
 
-    // Switch to the requested version.
-    version_manager::write_active_version(root, &version)
-        .with_context(|| format!("Failed to switch to Nu {}", version))?;
+    let on_tree = version_manager::version_binary(root, &version);
+    if resolved == on_tree {
+        version_manager::write_active_version(root, &version)
+            .with_context(|| format!("Failed to switch to Nu {}", version))?;
+    } else {
+        version_manager::write_active_version_with_binary(root, &version, &resolved)
+            .with_context(|| format!("Failed to switch to Nu {}", version))?;
+    }
     println!("Switched to Nu {}.", version);
     Ok(())
 }

@@ -213,7 +213,7 @@ fn cli_parse_remove_subcommand() {
 #[test]
 fn cli_parse_path_subcommand() {
     let args = parse_nu_args(&["path"]);
-    assert!(matches!(args.action, Some(NuAction::Path)));
+    assert!(matches!(args.action, Some(NuAction::Path { .. })));
 }
 
 #[test]

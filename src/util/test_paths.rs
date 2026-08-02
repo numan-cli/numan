@@ -1,9 +1,9 @@
 //! Test-only helpers for restoring process-wide state after a test.
 //!
-//! `#[cfg(test)]`-gated so this module is never compiled into release
-//! builds; the only ways to reach it are via dev-dependency test crates
-//! or `cfg(test)` lib tests.
-#![cfg(test)]
+//! `#[cfg(test)]`-gated at the module declaration in `src/util/mod.rs`, so
+//! this module is never compiled into release builds. It is reachable only
+//! from inline `cfg(test)` unit tests, not from integration tests under
+//! `tests/`.
 
 use std::ffi::OsString;
 

@@ -108,7 +108,7 @@ pub fn is_safe_version_component(v: &str) -> bool {
         return false;
     }
     for ch in v.chars() {
-        if ch.is_control() || ch == '/' || ch == '\\' || ch == '\0' {
+        if ch.is_control() || ch == '/' || ch == '\\' || ch == ':' || ch == '\0' {
             return false;
         }
     }
@@ -241,7 +241,12 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
                 let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
                 let legacy_binary = versioned_nu_dir(root).join(bin_name);
                 if legacy_binary.is_file() {
-                    let _ = std::fs::remove_file(&legacy_binary);
+                    std::fs::remove_file(&legacy_binary).with_context(|| {
+                        format!(
+                            "Migration recovery: failed to remove stray legacy binary '{}'",
+                            legacy_binary.display()
+                        )
+                    })?;
                 }
             } else {
                 // PR69 WCq: surface remove_dir failures instead of ignoring
@@ -298,7 +303,12 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
             let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
             let legacy_binary = versioned_nu_dir(root).join(bin_name);
             if legacy_binary.is_file() {
-                let _ = std::fs::remove_file(&legacy_binary);
+                std::fs::remove_file(&legacy_binary).with_context(|| {
+                    format!(
+                        "Migration recovery: failed to remove stray legacy binary '{}'",
+                        legacy_binary.display()
+                    )
+                })?;
             }
             PendingMigration::delete(root)?;
             Ok(Some(journal))

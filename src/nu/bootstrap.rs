@@ -693,9 +693,11 @@ where
     // legacy single-binary check survives only as a heuristic for the
     // `latest` (no-version) flow, where there is no version to probe.
     let dest = match &options.version {
-        Some(version) => version_manager::normalize_version(version)
-            .map(|normalized| version_manager::version_binary(root, &normalized))
-            .unwrap_or_else(|_| managed_nu_binary(root)),
+        Some(version) => {
+            let normalized = version_manager::normalize_version(version)
+                .with_context(|| format!("Failed to normalize requested version '{version}'"))?;
+            version_manager::version_binary(root, &normalized)
+        }
         None => managed_nu_binary(root),
     };
     let version_label = options
@@ -734,6 +736,17 @@ where
             prepend_process_path(&tools_dir)?;
             if !options.skip_path {
                 persist_user_path(&effective)?;
+            }
+            // Pinned re-runs with `--yes` must still record the requested
+            // version as active so `numan use list` stays consistent even
+            // when the binary is already present.
+            if let Some(version) = &options.version {
+                let pinned = version_manager::normalize_version(version).with_context(|| {
+                    format!("Failed to normalize requested version '{version}'")
+                })?;
+                version_manager::write_active_version(root, &pinned).with_context(|| {
+                    format!("Failed to persist installed Nu version '{pinned}' as active")
+                })?;
             }
             println!(
                 "Nushell already installed at '{}' (unchanged).",

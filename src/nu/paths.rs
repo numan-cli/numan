@@ -384,7 +384,8 @@ pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
 
     if let Some(off_path) = discover_nu_off_path() {
         bail!(
-            "Nu not found on PATH or in '{}', but an install exists at '{}'.              Add it to PATH with: numan setup nu use {}",
+            "Nu not found on PATH or in '{}', but an install exists at '{}'. \
+             Add it to PATH with: numan setup nu use {}",
             managed.display(),
             off_path.display(),
             off_path.display()
