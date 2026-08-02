@@ -1336,8 +1336,13 @@ fn apply_repairs(
     if findings
         .iter()
         .any(|f| f.id == "journal.migration_pending" && f.severity == Severity::Warn)
-        && PendingMigration::load(root)?.is_some()
     {
+        // Reacquire the lock because the earlier repair phases deliberately
+        // released it before invoking subcommands that acquire their own lock.
+        lock = Some(acquire_mutation_lock(root)?);
+        if PendingMigration::load(root)?.is_none() {
+            return Ok(records);
+        }
         let id = "journal.migration_repaired".to_string();
         match migration_journal::reconcile(root) {
             Ok(_) => records.push(RepairRecord {
