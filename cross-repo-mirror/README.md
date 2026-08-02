@@ -34,7 +34,7 @@ The CI workflow in each sibling repo `curl`s the consolidated roadmap
 straight from `numan@<CONTRACT_SHA>/docs/plans/consolidated-multi-repo-roadmap.md`
 into a temp file at the start of the job, then runs the exact same
 `scripts/check-roadmap-drift.py` against that fetched copy. The contract
-SHA is recorded as `CONTRACT_SHA: f220940d3158bdcb86542f38458e401073fa0806`
+SHA is recorded as `CONTRACT_SHA: 65e50cebd8a8d50cc4b7ad6947fe68c24e5dbb75`
 in each workflow so a force-push to the contract tag can never
 silently change the guardrail. Bumping the contract is a coordinated
 operation across all three repos — see `scripts/bump-contract.sh` in
@@ -42,31 +42,38 @@ the `numan` repo.
 
 ## Installation
 
-In each sibling repo:
+From a checkout of `tonythethompson/numan` (this repo), copy the
+sibling artifacts into each sibling working tree. Do not run the `cp`
+lines from inside the sibling repo alone — the `cross-repo-mirror/`
+tree lives only in `numan`.
 
 ```bash
-mkdir -p scripts
+# In the numan checkout:
+NUMAN_ROOT=$(pwd)   # path to tonythethompson/numan
+CONTRACT_SHA=65e50cebd8a8d50cc4b7ad6947fe68c24e5dbb75
+SIBLING=numan-plugins   # or numan-registry
+SIBLING_ROOT=/path/to/$SIBLING
+
+mkdir -p "$SIBLING_ROOT/scripts" "$SIBLING_ROOT/docs" "$SIBLING_ROOT/.github/workflows"
+
 # Fetch the pinned contract version of the drift script directly from
 # the contract SHA so the sibling repo never holds a stale copy.
 curl -sSfL \
-    https://raw.githubusercontent.com/tonythethompson/numan/f220940d3158bdcb86542f38458e401073fa0806/scripts/check-roadmap-drift.py \
-    -o scripts/check-roadmap-drift.py
-chmod +x scripts/check-roadmap-drift.py
+    "https://raw.githubusercontent.com/tonythethompson/numan/${CONTRACT_SHA}/scripts/check-roadmap-drift.py" \
+    -o "$SIBLING_ROOT/scripts/check-roadmap-drift.py"
+chmod +x "$SIBLING_ROOT/scripts/check-roadmap-drift.py"
 
-# Then drop the contents of the relevant subdirectory into the sibling repo:
-#   cross-repo-mirror/<sibling>/docs/roadmap.md         → <sibling>/docs/roadmap.md
-#   cross-repo-mirror/<sibling>/.github/workflows/roadmap-drift.yml
-#           → <sibling>/.github/workflows/roadmap-drift.yml
+cp "$NUMAN_ROOT/cross-repo-mirror/$SIBLING/docs/roadmap.md" \
+   "$SIBLING_ROOT/docs/roadmap.md"
+cp "$NUMAN_ROOT/cross-repo-mirror/$SIBLING/.github/workflows/roadmap-drift.yml" \
+   "$SIBLING_ROOT/.github/workflows/roadmap-drift.yml"
 
-mkdir -p docs .github/workflows
-cp cross-repo-mirror/<sibling>/docs/roadmap.md docs/roadmap.md
-cp cross-repo-mirror/<sibling>/.github/workflows/roadmap-drift.yml \
-   .github/workflows/roadmap-drift.yml
-
-# Smoke-test locally before pushing:
+# Smoke-test locally before pushing (from the sibling working tree):
+cd "$SIBLING_ROOT"
+# Stage a local copy of the consolidated roadmap for offline dry-runs,
+# or rely on CI to curl it from the pin.
 python scripts/check-roadmap-drift.py
-# expect: 0 errors, optionally a warning about the consolidated roadmap
-#         being fetched URL-side. The warning is informational only.
+# expect: 0 errors when CONSOLIDATED_ROADMAP points at a fetched copy.
 ```
 
 ## Mirror contract
