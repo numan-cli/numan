@@ -433,9 +433,14 @@ mod tests {
             legacy.exists(),
             "legacy binary must be left in place when post-create hook fails"
         );
+        let leftover = tools.join("0.113.1");
         assert!(
-            tools.join("0.113.1").is_dir(),
+            leftover.is_dir(),
             "empty versioned subdir must exist (the simulated half-migrated state)"
+        );
+        assert!(
+            std::fs::read_dir(&leftover).unwrap().next().is_none(),
+            "subdir must be empty so the cleanup path triggers"
         );
         assert!(
             read_active_version(root).unwrap().is_none(),
@@ -462,6 +467,63 @@ mod tests {
         );
         let active = read_active_version(root).unwrap().unwrap();
         assert_eq!(active.version, "0.113.1");
+    }
+
+    #[test]
+    fn migrate_legacy_does_not_clean_populated_subdir_if_post_create_fails() {
+        // A populated versioned subdir is a REAL install — never an orphan
+        // from an aborted migration. The cleanup loop in
+        // `migrate_legacy_install` only removes subdirs that contain no
+        // binary; a populated sibling must short-circuit the whole migration
+        // (`Ok(false)`) and survive untouched — even when a failing
+        // post-create hook is configured (which must never fire because the
+        // populated subdir blocks migration at the cleanup scan first).
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let bin_name = nu_binary_name();
+
+        let tools = root.join("tools/nushell");
+        std::fs::create_dir_all(&tools).unwrap();
+        let legacy = tools.join(bin_name);
+        std::fs::write(&legacy, b"fake legacy nu").unwrap();
+
+        // Pre-populate the versioned subdir with REAL content — the exact
+        // shape the cleanup path must never touch.
+        let populated_dir = tools.join("0.113.1");
+        std::fs::create_dir_all(&populated_dir).unwrap();
+        let populated_bin = populated_dir.join(bin_name);
+        std::fs::write(&populated_bin, b"real installed nu").unwrap();
+
+        // Post-create hook configured to fail; it must NOT be reached
+        // because the populated subdir short-circuits migration first.
+        let result = migrate_legacy_install_with_detector(
+            root,
+            &|_| Ok("0.113.1".to_string()),
+            Some(&|_| bail!("simulated post-create failure")),
+        );
+
+        let migrated = result.unwrap();
+        assert!(
+            !migrated,
+            "migration must be declined while a populated versioned install exists"
+        );
+        assert!(
+            populated_dir.is_dir(),
+            "populated subdir must be left in place"
+        );
+        assert!(
+            populated_bin.is_file(),
+            "populated binary must be left in place"
+        );
+        assert_eq!(
+            std::fs::read(&populated_bin).unwrap(),
+            b"real installed nu",
+            "populated subdir content must be untouched"
+        );
+        assert!(
+            legacy.exists(),
+            "legacy binary must be left in place when migration is declined"
+        );
     }
 
     #[test]
