@@ -78,6 +78,25 @@ fn execute_latest(root: &Path) -> Result<()> {
     let latest = version_manager::latest_installed_version(root)?;
     match latest {
         Some(version) => {
+            // cubic PR69 UzV: preserve off-tree `binary_path` when the existing
+            // marker already names this version with an off-tree entry.
+            // Without this, every successful `numan use latest` overwrites the
+            // marker with `None`, breaking resolution of `setup nu use <path>`
+            // choices.
+            if let Some(existing) = version_manager::read_active_version(root)? {
+                if existing.version == version && existing.binary_path.is_some() {
+                    version_manager::write_active_version_with_binary(
+                        root,
+                        &version,
+                        &std::path::PathBuf::from(existing.binary_path.as_deref().unwrap_or("")),
+                    )?;
+                    println!(
+                        "Switched to Nu {} (latest installed; off-tree path preserved).",
+                        version
+                    );
+                    return Ok(());
+                }
+            }
             version_manager::write_active_version(root, &version)?;
             println!("Switched to Nu {} (latest installed).", version);
             Ok(())

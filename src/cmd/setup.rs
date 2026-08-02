@@ -8,6 +8,7 @@ use crate::nu::bootstrap::{self, NuSetupOptions};
 use crate::nu::paths::{
     find_nu_executable_with_root, find_nu_on_path, probe_nu_config_path, validate_nushell_binary,
 };
+use crate::nu::version_manager;
 use crate::util::atomic::write_bytes_atomic;
 use crate::util::fs_safety::{
     acquire_mutation_lock, assert_managed_file_owned, assert_not_symlink,
@@ -314,7 +315,17 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
         // collected consent for both the delete AND the PATH add.
         caller_consented_destructive: managed_dir_was_present,
     };
-    bootstrap::register_existing_nu(Path::new(&path_nu), &options)?;
+    let registered = bootstrap::register_existing_nu(Path::new(&path_nu), &options)?;
+    // chatgpt PR69 S08: persist the registered binary as the active version
+    // marker so `numan use list` reports it as the selection.
+    let external_label = crate::core::nu_version::NuVersion::from_binary(&registered)
+        .map(|v| v.version)
+        .unwrap_or_else(|_| "external".to_string());
+    version_manager::write_active_version_with_binary(
+        root,
+        &version_manager::normalize_version(&external_label)?,
+        &registered,
+    )?;
     Ok(())
 }
 
@@ -368,12 +379,26 @@ fn execute_use_existing(
         // collected consent for both the delete AND the PATH add.
         caller_consented_destructive: managed_dir_was_present,
     };
-    bootstrap::register_existing_nu(path, &options)?;
+    let registered = bootstrap::register_existing_nu(path, &options)?;
+    // chatgpt PR69 S08: persist the registered binary as the active version
+    // marker so `numan use list` reports it as the selection.
+    let external_label = crate::core::nu_version::NuVersion::from_binary(&registered)
+        .map(|v| v.version)
+        .unwrap_or_else(|_| "external".to_string());
+    version_manager::write_active_version_with_binary(
+        root,
+        &version_manager::normalize_version(&external_label)?,
+        &registered,
+    )?;
     Ok(())
 }
 
 /// Remove the managed Nushell install, prompting unless `--yes`.
 fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
+    // chatgpt PR69 S09: clear the active-version marker before deleting
+    // the managed tree so the marker cannot dangle at a binary we are
+    // about to remove.
+    let _ = version_manager::clear_active_version(root);
     let managed_dir = bootstrap::managed_nu_dir(root);
     if !managed_dir.is_dir() {
         println!(
@@ -407,6 +432,10 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
 
 /// Silently remove the managed Nu directory if it exists (used by --use-existing).
 fn remove_managed_nu_if_present(root: &Path) -> Result<()> {
+    // chatgpt PR69 S09: clear the active-version marker before deleting
+    // the managed tree so the marker cannot dangle at a binary we are
+    // about to remove.
+    let _ = version_manager::clear_active_version(root);
     let managed_dir = bootstrap::managed_nu_dir(root);
     if managed_dir.is_dir() {
         std::fs::remove_dir_all(&managed_dir).with_context(|| {

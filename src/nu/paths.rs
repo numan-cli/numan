@@ -313,8 +313,21 @@ pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
         return Ok(managed.to_string_lossy().into_owned());
     }
 
-    // Consult the active-version marker as a hint table (see function doc).
-    if let Ok(Some(active)) = version_manager::read_active_version(root) {
+    // cubic PR69 UzM: don't swallow corrupt-marker errors. A present but
+    // malformed marker should fail loudly so `numan init` / loader setup
+    // can't silently fall back to PATH Nu because the marker happens
+    // to be unreadable.
+    let marker = match version_manager::read_active_version(root) {
+        Ok(Some(m)) => Some(m),
+        Ok(None) => None,
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "Failed to read active-version marker: {}. Run `numan doctor --fix` to reconcile.",
+                e,
+            ));
+        }
+    };
+    if let Some(active) = marker.as_ref() {
         // 1. on-tree version-binary, if the version is well-formed and its
         //    installed binary still exists.
         if let Ok(version) = version_manager::normalize_version(&active.version) {

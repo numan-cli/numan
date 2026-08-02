@@ -110,6 +110,19 @@ pub fn migrate_legacy_install_with_detector(
     detect: &LegacyVersionDetector,
     post_create: Option<&LegacyPostCreateHook>,
 ) -> Result<bool> {
+    // cubic PR69 UzG: refuse to scan or mutate under a symlinked managed
+    // directory. A symlink under `<root>/tools/nushell` could redirect the
+    // rename or filesystem-truth cleanup outside `$NUMAN_ROOT` and silently
+    // rewrite unrelated user-visible state.
+    let legacy_dir = versioned_nu_dir(root);
+    if crate::util::fs_safety::is_symlink_or_reparse(&legacy_dir)? {
+        anyhow::bail!(
+            "Refusing to migrate: managed Nushell directory '{}' is a symlink or reparse point. \
+             Run `numan setup nu` from a clean root before migrating.",
+            legacy_dir.display(),
+        );
+    }
+
     // Self-heal any in-flight migration journal from a prior crashed attempt.
     // The `Prepared` path removes any orphan `<version>/` subdir; the
     // `Renamed` path completes the active-version write. This is what makes
@@ -257,19 +270,20 @@ pub fn migrate_legacy_install_with_detector(
 /// - "0.113.1\n"
 fn parse_nu_version_from_output(output: &str) -> Result<String> {
     let trimmed = output.trim();
-    // Try to extract version from "Nushell X.Y.Z" format.
-    if let Some(rest) = trimmed.strip_prefix("Nushell ") {
-        // Take the first whitespace-delimited token.
-        if let Some(version) = rest.split_whitespace().next() {
-            // Validate it looks like a semver.
-            if semver::Version::parse(version).is_ok() {
-                return Ok(version.to_string());
-            }
-        }
+    // Strip an optional leading "Nushell " so the rest matches what
+    // `NuVersion::parse` already accepts (semver with optional build
+    // hash / pre-release suffix; see core/nu_version.rs).
+    let body = trimmed
+        .strip_prefix("Nushell ")
+        .unwrap_or(trimmed)
+        .trim_start_matches('v');
+    // cubic PR69 UzU: delegate to NuVersion::parse so build-hash
+    // suffixes ("0.113.1 (abc123)") and bare semvers both work.
+    if let Ok(parsed) = crate::core::nu_version::NuVersion::parse(body) {
+        return Ok(parsed.version);
     }
-    // Try parsing the whole thing as a semver.
-    if semver::Version::parse(trimmed).is_ok() {
-        return Ok(trimmed.to_string());
+    if semver::Version::parse(body).is_ok() {
+        return Ok(body.to_string());
     }
     bail!("Failed to parse Nu version from output: '{}'", trimmed)
 }
@@ -277,7 +291,6 @@ fn parse_nu_version_from_output(output: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
 

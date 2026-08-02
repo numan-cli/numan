@@ -1344,6 +1344,11 @@ fn apply_repairs(
             return Ok(records);
         }
         let id = "journal.migration_repaired".to_string();
+        // chatgpt PR69 S1A: reacquire the root mutation lock before the
+        // self-healing reconcile so concurrent `numan use` cannot race the
+        // journal stage advance + directory rename the same way AGENTS.md
+        // requires install/remove/activate/deactivate/numan-use to.
+        acquire_mutation_lock(root)?;
         match migration_journal::reconcile(root) {
             Ok(_) => records.push(RepairRecord {
                 id,

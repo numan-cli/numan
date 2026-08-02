@@ -106,9 +106,19 @@ impl PendingMigration {
             .with_context(|| format!("Failed to read migration journal at '{}'", path.display()))?;
         let journal: Self =
             serde_json::from_str(&content).context("Failed to parse migration-journal.json")?;
-        // Coerce schema_version to the current value to keep the on-disk format
-        // simple. Future versions will guard behind `if journal.schema_version
-        // != SCHEMA_VERSION`.
+        // copilot PR69 VwSra: hard-fail on unknown schema_version so a future
+        // variant cannot be silently misinterpreted as the current one.
+        // The original "coerce to SCHEMA_VERSION" wording was aspirational
+        // and never actually performed; treat it as an error so doctor finds
+        // it instead of silently downgrading.
+        if journal.schema_version != SCHEMA_VERSION {
+            anyhow::bail!(
+                "Migration journal at '{}' uses schema_version {} but this build expects {}.                  Upgrade Numan or remove the stale journal.",
+                path.display(),
+                journal.schema_version,
+                SCHEMA_VERSION,
+            );
+        }
         Ok(Some(journal))
     }
 
