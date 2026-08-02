@@ -167,12 +167,25 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
 
     match journal.stage {
         MigrationStage::Prepared => {
-            // `create_dir_all(<version>/)` may have run before the crash,
-            // leaving an empty subdir behind (the original reviewer's bug).
-            // Best-effort removal; ignore errors.
-            let version_dir = version_install_dir(root, &journal.version);
-            if version_dir.is_dir() {
-                let _ = std::fs::remove_dir(&version_dir);
+            // The rename can complete before the journal advances to Renamed.
+            // Trust the filesystem in that crash window and finish recovery.
+            if versioned_binary_present(root, &journal.version) {
+                if read_active_version(root)?.is_none() {
+                    write_active_version(root, &journal.version).with_context(|| {
+                        format!("Migration recovery: failed to write active version '{}'", journal.version)
+                    })?;
+                }
+                let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
+                let legacy_binary = versioned_nu_dir(root).join(bin_name);
+                if legacy_binary.is_file() {
+                    let _ = std::fs::remove_file(&legacy_binary);
+                }
+            } else {
+                // Best-effort removal of an orphan empty version directory.
+                let version_dir = version_install_dir(root, &journal.version);
+                if version_dir.is_dir() {
+                    let _ = std::fs::remove_dir(&version_dir);
+                }
             }
             PendingMigration::delete(root)?;
             Ok(Some(journal))
