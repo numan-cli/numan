@@ -294,12 +294,12 @@ Captured from product discussion; subject to change.
 **Vision:** Numan manages multiple Nu versions simultaneously. The user picks the
 Nu version that has the plugins they need, and switching is instant.
 
-- `numan use <version>` — switch active Nu (auto-installs if missing)
+- `numan use <version>` — switch active Nu (errors with a hint to run `setup nu <version>` if the version is not installed; never auto-downloads)
 - `numan use latest` — switch to newest installed version
 - `numan use list` — show installed versions + active marker + per-version plugin counts
 - Storage: `<root>/tools/nushell/<version>/nu` (immutable, one dir per version)
-- Active marker: symlink or marker file at `<root>/tools/nushell/active`
-- PATH/shim: Numan manages a shim directory on PATH pointing at the active version
+- Active marker: JSON file at `<root>/nu_state/active-version.json` (shape `{"version": "X.Y.Z"}`, written atomically by `version_manager::write_active_version`; cleared atomically before removing the versioned tree so the marker cannot dangle at a missing binary)
+- PATH/shim: Numan does not manage a shim. PATH persistence is owned by `numan setup nu` (`prepend_process_path` + `persist_user_path`); `numan use` only flips the active marker under the mutation lock with a PreMutation snapshot.
 
 **Per-version activation sets:**
 
@@ -323,9 +323,6 @@ release versions per plugin with their Nu minor compatibility. The
 yet in the registry. Use this to drive backfill waves once `numan use` ships.
 Source: awesome-nu + manual discovery. Entries marked `NEEDS_RESEARCH` need
 their version history filled in before promotion.
-
-**Command reserved:** `numan use` exists as a stub in 0.1.x (prints a
-"planned post-1.0" message) so the UX shape is locked.
 
 ### Explicitly NOT in scope for post-1.0 (requires Nu upstream)
 

@@ -27,13 +27,14 @@ use crate::state::autoload_state::AutoloadState;
 use crate::state::journal::PendingActivation;
 use crate::state::lifecycle_journal::PendingLifecycle;
 use crate::state::lockfile::Lockfile;
+use crate::state::migration_journal::{self as migration_journal, PendingMigration};
 use crate::state::nupm_import::NupmImportsFile;
 use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
 use crate::util::fs_safety::{acquire_mutation_lock, assert_managed_file_owned};
 use crate::util::hints::{
     self, active_plugin_mutation_gated_doctor_message, registry_none_fix, setup_nu_use_existing,
     ACTIVE_PLUGIN_MUTATION_GATED_FIX, CMD_ACTIVATE, CMD_DEACTIVATE, CMD_INIT, CMD_INIT_REFRESH,
-    CMD_REGISTRY_SYNC, CMD_SETUP_NU,
+    CMD_REGISTRY_SYNC, CMD_SETUP_NU, CMD_USE,
 };
 
 const SCHEMA_VERSION: u32 = 1;
@@ -613,6 +614,19 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
             "Interrupted lifecycle operation requires manual recovery",
             None,
             RepairTier::Manual,
+        ));
+    }
+
+    if let Ok(Some(j)) = PendingMigration::load(root) {
+        findings.push(finding(
+            "journal.migration_pending",
+            Severity::Warn,
+            format!(
+                "Pending legacy-Nu migration journal (stage: {}, version: {})",
+                j.stage, j.version
+            ),
+            Some(CMD_USE),
+            RepairTier::Auto,
         ));
     }
 }
@@ -1313,6 +1327,32 @@ fn apply_repairs(
         }
     }
 
+    // The migration journal path is self-healing in normal use (top of
+    // `migrate_legacy_install_with_detector`); the doctor repair is the
+    // catch-up for users who ran `numan doctor --fix` without ever calling
+    // `numan use`. Gating on `PendingMigration::load(...).is_some()` keeps
+    // the Applied record honest — re-runs of `doctor --fix` produce no
+    // second repair.
+    if findings
+        .iter()
+        .any(|f| f.id == "journal.migration_pending" && f.severity == Severity::Warn)
+        && PendingMigration::load(root)?.is_some()
+    {
+        let id = "journal.migration_repaired".to_string();
+        match migration_journal::reconcile(root) {
+            Ok(_) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Applied,
+                reason: None,
+            }),
+            Err(e) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Failed,
+                reason: Some(e.to_string()),
+            }),
+        }
+    }
+
     Ok(records)
 }
 
@@ -1362,6 +1402,7 @@ fn print_report(args: &DoctorArgs, root: &Path, report: &DoctorReport) -> Result
                 "journal.autoload_stale",
                 "journal.lifecycle_pending",
                 "journal.lifecycle_stale",
+                "journal.migration_pending",
             ],
         ),
         (
@@ -2205,5 +2246,85 @@ mod tests {
         assert!(json.contains("nu.path.version"));
         assert!(json.contains("nu.managed.version"));
         assert!(json.contains("registry.trust_root"));
+    }
+    #[test]
+    fn doctor_reports_migration_journal_finding() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        // Pre-stage a half-applied migration: an empty `<version>/`
+        // subdir (the reviewer's original bug state) plus a journal at
+        // `Prepared` recorded by an interrupted `migrate_legacy_install`.
+        let tools = root.join("tools").join("nushell");
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::create_dir_all(tools.join("0.113.1")).unwrap();
+        PendingMigration {
+            schema_version: crate::state::migration_journal::SCHEMA_VERSION,
+            version: "0.113.1".to_string(),
+            stage: crate::state::migration_journal::MigrationStage::Prepared,
+        }
+        .save(root)
+        .unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                fix: false,
+                yes: false,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_pending")
+            .expect("journal.migration_pending finding");
+        assert_eq!(f.severity, Severity::Warn);
+        assert_eq!(f.repair, RepairTier::Auto);
+        assert!(
+            f.message.contains("Prepared") || f.message.contains("prepared"),
+            "finding must name the journal stage: {}",
+            f.message
+        );
+        assert!(f.message.contains("0.113.1"));
+        assert_eq!(f.fix.as_deref(), Some(crate::util::hints::CMD_USE));
+    }
+
+    #[test]
+    fn doctor_fix_reconciles_migration_journal() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        // Same pre-stage as `doctor_reports_migration_journal_finding`.
+        let tools = root.join("tools").join("nushell");
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::create_dir_all(tools.join("0.113.1")).unwrap();
+        PendingMigration {
+            schema_version: crate::state::migration_journal::SCHEMA_VERSION,
+            version: "0.113.1".to_string(),
+            stage: crate::state::migration_journal::MigrationStage::Prepared,
+        }
+        .save(root)
+        .unwrap();
+
+        let args = DoctorArgs {
+            fix: true,
+            yes: true,
+            json: false,
+            nupm_home: None,
+        };
+        let _ = execute_with_options(&args, root, test_doctor_options()).unwrap();
+
+        // After `doctor --fix`: the empty subdir AND the journal must be gone.
+        assert!(
+            !tools.join("0.113.1").exists(),
+            "empty versioned subdir must be removed by reconcile"
+        );
+        assert!(
+            PendingMigration::load(root).unwrap().is_none(),
+            "journal must be cleared by reconcile"
+        );
     }
 }

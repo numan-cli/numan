@@ -88,6 +88,12 @@ pub fn run_then(first: &str, second: &str) -> String {
 /// `numan deactivate`
 pub const CMD_DEACTIVATE: &str = "numan deactivate";
 
+/// `numan use <version>|latest|list` — switch the active managed Nu
+/// version. Also serves as a boot reconciliation point: any stale
+/// `state/migration-journal.json` is reconciled at the top of every
+/// `numan use` invocation.
+pub const CMD_USE: &str = "numan use";
+
 /// `numan deactivate <pkg>`
 pub fn deactivate_pkg(package_id: &str) -> String {
     format!("numan deactivate {package_id}")

@@ -2,6 +2,7 @@
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use crate::core::integrity;
@@ -9,6 +10,8 @@ use crate::core::platform::{Arch, Env, Os, Platform};
 use crate::install::download::download_file;
 use crate::install::extract::{extract_archive, ArchiveFormat, ExtractConfig};
 use crate::nu::paths::validate_nushell_binary;
+use crate::nu::version_manager;
+use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 #[cfg(unix)]
 use crate::util::atomic::write_bytes_atomic;
 #[cfg(unix)]
@@ -213,7 +216,12 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
 
     let source = locate_extracted_nu_binary(&extract_root)?;
     let dest_dir = managed_nu_dir(root);
-    std::fs::create_dir_all(&dest_dir)?;
+    std::fs::create_dir_all(&dest_dir).with_context(|| {
+        format!(
+            "Failed to create managed Nushell directory '{}'",
+            dest_dir.display()
+        )
+    })?;
     let dest = managed_nu_binary(root);
 
     std::fs::copy(&source, &dest).with_context(|| {
@@ -443,15 +451,30 @@ pub fn register_existing_nu(binary: &Path, options: &NuSetupOptions) -> Result<P
 
     let parent = path_parent_for_registration(input.as_path(), &resolved)?;
 
-    println!(
-        "This will add '{}' to your user PATH so Nushell can be found.",
-        parent.display()
-    );
-    crate::util::confirm::confirm_or_bail(
-        "Proceed?",
-        options.yes,
-        "Nushell PATH setup cancelled.",
-    )?;
+    if options.caller_consented_destructive {
+        // Audit trail for the hoisted consent: the caller (typically
+        // `execute_use_path` / `execute_use_existing`) already collected
+        // the destructive-step consent (managed-tree deletion + PATH add)
+        // via its own `confirm_or_bail(...)` before reaching this point.
+        // Direct callers (CLI subcommand and doctor --fix) leave the flag
+        // `false` and the inner prompt continues to fire, preserving
+        // backward-compatible UX.
+        eprintln!(
+            "(audit) prompt hoisted; skipping internal PATH-confirmation prompt \
+             for '{}' (caller has already gathered destructive-step consent).",
+            parent.display()
+        );
+    } else {
+        println!(
+            "This will add '{}' to your user PATH so Nushell can be found.",
+            parent.display()
+        );
+        crate::util::confirm::confirm_or_bail(
+            "Proceed?",
+            options.yes,
+            "Nushell PATH setup cancelled.",
+        )?;
+    }
 
     prepend_process_path(&parent)?;
     if !options.skip_path {
@@ -620,6 +643,15 @@ pub struct NuSetupOptions {
     pub skip_path: bool,
     /// When set, download this release tag instead of latest.
     pub version: Option<String>,
+    /// When `true`, the caller has already collected destructive-step consent
+    /// (e.g. `cmd::setup::execute_use_path` / `execute_use_existing` already
+    /// prompted for both the managed-tree deletion and the PATH add). The
+    /// internal PATH-confirmation prompt in [`register_existing_nu`] is then
+    /// suppressed and replaced with an audit log, so the user sees one prompt
+    /// instead of two. Default `false` preserves the original two-prompt UX
+    /// for direct callers (`numan setup nu use <path>`, hidden legacy flags,
+    /// `numan doctor --fix`'s off-PATH repair).
+    pub caller_consented_destructive: bool,
 }
 
 pub fn execute_nu_setup(
@@ -680,9 +712,43 @@ where
         "This will download the official Nushell {version_label} release for {} from GitHub.",
         platform.triple
     );
+    // Refuse to proceed without explicit consent in non-interactive sessions.
+    // `confirm_or_bail` auto-confirms on a pipe otherwise, which would silently
+    // trigger a download and subsequent PATH mutation.
+    if !options.yes && !std::io::stdin().is_terminal() {
+        bail!("Nushell setup cancelled.");
+    }
     crate::util::confirm::confirm_or_bail("Proceed?", options.yes, "Nushell setup cancelled.")?;
 
+    // Snapshot established state right before the download/install mutates the
+    // filesystem. Same lifecycle boundary used by install/update/remove/activate
+    // per AGENTS.md.
+    create_snapshot(
+        root,
+        SnapshotReason::PreMutation,
+        SnapshotTrigger::Install,
+        None,
+        None,
+    )
+    .with_context(|| "Failed to create pre-install snapshot for `numan setup nu`")?;
+
     let installed = install(root, platform)?;
+
+    // Persist the freshly installed (pinned) version as the active version so
+    // `numan use list` and downstream activation see it as the selected Nu.
+    // `latest` is left to `numan use latest` — the user explicitly resolves the
+    // release tag there.
+    if let Some(version) = &options.version {
+        let pinned = version_manager::normalize_version(version)
+            .with_context(|| format!("Failed to normalize requested version '{}'", version))?;
+        version_manager::write_active_version(root, &pinned).with_context(|| {
+            format!(
+                "Failed to persist installed Nu version '{}' as active",
+                pinned
+            )
+        })?;
+    }
+
     let tools_dir = managed_nu_dir(root);
     prepend_process_path(&tools_dir)?;
     if !options.skip_path {
@@ -863,5 +929,48 @@ mod tests {
         let installed = install_from_archive(&zip_path, root, "0.0.0-test").unwrap();
         assert_eq!(installed, managed_nu_binary(root));
         assert!(installed.is_file());
+    }
+
+    #[test]
+    fn execute_nu_setup_with_pinned_version_persists_active_marker() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let platform = Platform::detect();
+        let options = NuSetupOptions {
+            yes: true,
+            force: false,
+            skip_path: true,
+            version: Some("0.113.1".to_string()),
+            // Install path doesn't enter `register_existing_nu`, but the
+            // initializer needs this field for the struct to compile.
+            caller_consented_destructive: false,
+        };
+
+        // Fake installer: write a versioned-style binary at tools/nushell/<v>/
+        // and return its path. Mimics what `install_release` does after
+        // `install_from_archive` succeeds.
+        let result = execute_nu_setup_with_installer(root, &platform, &options, |r, _p| {
+            let bin_dir = version_manager::version_install_dir(r, "0.113.1");
+            std::fs::create_dir_all(&bin_dir).unwrap();
+            let bin = version_manager::version_binary(r, "0.113.1");
+            std::fs::write(&bin, b"fake nu").unwrap();
+            Ok(bin)
+        })
+        .unwrap();
+
+        assert!(result.is_file());
+
+        // Active marker written by the orchestrator.
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.113.1");
+
+        // And the resulting `numan use list` state includes the freshly installed
+        // version.
+        let listed = version_manager::list_installed_versions(root).unwrap();
+        assert!(
+            listed.contains(&"0.113.1".to_string()),
+            "expected 0.113.1 in installed list, got: {:?}",
+            listed
+        );
     }
 }
