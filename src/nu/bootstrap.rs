@@ -2,7 +2,6 @@
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use crate::core::integrity;
@@ -220,9 +219,8 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
     // is a pure payload write: the caller (`execute_nu_setup_with_installer`)
     // owns active-marker persistence; per AGENTS.md, only `activate`/`deactivate`
     // modify Nu integration state.
-    let normalized = version_manager::normalize_version(version).with_context(|| {
-        format!("Invalid Nu version '{}' for installation", version)
-    })?;
+    let normalized = version_manager::normalize_version(version)
+        .with_context(|| format!("Invalid Nu version '{}' for installation", version))?;
     let dest_dir = version_manager::version_install_dir(root, &normalized);
     std::fs::create_dir_all(&dest_dir).with_context(|| {
         format!(
@@ -722,11 +720,12 @@ where
         platform.triple
     );
     // Refuse to proceed without explicit consent in non-interactive sessions.
-    // `confirm_or_bail` auto-confirms on a pipe otherwise, which would silently
-    // trigger a download and subsequent PATH mutation.
-    if !options.yes && !std::io::stdin().is_terminal() {
-        bail!("Nushell setup cancelled.");
-    }
+    // Routes through `require_tty_or_yes` so the audit-grade eprintln output
+    // is identical across every destructive setup entry — `cmd::setup::*`
+    // (off-path registration, managed removal) and this download path share
+    // one helper, one audit pattern, one source of truth. The pipe fallback
+    // that `confirm_or_bail` would auto-promote is closed here instead.
+    crate::util::confirm::require_tty_or_yes(options.yes, "Nushell setup")?;
     crate::util::confirm::confirm_or_bail("Proceed?", options.yes, "Nushell setup cancelled.")?;
 
     // Snapshot established state right before the download/install mutates the
