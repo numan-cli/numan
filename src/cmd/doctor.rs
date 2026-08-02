@@ -130,6 +130,9 @@ pub struct DoctorOptions {
     pub discover_off_path: Option<fn() -> Option<PathBuf>>,
     /// Override Nu `--version` probing (tests inject a fixed version string).
     pub nu_version_probe: Option<fn(&Path) -> Result<String>>,
+    /// Override confirm-tier gating (tests inject `|_| true` to exercise repairs
+    /// under non-TTY CI; production uses [`confirm_repairs`]).
+    pub confirm_repairs: Option<fn(&DoctorArgs) -> bool>,
 }
 
 pub fn execute(args: &DoctorArgs, root: &Path) -> Result<i32> {
@@ -1004,7 +1007,10 @@ fn apply_repairs(
     };
 
     let mut records = Vec::new();
-    let confirm = confirm_repairs(args);
+    let confirm = match options.confirm_repairs {
+        Some(gate) => gate(args),
+        None => confirm_repairs(args),
+    };
 
     for dir in LAYOUT_DIRS {
         let id = format!("layout.{dir}");
@@ -1468,6 +1474,13 @@ mod tests {
     /// Serializes tests that mutate the process-wide `PATH` env var.
     static TEST_PATH_GUARD: Mutex<()> = Mutex::new(());
 
+    /// Off-PATH discovery seam for unit tests (`discover_off_path` is an fn pointer).
+    static TEST_OFF_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+    fn discover_off_path_test() -> Option<PathBuf> {
+        TEST_OFF_PATH.lock().ok()?.clone()
+    }
+
     /// RAII guard that restores the original PATH on drop, ensuring restoration
     /// during both normal return and panic unwinding.
     struct PathRestoreGuard {
@@ -1583,6 +1596,7 @@ mod tests {
                 nu_setup_repair: None,
                 discover_off_path: None,
                 nu_version_probe: Some(probe_fixed_version),
+                confirm_repairs: Some(confirm_repairs_always),
             },
         )
         .unwrap();
@@ -1640,6 +1654,7 @@ mod tests {
                 nu_setup_repair: None,
                 discover_off_path: None,
                 nu_version_probe: Some(probe_fixed_version),
+                confirm_repairs: Some(confirm_repairs_always),
             },
         )
         .unwrap();
@@ -1929,11 +1944,17 @@ mod tests {
         anyhow::bail!("simulated version probe failure")
     }
 
+    fn confirm_repairs_always(_args: &DoctorArgs) -> bool {
+        true
+    }
+
     /// Skip network and never exec a real `nu` during doctor unit tests.
+    /// Force confirm-tier repairs so non-TTY unit tests can exercise them.
     fn test_doctor_options() -> DoctorOptions {
         DoctorOptions {
             skip_network: true,
             nu_version_probe: Some(probe_fixed_version),
+            confirm_repairs: Some(confirm_repairs_always),
             ..DoctorOptions::default()
         }
     }
@@ -2199,6 +2220,7 @@ mod tests {
         // Regression test: found_off_path repair should not destroy an existing
         // managed installation when running in a non-TTY session (where confirm
         // returns false and the repair is skipped).
+        let _guard = TEST_PATH_GUARD.lock().unwrap();
         let dir = TempDir::new().unwrap();
         let root = dir.path();
 
@@ -2206,15 +2228,12 @@ mod tests {
         let managed_binary = ensure_fake_managed_nu(root);
         assert!(managed_binary.exists(), "managed binary should exist");
 
-        // Set up an off-path Nu binary.
+        // Set up an off-path Nu binary for the discover seam (fn pointer, no captures).
         let off_path_dir = dir.path().join("external_nu");
         std::fs::create_dir_all(&off_path_dir).unwrap();
         let off_path_binary = off_path_dir.join("nu");
         std::fs::write(&off_path_binary, b"external nu").unwrap();
-
-        // Configure doctor to discover this off-path binary.
-        let off_path_clone = off_path_binary.clone();
-        let discover_off_path_fn = move || Some(off_path_clone.clone());
+        *TEST_OFF_PATH.lock().unwrap() = Some(off_path_binary);
 
         // Run doctor in non-TTY mode (confirm_repairs will return false).
         // The found_off_path repair should be skipped, not attempted.
@@ -2224,17 +2243,23 @@ mod tests {
             nupm_home: None,
         };
 
+        // Keep production confirm gate (`None`) so non-TTY skips confirm-tier.
         let options = DoctorOptions {
             skip_network: true,
             nu_version_probe: Some(probe_fixed_version),
-            discover_off_path: Some(discover_off_path_fn),
+            discover_off_path: Some(discover_off_path_test),
             nu_setup_repair: Some(test_noop_setup_repair),
+            confirm_repairs: None,
             ..DoctorOptions::default()
         };
 
         // Since confirm_repairs now checks TTY (and we're in a test which is non-TTY),
         // the repair should be skipped and test_noop_setup_repair should not panic.
-        execute_with_options(&args, root, options).ok();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_with_options(&args, root, options).ok();
+        }));
+        *TEST_OFF_PATH.lock().unwrap() = None;
+        result.expect("doctor repair must not call setup when confirm_repairs is false");
 
         // Verify the managed installation was NOT removed.
         assert!(

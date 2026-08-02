@@ -43,7 +43,11 @@ fn nu_setup_repair_test(
         args.use_existing.is_none(),
         "doctor must not use the deprecated flag"
     );
-    assert!(args.yes);
+    // Doctor must not auto-approve consented wipe of a managed install.
+    assert!(
+        !args.yes,
+        "doctor found_off_path repair must not pass --yes"
+    );
     *TEST_NU_SETUP_CALLED.lock().unwrap() = true;
     Ok(())
 }
@@ -423,11 +427,18 @@ fn probe_fixed_version(_path: &Path) -> anyhow::Result<String> {
     Ok("0.99.9".to_string())
 }
 
+fn confirm_repairs_always(_args: &DoctorArgs) -> bool {
+    true
+}
+
 /// Skip network and never exec a real `nu` during doctor integration tests.
+/// Force confirm-tier repairs on so non-TTY CI can exercise repair paths that
+/// production gates behind an interactive session.
 fn test_doctor_options() -> DoctorOptions {
     DoctorOptions {
         skip_network: true,
         nu_version_probe: Some(probe_fixed_version),
+        confirm_repairs: Some(confirm_repairs_always),
         ..DoctorOptions::default()
     }
 }
