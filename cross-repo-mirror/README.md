@@ -34,7 +34,7 @@ The CI workflow in each sibling repo `curl`s the consolidated roadmap
 straight from `numan@<CONTRACT_SHA>/docs/plans/consolidated-multi-repo-roadmap.md`
 into a temp file at the start of the job, then runs the exact same
 `scripts/check-roadmap-drift.py` against that fetched copy. The contract
-SHA is recorded as `CONTRACT_SHA: 65e50cebd8a8d50cc4b7ad6947fe68c24e5dbb75`
+SHA is recorded as `CONTRACT_SHA: 60a015fec1b25886f139d568edb1a2ff6df212f3`
 in each workflow so a force-push to the contract tag can never
 silently change the guardrail. Bumping the contract is a coordinated
 operation across all three repos — see `scripts/bump-contract.sh` in
@@ -50,7 +50,7 @@ tree lives only in `numan`.
 ```bash
 # In the numan checkout:
 NUMAN_ROOT=$(pwd)   # path to tonythethompson/numan
-CONTRACT_SHA=65e50cebd8a8d50cc4b7ad6947fe68c24e5dbb75
+CONTRACT_SHA=60a015fec1b25886f139d568edb1a2ff6df212f3
 SIBLING=numan-plugins   # or numan-registry
 SIBLING_ROOT=/path/to/$SIBLING
 
