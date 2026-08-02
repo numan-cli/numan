@@ -215,14 +215,22 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
     .with_context(|| format!("Failed to extract '{}'", archive_path.display()))?;
 
     let source = locate_extracted_nu_binary(&extract_root)?;
-    let dest_dir = managed_nu_dir(root);
+    // Write into the versioned layout (`<root>/tools/nushell/<version>/nu`) so
+    // a single install action never clobbers another installed version. Install
+    // is a pure payload write: the caller (`execute_nu_setup_with_installer`)
+    // owns active-marker persistence; per AGENTS.md, only `activate`/`deactivate`
+    // modify Nu integration state.
+    let normalized = version_manager::normalize_version(version).with_context(|| {
+        format!("Invalid Nu version '{}' for installation", version)
+    })?;
+    let dest_dir = version_manager::version_install_dir(root, &normalized);
     std::fs::create_dir_all(&dest_dir).with_context(|| {
         format!(
-            "Failed to create managed Nushell directory '{}'",
+            "Failed to create managed Nushell version directory '{}'",
             dest_dir.display()
         )
     })?;
-    let dest = managed_nu_binary(root);
+    let dest = version_manager::version_binary(root, &normalized);
 
     std::fs::copy(&source, &dest).with_context(|| {
         format!(
@@ -232,7 +240,8 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
         )
     })?;
     make_executable(&dest)?;
-    std::fs::write(dest_dir.join("VERSION"), version.as_bytes())?;
+    std::fs::write(dest_dir.join("VERSION"), normalized.as_bytes())
+        .with_context(|| format!("Failed to write VERSION file in '{}'", dest_dir.display()))?;
     Ok(dest)
 }
 
@@ -927,7 +936,15 @@ mod tests {
         }
 
         let installed = install_from_archive(&zip_path, root, "0.0.0-test").unwrap();
-        assert_eq!(installed, managed_nu_binary(root));
+        // install_from_archive must place the binary in the versioned layout
+        // (`tools/nushell/<version>/nu`), not the legacy single-binary
+        // `managed_nu_binary` location. Asserting against `version_binary`
+        // here means the test would catch a regression that flips us back to
+        // clobbering every installed version on every install.
+        assert_eq!(
+            installed,
+            version_manager::version_binary(root, "0.0.0-test")
+        );
         assert!(installed.is_file());
     }
 
