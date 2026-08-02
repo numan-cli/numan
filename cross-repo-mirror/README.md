@@ -34,7 +34,7 @@ The CI workflow in each sibling repo `curl`s the consolidated roadmap
 straight from `numan@<CONTRACT_SHA>/docs/plans/consolidated-multi-repo-roadmap.md`
 into a temp file at the start of the job, then runs the exact same
 `scripts/check-roadmap-drift.py` against that fetched copy. The contract
-SHA is recorded as `CONTRACT_SHA: 99aa695c6ecbb059020efc689b59a8a8d6c490f8`
+SHA is recorded as `CONTRACT_SHA: f220940d3158bdcb86542f38458e401073fa0806`
 in each workflow so a force-push to the contract tag can never
 silently change the guardrail. Bumping the contract is a coordinated
 operation across all three repos — see `scripts/bump-contract.sh` in
@@ -49,7 +49,7 @@ mkdir -p scripts
 # Fetch the pinned contract version of the drift script directly from
 # the contract SHA so the sibling repo never holds a stale copy.
 curl -sSfL \
-    https://raw.githubusercontent.com/tonythethompson/numan/99aa695c6ecbb059020efc689b59a8a8d6c490f8/scripts/check-roadmap-drift.py \
+    https://raw.githubusercontent.com/tonythethompson/numan/f220940d3158bdcb86542f38458e401073fa0806/scripts/check-roadmap-drift.py \
     -o scripts/check-roadmap-drift.py
 chmod +x scripts/check-roadmap-drift.py
 
