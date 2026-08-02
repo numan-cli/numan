@@ -32,9 +32,61 @@ pub const CMD_TRY: &str = "numan try";
 /// `numan setup loader`
 pub const CMD_SETUP_LOADER: &str = "numan setup loader";
 
-/// `numan setup nu use <path>`
+/// Quote `s` for a POSIX-ish shell hint.
+///
+/// Wraps in single quotes when the value contains whitespace, quotes, or any
+/// shell metacharacter; otherwise returns the string as-is. Keeps Numan fix
+/// hints copy-pasteable when the path they're pointing at contains a space
+/// or is otherwise shell-sensitive.
+pub fn shell_quote(s: &str) -> String {
+    let needs_quoting = s.is_empty()
+        || s.chars().any(|c| {
+            c.is_whitespace()
+                || matches!(
+                    c,
+                    '\'' | '"'
+                        | '`'
+                        | '$'
+                        | '&'
+                        | '|'
+                        | ';'
+                        | '<'
+                        | '>'
+                        | '('
+                        | ')'
+                        | '{'
+                        | '}'
+                        | '['
+                        | ']'
+                        | '*'
+                        | '?'
+                        | '~'
+                        | '#'
+                        | '!'
+                )
+        });
+    if !needs_quoting {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// `numan setup nu use <path>` with shell-safe quoting on `<path>`.
 pub fn setup_nu_use_existing(path: &std::path::Path) -> String {
-    format!("numan setup nu use {}", path.display())
+    format!(
+        "numan setup nu use {}",
+        shell_quote(&path.display().to_string())
+    )
 }
 
 /// `numan registry add …`
@@ -162,6 +214,21 @@ See docs/active-plugin-gate.md.";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_quote_passes_bare_paths() {
+        assert_eq!(shell_quote("/usr/local/bin/nu"), "/usr/local/bin/nu");
+    }
+
+    #[test]
+    fn shell_quote_wraps_paths_with_spaces() {
+        assert_eq!(shell_quote("/opt/my bin/nu"), "'/opt/my bin/nu'");
+    }
+
+    #[test]
+    fn shell_quote_escapes_embedded_quotes() {
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
 
     #[test]
     fn active_plugin_mutation_gated_mentions_package_and_issue() {

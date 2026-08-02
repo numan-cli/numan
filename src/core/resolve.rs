@@ -314,8 +314,11 @@ fn append_nu_pin_options(msg: &mut String, package: &Package, diagnosis: &Packag
 
 /// Shared Nu-mismatch remediation for resolve / resolve_exact.
 ///
-/// Keeps `setup nu <VERSION>`, states PATH is untouched, and closes with
-/// "nothing was installed". Never suggests `registry sync` as an ABI fix.
+/// Suggests `setup nu <PIN>` for an ABI-compatible managed Nu and follows with
+/// `numan init --refresh && numan install <pkg>`. Notes that activations are
+/// per-Nu (re-run `numan activate` after switching). Does NOT promise PATH is
+/// untouched: `setup nu` may update PATH unless the caller passes
+/// `--skip-path`. Never suggests `registry sync` as an ABI fix.
 fn append_nu_mismatch_remediation(msg: &mut String, package: &Package, pin: Option<&str>) {
     if matches!(package.package_type, PackageType::Plugin) {
         msg.push_str(

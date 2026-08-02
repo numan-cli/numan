@@ -124,6 +124,20 @@ impl NuSetupArgs {
         }
     }
 
+    /// Test helper: register an existing Nu with explicit `--skip-path` / `--yes`.
+    pub fn use_existing_for_test(path: PathBuf, skip_path: bool, yes: bool) -> Self {
+        Self {
+            action: Some(NuAction::Use { path, force: false }),
+            version: None,
+            force: false,
+            skip_path,
+            yes,
+            remove: false,
+            use_path: false,
+            use_existing: None,
+        }
+    }
+
     /// Construct args for removing the managed Nu.
     pub fn remove(yes: bool) -> Self {
         Self {
@@ -172,6 +186,13 @@ pub fn execute_nu(args: &NuSetupArgs, root: &Path) -> Result<()> {
     setup_subcommand_lock(root, what, || execute_nu_impl_locked(args, root))
 }
 
+/// Doctor repair entry point. On this branch [`execute_nu_impl`] already
+/// acquires `setup_subcommand_lock`, so this is an alias (unlike master #67,
+/// where `execute_nu_impl` was unlocked and this wrapper held the lock).
+pub fn execute_nu_repair(args: &NuSetupArgs, root: &Path) -> Result<()> {
+    execute_nu_impl(args, root)
+}
+
 /// Short, audit-friendly label describing which destructive setup
 /// subcommand is requesting the mutation lock.
 fn setup_action_lock_label(args: &NuSetupArgs) -> &'static str {
@@ -205,6 +226,15 @@ pub(crate) fn execute_nu_impl(args: &NuSetupArgs, root: &Path) -> Result<()> {
     setup_subcommand_lock(root, what, || execute_nu_impl_locked(args, root))
 }
 
+fn reject_skip_path_for_off_path_registration(skip_path: bool) -> Result<()> {
+    if skip_path {
+        bail!(
+            "numan setup nu use cannot be combined with --skip-path.              Off-PATH registration must persist the binary directory to PATH."
+        );
+    }
+    Ok(())
+}
+
 fn execute_nu_impl_locked(args: &NuSetupArgs, root: &Path) -> Result<()> {
     // COMPAT: remove in v0.3.0 — translate hidden legacy flags to subcommands
     if args.remove {
@@ -217,12 +247,7 @@ fn execute_nu_impl_locked(args: &NuSetupArgs, root: &Path) -> Result<()> {
     }
     if let Some(existing) = &args.use_existing {
         eprintln!("warning: --use-existing is deprecated, use 'numan setup nu use <path>' instead");
-        if args.skip_path {
-            bail!(
-                "numan setup nu use cannot be combined with --skip-path. \
-                 Off-PATH registration must persist the binary directory to PATH."
-            );
-        }
+        reject_skip_path_for_off_path_registration(args.skip_path)?;
         return execute_use_existing(existing, args.yes, root, false, ExecuteUseOpts::default());
     }
 
@@ -230,12 +255,7 @@ fn execute_nu_impl_locked(args: &NuSetupArgs, root: &Path) -> Result<()> {
         Some(NuAction::Remove) => remove_managed_nu(root, args.yes),
         Some(NuAction::Path) => execute_use_path(args.yes, root, ExecuteUseOpts::default()),
         Some(NuAction::Use { path, force }) => {
-            if args.skip_path {
-                bail!(
-                    "numan setup nu use cannot be combined with --skip-path. \
-                     Off-PATH registration must persist the binary directory to PATH."
-                );
-            }
+            reject_skip_path_for_off_path_registration(args.skip_path)?;
             execute_use_existing(path, args.yes, root, *force, ExecuteUseOpts::default())
         }
         None => {
@@ -300,7 +320,9 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
     // `register_existing_nu` mutates the user's PATH and `remove_managed_nu_if_present`
     // deletes the entire managed tree, so refusing the operation on a pipe without
     // `--yes` is non-negotiable.
-    require_tty_or_yes(yes, "PATH Nu registration")?;
+    if opts.confirm.is_none() {
+        require_tty_or_yes(yes, "PATH Nu registration")?;
+    }
 
     let path_nu = find_nu_on_path()?;
     println!("Found Nu on PATH: {path_nu}");
@@ -393,7 +415,9 @@ fn execute_use_existing(
 ) -> Result<()> {
     // PR #69 WCt: refuse the operation on a non-TTY session without
     // `--yes` *before* any PATH mutation or managed-tree removal.
-    require_tty_or_yes(yes, "off-path Nu registration")?;
+    if opts.confirm.is_none() {
+        require_tty_or_yes(yes, "off-path Nu registration")?;
+    }
 
     // Validate before any destructive removal: an invalid binary must
     // not leave us without a managed install.
@@ -900,7 +924,8 @@ mod tests {
         let bin = tmp.join("fake-nu");
         let script: &[u8] = b"#!/bin/sh\n\
 case $1 in\n\
-  -c|--version) printf '{ \"version\":\"0.113.1\", \"plugin_path\":\"\", \"data_dir\":\"\", \"vendor_autoload_dirs\":[] }\n' ;;\n\
+  --version) printf '0.113.1\n' ;;\n\
+  -c) printf '{ \"version\":\"0.113.1\", \"plugin_path\":\"/tmp\", \"data_dir\":\"/tmp\", \"vendor_autoload_dirs\":[\"/tmp/vendor/autoload\"] }\n' ;;\n\
 esac\n";
         std::fs::write(&bin, script).expect("write fake-nu script");
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))

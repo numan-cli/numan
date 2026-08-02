@@ -14,11 +14,16 @@ use std::io::{IsTerminal, Write};
 /// Returns `true` when the action should proceed, `false` when the user
 /// declined. Never bails on non-TTY — scripts and CI get idempotent success.
 pub fn confirm_or_auto(prompt: &str, yes: bool) -> Result<bool> {
+    confirm_or_auto_with_tty(prompt, yes, std::io::stdin().is_terminal())
+}
+
+/// Same as [`confirm_or_auto`] but lets the caller inject the TTY decision.
+pub fn confirm_or_auto_with_tty(prompt: &str, yes: bool, is_tty: bool) -> Result<bool> {
     if yes {
         return Ok(true);
     }
 
-    if !std::io::stdin().is_terminal() {
+    if !is_tty {
         eprintln!("(non-interactive: auto-confirming)");
         return Ok(true);
     }
@@ -71,6 +76,10 @@ pub fn require_tty_or_yes(yes: bool, what: &str) -> Result<()> {
 /// branch was previously unreachable from a unit test because
 /// `std::io::stdin().is_terminal()` was not injectable. CI now exercises
 /// every branch via this seam.
+pub fn require_tty_or_yes_with_tty(yes: bool, what: &str, is_tty: bool) -> Result<()> {
+    require_tty_or_yes_with_seam(yes, what, is_tty)
+}
+
 pub fn require_tty_or_yes_with_seam(yes: bool, what: &str, is_tty: bool) -> Result<()> {
     if yes {
         eprintln!(
@@ -131,5 +140,16 @@ mod tests {
             msg.contains("Refusing destructive off-path registration"),
             "bail message must include the `what` label: {msg}"
         );
+    }
+
+    #[test]
+    fn confirm_or_auto_passes_on_non_tty() {
+        assert!(confirm_or_auto_with_tty("Proceed?", false, false).unwrap());
+    }
+
+    #[test]
+    fn confirm_or_auto_uses_yes_flag() {
+        assert!(confirm_or_auto_with_tty("Proceed?", true, false).unwrap());
+        assert!(confirm_or_auto_with_tty("Proceed?", true, true).unwrap());
     }
 }

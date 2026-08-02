@@ -129,7 +129,7 @@ pub struct DoctorOptions {
     pub activate_repair: Option<fn(&ActivateArgs, &Path) -> Result<()>>,
     /// Override deactivate repair (tests inject fakes; production uses `deactivate::execute`).
     pub deactivate_repair: Option<fn(&DeactivateArgs, &Path) -> Result<()>>,
-    /// Override Nushell bootstrap repair (tests inject fakes; production uses `setup::execute_nu_impl`).
+    /// Override Nushell bootstrap repair (tests inject fakes; production uses `setup::execute_nu_repair`).
     pub nu_setup_repair: Option<fn(&NuSetupArgs, &Path) -> Result<()>>,
     /// Override off-PATH Nu discovery (tests inject a known binary path).
     pub discover_off_path: Option<fn() -> Option<PathBuf>>,
@@ -1108,7 +1108,7 @@ fn apply_repairs(
                 reason: Some("not_confirmed".to_string()),
             });
         } else if let Some(off_path) = resolve_off_path(options) {
-            let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_impl);
+            let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
             match setup_fn(&NuSetupArgs::use_existing(off_path, true, false), root) {
                 Ok(()) => records.push(RepairRecord {
                     id,
@@ -1148,7 +1148,7 @@ fn apply_repairs(
                 reason: Some("skip_network".to_string()),
             });
         } else {
-            let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_impl);
+            let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
             match setup_fn(&NuSetupArgs::install(None, false, false, true), root) {
                 Ok(()) => records.push(RepairRecord {
                     id,
