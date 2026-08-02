@@ -16,7 +16,8 @@ use anyhow::{bail, Context, Result};
 use std::path::Path;
 
 use super::version_manager::{
-    normalize_version, version_binary, version_install_dir, versioned_nu_dir, write_active_version,
+    legacy_managed_binary_with_bin, normalize_version, nu_binary_name, version_binary,
+    version_install_dir, versioned_nu_dir, write_active_version,
 };
 use crate::state::migration_journal::{
     self as migration_journal, MigrationStage, PendingMigration, SCHEMA_VERSION,
@@ -129,11 +130,7 @@ pub fn migrate_legacy_install_with_detector(
     // the migration a journaled transaction: every stage is recoverable.
     migration_journal::reconcile(root)?;
 
-    let legacy_binary = if cfg!(windows) {
-        root.join("tools").join("nushell").join("nu.exe")
-    } else {
-        root.join("tools").join("nushell").join("nu")
-    };
+    let legacy_binary = legacy_managed_binary_with_bin(root, nu_binary_name());
 
     if !legacy_binary.exists() {
         return Ok(false);
@@ -147,7 +144,7 @@ pub fn migrate_legacy_install_with_detector(
     let versioned_dir = versioned_nu_dir(root);
     if versioned_dir.exists() {
         let mut found_installed = false;
-        let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
+        let bin_name = nu_binary_name();
         for entry in std::fs::read_dir(&versioned_dir)? {
             let entry = entry?;
             if !entry.file_type()?.is_dir() {
@@ -236,7 +233,13 @@ pub fn migrate_legacy_install_with_detector(
     })?;
 
     // Set as active version.
-    write_active_version(root, &version)?;
+    write_active_version(root, &version).with_context(|| {
+        format!(
+            "Failed to persist active Nu version marker for '{}' (legacy binary already moved to '{}'; migration journal is at Renamed stage)",
+            version,
+            new_binary.display()
+        )
+    })?;
 
     // Set the journal stage to `Active` and immediately clear it — any
     // `numan use`/`numan doctor` reconcile pass that runs after this will
@@ -310,7 +313,7 @@ mod tests {
     }
 
     fn create_legacy_binary(root: &Path, with_version_file: Option<&str>) -> PathBuf {
-        let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
+        let bin_name = nu_binary_name();
         let tools = root.join("tools").join("nushell");
         std::fs::create_dir_all(&tools).unwrap();
         let binary = tools.join(bin_name);
@@ -341,7 +344,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let binary = create_legacy_binary(root, None);
-        let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
+        let bin_name = nu_binary_name();
         let existing = root.join("tools/nushell/0.114.0");
         std::fs::create_dir_all(&existing).unwrap();
         std::fs::write(existing.join(bin_name), b"different binary").unwrap();
@@ -362,7 +365,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let binary = create_legacy_binary(root, None);
-        let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
+        let bin_name = nu_binary_name();
 
         let result =
             migrate_legacy_install_with_detector(root, &|_| Ok("0.113.1".to_string()), None)
@@ -407,7 +410,7 @@ mod tests {
 
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
+        let bin_name = nu_binary_name();
 
         let tools = root.join("tools/nushell");
         std::fs::create_dir_all(&tools).unwrap();
@@ -470,7 +473,7 @@ mod tests {
         // the empty subdir and proceed.
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
+        let bin_name = nu_binary_name();
 
         // Legacy binary at the pre-migration location.
         let tools = root.join("tools/nushell");
@@ -514,7 +517,7 @@ mod tests {
         // silently removing the empty sibling.
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
+        let bin_name = nu_binary_name();
         let tools = root.join("tools/nushell");
         std::fs::create_dir_all(&tools).unwrap();
         let legacy = tools.join(bin_name);

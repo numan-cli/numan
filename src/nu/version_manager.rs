@@ -80,6 +80,26 @@ pub fn write_active_version_with_binary(
     binary_path: &Path,
 ) -> Result<()> {
     let normalized = normalize_version(version)?;
+
+    // Refuse any `..` segment: the marker is later read by
+    // `find_nu_executable_with_root` and a tampered relative path could
+    // be used to anchor an open() outside the user's expected Nu
+    // binary location.
+    //
+    // Absolute paths are intentionally accepted: `numan setup nu use
+    // <external-path>` records the user's canonical external Nu at its
+    // absolute path. off-tree Nu binaries are a first-class case (the
+    // `offtree_*` test fixtures below prove it).
+    for component in binary_path.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            bail!(
+                "Refusing to persist active-version marker with `..` in binary path '{}' \
+                 (path-traversal segments would let a tampered marker escape the managed tree).",
+                binary_path.display(),
+            );
+        }
+    }
+
     write_active_marker(
         root,
         &ActiveVersion {
@@ -561,4 +581,26 @@ mod tests {
         let versions = list_installed_versions(root).unwrap();
         assert!(versions.is_empty());
     }
+}
+
+/// Binary name for the managed Nu binary on the current target.
+/// Windows: `nu.exe`; posix: `nu`. Used by every versioned-layout
+/// helper below so we don't sprinkle the conditional across callers.
+pub(crate) fn nu_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "nu.exe"
+    } else {
+        "nu"
+    }
+}
+
+/// Legacy single-binary path that older installs wrote.
+///
+/// `<root>/tools/nushell/${bin}`. Tests pass `bin` so they don't have
+/// to re-derive the platform-specific binary name.
+pub(crate) fn legacy_managed_binary_with_bin(
+    root: &std::path::Path,
+    bin: &str,
+) -> std::path::PathBuf {
+    root.join("tools").join("nushell").join(bin)
 }

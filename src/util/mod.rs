@@ -3,6 +3,9 @@ pub mod confirm;
 pub mod fs_safety;
 pub mod hints;
 
+#[cfg(test)]
+pub mod test_paths;
+
 pub fn format_timestamp() -> String {
     format!(
         "{:016}",

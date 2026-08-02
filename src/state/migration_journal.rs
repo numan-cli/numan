@@ -29,7 +29,7 @@
 //! `write_active_version` step in the `Renamed` case, and defensively clears
 //! the journal in any `Active`-or-better state.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -89,6 +89,32 @@ impl std::fmt::Display for MigrationStage {
     }
 }
 
+/// Reject a path component that contains traversal separators, control
+/// characters, NULs, or absolute-path indicators. The migration journal's
+/// `version` field is used as a directory name under
+/// `<root>/tools/nushell/<version>/`. A tampered or corrupted journal with
+/// `..` segments, leading slashes, or backslashes would let `reconcile()`
+/// (or anything that builds on top of the journal) escape the managed
+/// tree. Applied in both `save()` (block tampered writes) and `reconcile()`
+/// (refuse to act on a tampered disk state).
+pub fn is_safe_version_component(v: &str) -> bool {
+    if v.is_empty() || v.len() > 64 {
+        return false;
+    }
+    if v == "." || v == ".." {
+        return false;
+    }
+    if v.starts_with('/') || v.starts_with('\\') {
+        return false;
+    }
+    for ch in v.chars() {
+        if ch.is_control() || ch == '/' || ch == '\\' || ch == '\0' {
+            return false;
+        }
+    }
+    true
+}
+
 impl PendingMigration {
     /// Path to the journal: `<root>/state/migration-journal.json`.
     /// Public for callers that need to reference it for error context.
@@ -124,6 +150,15 @@ impl PendingMigration {
 
     /// Atomically write the journal to disk.
     pub fn save(&self, root: &Path) -> Result<()> {
+        if !is_safe_version_component(&self.version) {
+            bail!(
+                "Refusing to write migration journal with unsafe version component '{}'. \
+                 A version with traversal segments, separators, or control characters \
+                 would let later reconciliation escape the managed tree. \
+                 This is either a tampered parent or a logic bug; refuse to advance.",
+                self.version
+            );
+        }
         write_json_atomic(&Self::journal_path(root), self)
     }
 
@@ -175,6 +210,20 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
     let Some(journal) = PendingMigration::load(root)? else {
         return Ok(None);
     };
+
+    // Refuse to act on a tampered or corrupted journal whose version
+    // contains path-traversal segments. `version_install_dir(<root>, v)`
+    // appends v as a directory name; if v is `../etc` we would otherwise
+    // scrub a directory outside `<root>/tools/nushell`.
+    if !is_safe_version_component(&journal.version) {
+        bail!(
+            "Migration journal at '{}' has unsafe version component '{}'. \
+             Refusing to reconcile to avoid escaping the managed tree. \
+             Run `numan doctor --fix` to discard the journal.",
+            PendingMigration::journal_path(root).display(),
+            journal.version
+        );
+    }
 
     match journal.stage {
         MigrationStage::Prepared => {

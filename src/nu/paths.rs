@@ -321,10 +321,31 @@ pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
         Ok(Some(m)) => Some(m),
         Ok(None) => None,
         Err(e) => {
-            return Err(anyhow::anyhow!(
-                "Failed to read active-version marker: {}. Run `numan doctor --fix` to reconcile.",
-                e,
-            ));
+            // A torn or tampered active-version.json must fail loud, not
+            // silently fall back to PATH Nu (which produces the "wrong Nu"
+            // bug PR #22 already gates against). The only failure mode we
+            // tolerate here is `io::ErrorKind::NotFound` from a missing
+            // marker file. Any other failure — two distinct error classes
+            // share this arm — is escalated with an audit-grade fix hint.
+            if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
+                if io_err.kind() == std::io::ErrorKind::NotFound {
+                    None
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "Failed to read active-version marker (io: {}); \
+                         a torn marker must not silently fall back to PATH Nu. \
+                         Run `numan doctor --fix` to reconcile.",
+                        io_err
+                    ));
+                }
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Failed to parse active-version marker: {}. \
+                     A malformed marker must not silently fall back to PATH Nu. \
+                     Run `numan doctor --fix` to reconcile.",
+                    e
+                ));
+            }
         }
     };
     if let Some(active) = marker.as_ref() {
