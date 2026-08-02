@@ -692,35 +692,53 @@ pub fn execute_nu_setup_with_installer<F>(
 where
     F: FnOnce(&Path, &Platform) -> Result<PathBuf>,
 {
-    let dest = managed_nu_binary(root);
     let version_label = options
         .version
         .as_deref()
         .map(normalize_release_tag)
         .unwrap_or_else(|| "latest".to_string());
 
-    if dest.is_file() && !options.force {
-        if options.yes {
-            let tools_dir = managed_nu_dir(root);
-            prepend_process_path(&tools_dir)?;
-            if !options.skip_path {
-                persist_user_path(&dest)?;
-            }
-            println!(
-                "Nushell already installed at '{}' (unchanged).",
-                dest.display()
-            );
-            return Ok(dest);
-        }
+    // Detect an already-installed copy. For a pinned version we check the
+    // exact versioned-layout directory (`<root>/tools/nushell/<version>/nu`).
+    // For `latest` we cannot know the release tag before downloading, so fall
+    // back to the legacy single-binary location (`<root>/tools/nushell/nu`)
+    // when present — this preserves the "already installed, don't re-download"
+    // short-circuit for pre-versioned installs.
+    let already_installed = match options
+        .version
+        .as_deref()
+        .and_then(|v| version_manager::normalize_version(v).ok())
+    {
+        Some(v) => Some(version_manager::version_binary(root, &v)),
+        None => Some(managed_nu_binary(root)),
+    }
+    .filter(|dest| dest.is_file());
 
-        crate::util::confirm::confirm_or_bail(
-            &format!(
-                "Nushell is already installed at '{}'. Reinstall {version_label} release?",
-                dest.display()
-            ),
-            false,
-            "Nushell setup cancelled.",
-        )?;
+    if let Some(dest) = already_installed.as_ref() {
+        if !options.force {
+            if options.yes {
+                if let Some(parent) = dest.parent() {
+                    prepend_process_path(parent)?;
+                }
+                if !options.skip_path {
+                    persist_user_path(dest)?;
+                }
+                println!(
+                    "Nushell already installed at '{}' (unchanged).",
+                    dest.display()
+                );
+                return Ok(dest.clone());
+            }
+
+            crate::util::confirm::confirm_or_bail(
+                &format!(
+                    "Nushell is already installed at '{}'. Reinstall {version_label} release?",
+                    dest.display()
+                ),
+                false,
+                "Nushell setup cancelled.",
+            )?;
+        }
     }
 
     println!(
@@ -764,14 +782,20 @@ where
         })?;
     }
 
-    let tools_dir = managed_nu_dir(root);
-    prepend_process_path(&tools_dir)?;
+    // Prepend the directory that actually contains the freshly installed
+    // binary (`<root>/tools/nushell/<version>/`), not the layout root, so the
+    // current session's PATH resolves this Nu.
+    let install_dir = installed
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| managed_nu_dir(root));
+    prepend_process_path(&install_dir)?;
     if !options.skip_path {
         persist_user_path(&installed)?;
         #[cfg(windows)]
         println!(
             "Added '{}' to your user PATH. Open a new terminal for PATH changes to apply everywhere.",
-            tools_dir.display()
+            install_dir.display()
         );
         #[cfg(unix)]
         println!(
