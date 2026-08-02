@@ -214,14 +214,23 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
     .with_context(|| format!("Failed to extract '{}'", archive_path.display()))?;
 
     let source = locate_extracted_nu_binary(&extract_root)?;
-    let dest_dir = managed_nu_dir(root);
+    // PR69 Srm: install into the VERSIONED layout
+    // (`<root>/tools/nushell/<version>/<bin>`) so `numan use list` / `numan
+    // use latest` — which scan `<root>/tools/nushell/<version>/` for installed
+    // versions — see the freshly installed release. The legacy single-binary
+    // path (`<root>/tools/nushell/<bin>`) is migration-only now: it must not
+    // be produced by new installs, otherwise `list_installed_versions` reports
+    // `[]` right after `numan setup nu` succeeds.
+    let normalized = version_manager::normalize_version(version)
+        .with_context(|| format!("Invalid Nu version '{}' for installation", version))?;
+    let dest_dir = version_manager::version_install_dir(root, &normalized);
     std::fs::create_dir_all(&dest_dir).with_context(|| {
         format!(
             "Failed to create managed Nushell directory '{}'",
             dest_dir.display()
         )
     })?;
-    let dest = managed_nu_binary(root);
+    let dest = version_manager::version_binary(root, &normalized);
 
     std::fs::copy(&source, &dest).with_context(|| {
         format!(
@@ -231,6 +240,9 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
         )
     })?;
     make_executable(&dest)?;
+    // Keep the legacy VERSION marker for backwards compat with tooling that
+    // greps for it, but under the versioned dir so it never shadows a sibling
+    // version's marker.
     std::fs::write(dest_dir.join("VERSION"), version.as_bytes())?;
     Ok(dest)
 }
@@ -676,31 +688,64 @@ pub fn execute_nu_setup_with_installer<F>(
 where
     F: FnOnce(&Path, &Platform) -> Result<PathBuf>,
 {
-    let dest = managed_nu_binary(root);
+    // PR69 Srm: the already-installed gate must probe the VERSIONED layout
+    // for pinned installs (`<root>/tools/nushell/<version>/<bin>`). The
+    // legacy single-binary check survives only as a heuristic for the
+    // `latest` (no-version) flow, where there is no version to probe.
+    let dest = match &options.version {
+        Some(version) => version_manager::normalize_version(version)
+            .map(|normalized| version_manager::version_binary(root, &normalized))
+            .unwrap_or_else(|_| managed_nu_binary(root)),
+        None => managed_nu_binary(root),
+    };
     let version_label = options
         .version
         .as_deref()
         .map(normalize_release_tag)
         .unwrap_or_else(|| "latest".to_string());
 
-    if dest.is_file() && !options.force {
+    // The gate is flow-aware: a pinned install short-circuits only when the
+    // requested version's binary already exists; the `latest` flow has no
+    // version to probe, so any existing versioned install counts as
+    // "already installed" (matching the old legacy-binary heuristic).
+    let any_version_installed =
+        options.version.is_none() && !version_manager::list_installed_versions(root)?.is_empty();
+    if (dest.is_file() || any_version_installed) && !options.force {
+        // For the `latest` flow `dest` is the legacy placeholder (never a
+        // file in the versioned world); resolve the effective installed
+        // binary so PATH prepend/persist point at a real versioned file.
+        let effective = if dest.is_file() {
+            dest
+        } else {
+            version_manager::active_nu_binary(root)?
+                .or_else(|| {
+                    version_manager::latest_installed_version(root)
+                        .ok()
+                        .flatten()
+                        .map(|v| version_manager::version_binary(root, &v))
+                })
+                .unwrap_or_else(|| dest.clone())
+        };
         if options.yes {
-            let tools_dir = managed_nu_dir(root);
+            let tools_dir = match effective.parent() {
+                Some(parent) => parent.to_path_buf(),
+                None => managed_nu_dir(root),
+            };
             prepend_process_path(&tools_dir)?;
             if !options.skip_path {
-                persist_user_path(&dest)?;
+                persist_user_path(&effective)?;
             }
             println!(
                 "Nushell already installed at '{}' (unchanged).",
-                dest.display()
+                effective.display()
             );
-            return Ok(dest);
+            return Ok(effective);
         }
 
         crate::util::confirm::confirm_or_bail(
             &format!(
                 "Nushell is already installed at '{}'. Reinstall {version_label} release?",
-                dest.display()
+                effective.display()
             ),
             false,
             "Nushell setup cancelled.",
@@ -746,7 +791,14 @@ where
         })?;
     }
 
-    let tools_dir = managed_nu_dir(root);
+    // PR69 Srm: with the versioned layout, the binary lives at
+    // `<root>/tools/nushell/<version>/<bin>`; prepend its parent directory
+    // (not the bare `tools/nushell` root) so `nu` is actually findable on
+    // the process PATH.
+    let tools_dir = match installed.parent() {
+        Some(parent) => parent.to_path_buf(),
+        None => managed_nu_dir(root),
+    };
     prepend_process_path(&tools_dir)?;
     if !options.skip_path {
         persist_user_path(&installed)?;
@@ -924,8 +976,17 @@ mod tests {
         }
 
         let installed = install_from_archive(&zip_path, root, "0.0.0-test").unwrap();
-        assert_eq!(installed, managed_nu_binary(root));
+        // PR69 Srm: installs land in the VERSIONED layout, never the legacy
+        // single-binary path (which is migration-only now).
+        assert_eq!(
+            installed,
+            version_manager::version_binary(root, "0.0.0-test")
+        );
         assert!(installed.is_file());
+        assert!(
+            !managed_nu_binary(root).exists(),
+            "legacy single-binary path must not be produced by new installs"
+        );
     }
 
     #[test]

@@ -9,6 +9,7 @@ use numan_cli::cmd::setup::{execute_nu, NuAction, NuSetupArgs};
 use numan_cli::core::platform::Platform;
 use numan_cli::nu::bootstrap::{self, install_from_archive, NuSetupOptions};
 use numan_cli::nu::paths::{find_nu_executable_with_root, validate_nushell_binary};
+use numan_cli::nu::version_manager;
 use std::io::Write;
 use std::path::PathBuf;
 use zip::write::SimpleFileOptions;
@@ -35,12 +36,18 @@ fn managed_nu_is_discovered_after_install() {
     }
 
     install_from_archive(&zip_path, root, "0.0.0-test").unwrap();
+    // Discovery keys off the active marker; `install_from_archive` alone does
+    // not write it (the setup flow does). Mirror what `numan setup nu` does
+    // so discovery can resolve the freshly installed versioned binary.
+    version_manager::write_active_version(root, "0.0.0-test").unwrap();
 
     let resolved = find_nu_executable_with_root(root).unwrap();
-    let expected = bootstrap::managed_nu_binary(root);
+    let expected = version_manager::version_binary(root, "0.0.0-test");
     assert_eq!(
         std::fs::canonicalize(&resolved).unwrap(),
         std::fs::canonicalize(&expected).unwrap(),
+        "installed binary must live in the versioned layout \
+         (<root>/tools/nushell/<version>/<bin>)",
     );
 }
 
@@ -51,7 +58,9 @@ fn setup_nu_uses_injected_installer_without_network() {
     let platform = Platform::detect();
 
     let installer = |install_root: &std::path::Path, _platform: &Platform| {
-        let binary = bootstrap::managed_nu_binary(install_root);
+        // PR69 Srm: the injected installer must write the VERSIONED layout,
+        // exactly like the real network installer now does.
+        let binary = version_manager::version_binary(install_root, "0.113.1");
         std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
         std::fs::write(&binary, b"fake nu").unwrap();
         Ok(binary)
@@ -64,14 +73,25 @@ fn setup_nu_uses_injected_installer_without_network() {
             yes: true,
             force: false,
             skip_path: true,
-            version: None,
+            version: Some("0.113.1".to_string()),
             caller_consented_destructive: false,
         },
         installer,
     )
     .unwrap();
 
-    assert!(bootstrap::managed_nu_binary(root).is_file());
+    // The versioned binary must exist and be marked active (PR67 round-3
+    // requirement: fake-installer test covering both the active marker and
+    // the resulting `numan use list` state).
+    assert!(
+        version_manager::version_binary(root, "0.113.1").is_file(),
+        "versioned binary must exist after injected install"
+    );
+    let active = version_manager::read_active_version(root).unwrap().unwrap();
+    assert_eq!(
+        active.version, "0.113.1",
+        "freshly installed version must be active"
+    );
 }
 
 #[test]

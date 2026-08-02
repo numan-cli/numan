@@ -369,7 +369,12 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
     // chatgpt PR69 S08: persist the registered binary as the active version
     // marker so `numan use list` reports it as the selection.
     let external_label = crate::core::nu_version::NuVersion::from_binary(&registered)
-        .with_context(|| format!("Failed to determine Nu version for '{}'", registered.display()))?
+        .with_context(|| {
+            format!(
+                "Failed to determine Nu version for '{}'",
+                registered.display()
+            )
+        })?
         .version;
     version_manager::write_active_version_with_binary(
         root,
@@ -454,7 +459,12 @@ fn execute_use_existing(
     // chatgpt PR69 S08: persist the registered binary as the active version
     // marker so `numan use list` reports it as the selection.
     let external_label = crate::core::nu_version::NuVersion::from_binary(&registered)
-        .with_context(|| format!("Failed to determine Nu version for '{}'", registered.display()))?
+        .with_context(|| {
+            format!(
+                "Failed to determine Nu version for '{}'",
+                registered.display()
+            )
+        })?
         .version;
     version_manager::write_active_version_with_binary(
         root,
