@@ -239,4 +239,43 @@ mod tests {
         let active = version_manager::read_active_version(root).unwrap().unwrap();
         assert_eq!(active.version, "0.113.1");
     }
+
+    #[test]
+    fn test_use_list_takes_no_snapshot() {
+        // `numan use list` is read-only: it must not create a PreMutation
+        // snapshot (which lands under `<root>/state/snapshots`), otherwise a
+        // pure listing would leave clutter and take the mutation lock.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.113.1");
+
+        let args = UseArgs {
+            version: "list".to_string(),
+        };
+        execute(&args, root).unwrap();
+
+        assert!(
+            !root.join("state/snapshots").exists(),
+            "`numan use list` must not create a snapshot"
+        );
+    }
+
+    #[test]
+    fn test_use_switch_takes_snapshot() {
+        // A mutating switch must snapshot established state before flipping the
+        // active-version marker.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.113.1");
+
+        let args = UseArgs {
+            version: "0.113.1".to_string(),
+        };
+        execute(&args, root).unwrap();
+
+        assert!(
+            root.join("state/snapshots").exists(),
+            "a version switch must create a PreMutation snapshot"
+        );
+    }
 }
