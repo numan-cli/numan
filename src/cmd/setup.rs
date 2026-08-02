@@ -201,7 +201,8 @@ fn setup_action_lock_label(args: &NuSetupArgs) -> &'static str {
 /// function are responsible for emitting their own audit prefix (e.g.
 /// `cmd::doctor::apply_repairs` already logs `(doctor)` repair records).
 pub(crate) fn execute_nu_impl(args: &NuSetupArgs, root: &Path) -> Result<()> {
-    execute_nu_impl_locked(args, root)
+    let what = setup_action_lock_label(args);
+    setup_subcommand_lock(root, what, || execute_nu_impl_locked(args, root))
 }
 
 fn execute_nu_impl_locked(args: &NuSetupArgs, root: &Path) -> Result<()> {
@@ -368,8 +369,8 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
     // chatgpt PR69 S08: persist the registered binary as the active version
     // marker so `numan use list` reports it as the selection.
     let external_label = crate::core::nu_version::NuVersion::from_binary(&registered)
-        .map(|v| v.version)
-        .unwrap_or_else(|_| "external".to_string());
+        .with_context(|| format!("Failed to determine Nu version for '{}'", registered.display()))?
+        .version;
     version_manager::write_active_version_with_binary(
         root,
         &version_manager::normalize_version(&external_label)?,
@@ -453,8 +454,8 @@ fn execute_use_existing(
     // chatgpt PR69 S08: persist the registered binary as the active version
     // marker so `numan use list` reports it as the selection.
     let external_label = crate::core::nu_version::NuVersion::from_binary(&registered)
-        .map(|v| v.version)
-        .unwrap_or_else(|_| "external".to_string());
+        .with_context(|| format!("Failed to determine Nu version for '{}'", registered.display()))?
+        .version;
     version_manager::write_active_version_with_binary(
         root,
         &version_manager::normalize_version(&external_label)?,
@@ -472,7 +473,7 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
     // chatgpt PR69 S09: clear the active-version marker before deleting
     // the managed tree so the marker cannot dangle at a binary we are
     // about to remove.
-    let _ = version_manager::clear_active_version(root);
+    version_manager::clear_active_version(root)?;
     let managed_dir = bootstrap::managed_nu_dir(root);
     if !managed_dir.is_dir() {
         println!(
@@ -509,7 +510,7 @@ fn remove_managed_nu_if_present(root: &Path) -> Result<()> {
     // chatgpt PR69 S09: clear the active-version marker before deleting
     // the managed tree so the marker cannot dangle at a binary we are
     // about to remove.
-    let _ = version_manager::clear_active_version(root);
+    version_manager::clear_active_version(root)?;
     let managed_dir = bootstrap::managed_nu_dir(root);
     if managed_dir.is_dir() {
         std::fs::remove_dir_all(&managed_dir).with_context(|| {
@@ -931,7 +932,7 @@ esac\n";
         let fake_nu = write_fake_nu(dir.path());
 
         run_with_path_snapshot(std::panic::AssertUnwindSafe(|| {
-            execute_use_existing(&fake_nu, true, &root, ExecuteUseOpts::default()).unwrap();
+            execute_use_existing(&fake_nu, true, &root, true, ExecuteUseOpts::default()).unwrap();
         }));
 
         assert!(
@@ -958,7 +959,7 @@ esac\n";
         // gated off (`managed_dir_was_present == false`). End-to-end
         // success via register_existing_nu is the assertion.
         run_with_path_snapshot(std::panic::AssertUnwindSafe(|| {
-            execute_use_existing(&fake_nu, true, &root, ExecuteUseOpts::default()).unwrap();
+            execute_use_existing(&fake_nu, true, &root, false, ExecuteUseOpts::default()).unwrap();
         }));
         assert!(
             !root.join("tools/nushell").exists(),
@@ -992,7 +993,7 @@ esac\n";
             confirm: Some(&mock_confirm),
         };
         let result = run_with_path_snapshot(std::panic::AssertUnwindSafe(|| {
-            execute_use_existing(&fake_nu, false, &root, opts)
+            execute_use_existing(&fake_nu, false, &root, true, opts)
         }));
         let err_msg = match result {
             Ok(()) => panic!("expected Err from declined confirm"),
