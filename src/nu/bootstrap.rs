@@ -38,16 +38,7 @@ pub fn managed_nu_dir(root: &Path) -> PathBuf {
     root.join("tools").join("nushell")
 }
 
-/// Returns the path to the currently active Nu binary.
-///
-/// This delegates to `version_manager::active_nu_binary()` which reads the active
-/// version marker and returns the versioned binary path.
 pub fn managed_nu_binary(root: &Path) -> PathBuf {
-    // Try to read the active version; if set, return the versioned binary path.
-    if let Ok(Some(binary)) = crate::nu::version_manager::active_nu_binary(root) {
-        return binary;
-    }
-    // Fallback to legacy path (for backward compat or when no active version is set).
     managed_nu_dir(root).join(nu_binary_name())
 }
 
@@ -221,10 +212,9 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
     .with_context(|| format!("Failed to extract '{}'", archive_path.display()))?;
 
     let source = locate_extracted_nu_binary(&extract_root)?;
-    // Install to versioned subdirectory: <root>/tools/nushell/<version>/
-    let dest_dir = crate::nu::version_manager::version_install_dir(root, version);
+    let dest_dir = managed_nu_dir(root);
     std::fs::create_dir_all(&dest_dir)?;
-    let dest = crate::nu::version_manager::version_binary(root, version);
+    let dest = managed_nu_binary(root);
 
     std::fs::copy(&source, &dest).with_context(|| {
         format!(
@@ -234,10 +224,7 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
         )
     })?;
     make_executable(&dest)?;
-    // Also write a VERSION file in the version directory for reference.
     std::fs::write(dest_dir.join("VERSION"), version.as_bytes())?;
-    // Set as the active version.
-    crate::nu::version_manager::write_active_version(root, version)?;
     Ok(dest)
 }
 
@@ -665,24 +652,7 @@ where
         .map(normalize_release_tag)
         .unwrap_or_else(|| "latest".to_string());
 
-    // When an active version already matches the request, skip the download.
-    // If a different version was requested, fall through to the full install flow.
-    let active_matches_request = || -> bool {
-        let active = match crate::nu::version_manager::read_active_version(root) {
-            Ok(Some(a)) => a,
-            _ => return false,
-        };
-        match &options.version {
-            Some(requested) => {
-                crate::nu::version_manager::normalize_version(requested)
-                    .map(|v| v == active.version)
-                    .unwrap_or(false)
-            }
-            None => true, // "latest" with any active version → skip
-        }
-    };
-
-    if dest.is_file() && !options.force && active_matches_request() {
+    if dest.is_file() && !options.force {
         if options.yes {
             let tools_dir = managed_nu_dir(root);
             prepend_process_path(&tools_dir)?;
@@ -701,7 +671,7 @@ where
                 "Nushell is already installed at '{}'. Reinstall {version_label} release?",
                 dest.display()
             ),
-            options.yes,
+            false,
             "Nushell setup cancelled.",
         )?;
     }
