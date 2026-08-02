@@ -5,9 +5,9 @@
 
 ## Purpose
 
-`numan doctor` diagnoses the health of a Numan root and, with `--fix`, applies **safe automated repairs** — the same pattern as `brew doctor`, `npm doctor`, and similar tooling.
+`numan doctor` diagnoses the health of a Numan root and applies **safe automated repairs** by default — the same pattern as `brew doctor`, `npm doctor`, and similar tooling.
 
-Default mode is **report-only** (safe for CI and scripting). Repair mode delegates to existing commands (`init`, `activate`, `registry sync`) rather than inventing new mutation paths.
+Use `--scan` for **report-only** mode (safe for CI and scripting). Repair mode delegates to existing commands (`init`, `activate`, `registry sync`) rather than inventing new mutation paths.
 
 It answers: *“Is this Numan root consistent, safe to mutate, and aligned with the current Nu environment?”* and optionally *“Fix what you can.”*
 
@@ -27,14 +27,13 @@ numan doctor [--scan] [--json] [--nupm-home PATH]
 
 | Flag | Behavior |
 |------|----------|
-| `--scan` | Report findings without applying repairs |
-
-| `--json` | Emit a single JSON object (schema versioned); no ANSI styling. With `--fix`, include `repairs` attempted/applied |
+| `--scan` | Report findings without applying repairs (dry-run mode) |
+| `--json` | Emit a single JSON object (schema versioned); no ANSI styling. Includes `repairs` attempted/applied |
 | `--nupm-home PATH` | Override nupm home for the optional coexistence section (same resolution order as `numan nupm status`) |
 
 Global `--root` applies as for all commands.
 
-**Default (no flags):** diagnose and apply available repairs, then print findings.  
+**Default (no flags):** diagnose and apply available repairs, then print findings.
 **`--scan`:** diagnose and print findings without mutating state.
 
 ## Exit codes
@@ -64,7 +63,7 @@ Each finding has:
 
 ## Repair policy
 
-When `--fix` is set, doctor acquires `acquire_mutation_lock(root)` for its own
+By default, doctor acquires `acquire_mutation_lock(root)` for its own
 filesystem repairs (layout dirs, `registry.none` config writes), then **releases**
 that guard before nested `init` / `setup` / `registry sync` / `activate` /
 `deactivate` commands. Those nested commands acquire the mutation lock themselves.
@@ -77,12 +76,12 @@ Repair steps run in this **order** (each step re-validates only what it changed)
 | **auto** | Never | `layout.*` (missing dirs), `nu_paths.missing` | `create_dir_all` for layout; `numan init` |
 | **auto** | Never | `registry.index_missing` | `numan registry sync` |
 | **auto** | Never | `registry.none` (production trust root only) | Add official registry via same path as `numan init` |
-| **confirm** | Unless `--yes` / non-TTY | `nu.binary.missing_on_path` | `numan setup nu` (downloads managed Nushell) |
-| **confirm** | Unless `--yes` / non-TTY | `nu.binary.found_off_path` | `numan setup nu use <path>` (adds existing install to PATH) |
-| **confirm** | Unless `--yes` / non-TTY | `nu_paths.drift`, `nu_paths.vendor_drift` | `numan init --refresh` |
-| **confirm** | Unless `--yes` / non-TTY | `journal.plugin_pending`, `journal.autoload_pending`, `journal.plugin_stale`, `journal.autoload_stale`, `activation.plugin_stale`, `activation.module_stale`, `autoload.projection`, `autoload.managed_missing` | `numan activate` (empty package list — reconciles journals and re-activates stale entries; same entry point as normal activate recovery) |
-| **confirm** | Unless `--yes` / non-TTY | `journal.plugin_deactivate_pending` | `numan deactivate <journal package ids>` (reconciles pending-plugin-deactivate journal only; not a full-root deactivate) |
-| **confirm** | Unless `--yes` / non-TTY | `journal.plugin_deactivate_stale` | `numan init --refresh` then `numan deactivate` |
+| **confirm** | Always (non-TTY skips) | `nu.binary.missing_on_path` | `numan setup nu` (downloads managed Nushell) |
+| **confirm** | Always (non-TTY skips) | `nu.binary.found_off_path` | `numan setup nu use <path>` (adds existing install to PATH) |
+| **confirm** | Always (non-TTY skips) | `nu_paths.drift`, `nu_paths.vendor_drift` | `numan init --refresh` |
+| **confirm** | Always (non-TTY skips) | `journal.plugin_pending`, `journal.autoload_pending`, `journal.plugin_stale`, `journal.autoload_stale`, `activation.plugin_stale`, `activation.module_stale`, `autoload.projection`, `autoload.managed_missing` | `numan activate` (empty package list — reconciles journals and re-activates stale entries; same entry point as normal activate recovery) |
+| **confirm** | Always (non-TTY skips) | `journal.plugin_deactivate_pending` | `numan deactivate <journal package ids>` (reconciles pending-plugin-deactivate journal only; not a full-root deactivate) |
+| **confirm** | Always (non-TTY skips) | `journal.plugin_deactivate_stale` | `numan init --refresh` then `numan deactivate` |
 | **manual** | Never auto | `autoload.managed_foreign`, `payload.missing`, `journal.lifecycle_pending`, `journal.lifecycle_stale`, `registry.none` (placeholder trust root), `nu_paths.vendor_missing`, `nupm.*` | Print fix hint only |
 | **none** | Never | `activation.plugin_mutation_gated` (`info`) | Informational only; see [docs/active-plugin-gate.md](active-plugin-gate.md) |
 
@@ -96,7 +95,7 @@ Repair steps run in this **order** (each step re-validates only what it changed)
 6. Mutation lock ownership is **staged**: doctor's lock covers only its direct edits;
    nested mutators reacquire after doctor drops the guard (see above).
 
-**Journal note:** Default mode still *reports* journals without acting. `--fix` may reconcile plugin/autoload journals via `activate` recovery, and plugin-deactivate journals via `deactivate` recovery scoped to journal package IDs — not by editing journal files directly.
+**Journal note:** Repair mode reconciles plugin/autoload journals via `activate` recovery, and plugin-deactivate journals via `deactivate` recovery scoped to journal package IDs — not by editing journal files directly.
 
 ## Check catalog
 
@@ -203,16 +202,10 @@ nupm coexistence
 
 Summary: 1 error, 1 warning
 
-Repairs (--fix only):
+Repairs:
   ✓ Created missing state/ directory
   ✓ Ran registry sync
-  → numan init --refresh required (skipped; re-run with --yes)
-```
-
-With `--fix` and repairs applied:
-
-```text
-Repairs: 2 applied, 1 skipped (use --yes to apply confirm-tier fixes)
+  → numan init --refresh required (skipped; user confirmation needed)
 ```
 
 Use `console` styling consistent with `activate --check`.
@@ -238,9 +231,6 @@ Use `console` styling consistent with `activate --check`.
     { "id": "nu_paths.drift", "status": "skipped", "reason": "not_confirmed" }
   ]
 }
-```
-
-`repairs` is present only when `--fix` was passed.
 
 ## Architecture
 
@@ -272,16 +262,17 @@ pub fn execute_with_options(args: &DoctorArgs, root: &Path, options: DoctorOptio
 
 ## Definition of done
 
-- [x] `numan doctor`, `numan doctor --fix`, and `numan doctor --json` implemented per check catalog
+- [x] `numan doctor`, `numan doctor --scan`, and `numan doctor --json` implemented per check catalog
 - [x] `scan_on_doctor` respected
-- [x] Default mode: no state mutation (test: hashes unchanged)
-- [x] `--fix` mode: only repair tiers in policy; uses mutation lock; delegates to init/activate/sync
+- [x] `--scan` mode: no state mutation (test: hashes unchanged)
+- [x] Default mode: applies repair tiers per policy; uses mutation lock; delegates to init/activate/sync
 - [x] Documented in README command table and `AGENTS.md`
-- [x] Integration tests: report-only, `--fix` auto tier, `--fix` confirm tier with `--yes`, manual tier untouched
+- [x] Integration tests: `--scan` report-only, default auto tier, default confirm tier with TTY, manual tier untouched
 
 ## Changelog
 
 | Date | Change |
 |------|--------|
 | 2026-06-30 | Initial spec (Phase 7.2) |
-| 2026-06-30 | Add `--fix` / `--yes` repair policy (auto / confirm / manual tiers) |
+| 2026-06-30 | Add repair policy (auto / confirm / manual tiers) |
+| 2026-08-02 | Update to reflect `--scan` flag (repairs by default; `--scan` for report-only) |

@@ -443,8 +443,14 @@ mod tests {
             available_versions: vec!["1.0.0".to_string()],
         };
         let root = tempfile::tempdir().unwrap();
-        let accepted =
-            nu_pin_offer::offer_managed_nu_pin(root.path(), "0.114.1", &diagnosis).unwrap();
+        // Explicitly pass is_tty: false to avoid depending on process-global stdin state.
+        let accepted = nu_pin_offer::offer_managed_nu_pin_with_tty(
+            root.path(),
+            "0.114.1",
+            &diagnosis,
+            Some(false),
+        )
+        .unwrap();
         assert!(
             !accepted,
             "non-interactive mode must not auto-install managed Nu"

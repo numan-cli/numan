@@ -91,7 +91,11 @@ impl StepName {
             Self::Info => vec!["info".to_string(), config.package_id.clone()],
             Self::Install => vec!["install".to_string(), config.package_id.clone()],
             Self::Activate => vec!["activate".to_string(), config.package_id.clone()],
-            Self::Doctor => vec!["doctor".to_string(), "--json".to_string()],
+            Self::Doctor => vec![
+                "doctor".to_string(),
+                "--scan".to_string(),
+                "--json".to_string(),
+            ],
             Self::List => vec!["list".to_string()],
             Self::Deactivate => vec!["deactivate".to_string(), config.package_id.clone()],
             Self::Remove => vec!["remove".to_string(), config.package_id.clone()],

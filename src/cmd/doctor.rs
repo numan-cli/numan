@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Args;
 use console::style;
 use serde::Serialize;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use crate::cmd::activate::{execute as activate_execute, ActivateArgs};
@@ -982,8 +982,10 @@ fn count_nupm_name_overlap(
 }
 
 fn confirm_repairs(_args: &DoctorArgs) -> bool {
-    // Always proceed without prompting (UX improvement: reduce prompts).
-    true
+    // Confirm-tier repairs require TTY for destructive actions.
+    // Non-TTY sessions will skip confirm-tier repairs unless the user
+    // explicitly runs doctor in an interactive session.
+    std::io::stdin().is_terminal()
 }
 
 fn apply_repairs(
@@ -1074,7 +1076,9 @@ fn apply_repairs(
             });
         } else if let Some(off_path) = resolve_off_path(options) {
             let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
-            match setup_fn(&NuSetupArgs::use_existing(off_path, true), root) {
+            // Pass yes: false to let setup code handle TTY checking and confirmation.
+            // If there's a managed install, setup will prompt the user before removal.
+            match setup_fn(&NuSetupArgs::use_existing(off_path, false), root) {
                 Ok(()) => records.push(RepairRecord {
                     id,
                     status: RepairStatus::Applied,
@@ -1114,7 +1118,8 @@ fn apply_repairs(
             });
         } else {
             let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
-            match setup_fn(&NuSetupArgs::install(None, false, false, true), root) {
+            // Pass yes: false to let setup code handle TTY checking and confirmation.
+            match setup_fn(&NuSetupArgs::install(None, false, false, false), root) {
                 Ok(()) => records.push(RepairRecord {
                     id,
                     status: RepairStatus::Applied,
@@ -2182,5 +2187,59 @@ mod tests {
         assert!(json.contains("nu.path.version"));
         assert!(json.contains("nu.managed.version"));
         assert!(json.contains("registry.trust_root"));
+    }
+
+    fn test_noop_setup_repair(_args: &NuSetupArgs, _root: &Path) -> Result<()> {
+        // No-op for testing: should not be called when repair is skipped.
+        panic!("setup repair should not be called when confirm_repairs returns false");
+    }
+
+    #[test]
+    fn doctor_found_off_path_repair_preserves_managed_install_in_non_tty() {
+        // Regression test: found_off_path repair should not destroy an existing
+        // managed installation when running in a non-TTY session (where confirm
+        // returns false and the repair is skipped).
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Set up a managed Nu installation.
+        let managed_binary = ensure_fake_managed_nu(root);
+        assert!(managed_binary.exists(), "managed binary should exist");
+
+        // Set up an off-path Nu binary.
+        let off_path_dir = dir.path().join("external_nu");
+        std::fs::create_dir_all(&off_path_dir).unwrap();
+        let off_path_binary = off_path_dir.join("nu");
+        std::fs::write(&off_path_binary, b"external nu").unwrap();
+
+        // Configure doctor to discover this off-path binary.
+        let off_path_clone = off_path_binary.clone();
+        let discover_off_path_fn = move || Some(off_path_clone.clone());
+
+        // Run doctor in non-TTY mode (confirm_repairs will return false).
+        // The found_off_path repair should be skipped, not attempted.
+        let args = DoctorArgs {
+            scan: false,
+            json: false,
+            nupm_home: None,
+        };
+
+        let options = DoctorOptions {
+            skip_network: true,
+            nu_version_probe: Some(probe_fixed_version),
+            discover_off_path: Some(discover_off_path_fn),
+            nu_setup_repair: Some(test_noop_setup_repair),
+            ..DoctorOptions::default()
+        };
+
+        // Since confirm_repairs now checks TTY (and we're in a test which is non-TTY),
+        // the repair should be skipped and test_noop_setup_repair should not panic.
+        execute_with_options(&args, root, options).ok();
+
+        // Verify the managed installation was NOT removed.
+        assert!(
+            managed_binary.exists(),
+            "managed installation should be preserved when repair is skipped in non-TTY"
+        );
     }
 }
