@@ -1379,38 +1379,41 @@ fn apply_repairs(
         .iter()
         .any(|f| f.id == "journal.migration_pending" && f.severity == Severity::Warn)
     {
-        if PendingMigration::load(root)?.is_none() {
-            return Ok(records);
-        }
-        let id = "journal.migration_repaired".to_string();
-        // Bind the lock guard so it lives through reconcile (a bare
-        // `acquire_mutation_lock(root)?` drops immediately). Snapshot first.
-        let _lock = acquire_mutation_lock(root)?;
-        if let Err(e) = create_snapshot(
-            root,
-            SnapshotReason::PreMutation,
-            SnapshotTrigger::Doctor,
-            None,
-            None,
-        ) {
-            records.push(RepairRecord {
-                id,
-                status: RepairStatus::Failed,
-                reason: Some(format!("pre-mutation snapshot failed: {e:#}")),
-            });
-            return Ok(records);
-        }
-        match migration_journal::reconcile(root) {
-            Ok(_) => records.push(RepairRecord {
-                id,
-                status: RepairStatus::Applied,
-                reason: None,
-            }),
-            Err(e) => records.push(RepairRecord {
-                id,
-                status: RepairStatus::Failed,
-                reason: Some(e.to_string()),
-            }),
+        // Journal may already be gone (self-healed by an earlier `numan use`,
+        // or a concurrent reconcile). Skip this repair only — do not return
+        // early, or later Auto repairs (e.g. `nu.active_version.invalid`) are
+        // silently dropped.
+        if PendingMigration::load(root)?.is_some() {
+            let id = "journal.migration_repaired".to_string();
+            // Bind the lock guard so it lives through reconcile (a bare
+            // `acquire_mutation_lock(root)?` drops immediately). Snapshot first.
+            let _lock = acquire_mutation_lock(root)?;
+            if let Err(e) = create_snapshot(
+                root,
+                SnapshotReason::PreMutation,
+                SnapshotTrigger::Doctor,
+                None,
+                None,
+            ) {
+                records.push(RepairRecord {
+                    id,
+                    status: RepairStatus::Failed,
+                    reason: Some(format!("pre-mutation snapshot failed: {e:#}")),
+                });
+            } else {
+                match migration_journal::reconcile(root) {
+                    Ok(_) => records.push(RepairRecord {
+                        id,
+                        status: RepairStatus::Applied,
+                        reason: None,
+                    }),
+                    Err(e) => records.push(RepairRecord {
+                        id,
+                        status: RepairStatus::Failed,
+                        reason: Some(e.to_string()),
+                    }),
+                }
+            }
         }
     }
 
@@ -2516,5 +2519,55 @@ mod tests {
             "marker must be absent after repair"
         );
         assert!(!marker.exists(), "marker file must be removed");
+    }
+
+    #[test]
+    fn doctor_fix_continues_after_absent_migration_journal() {
+        // Greptile: when `journal.migration_pending` is still in findings but
+        // the journal file is already gone, apply_repairs must not `return`
+        // early — later Auto repairs (here `nu.active_version.invalid`) must
+        // still run.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        assert!(PendingMigration::load(root).unwrap().is_none());
+
+        let marker = root.join("nu_state").join("active-version.json");
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, b"{ not valid json").unwrap();
+
+        let findings = vec![
+            Finding {
+                id: "journal.migration_pending".to_string(),
+                severity: Severity::Warn,
+                message: "stale finding after self-heal".to_string(),
+                fix: Some(crate::util::hints::CMD_USE.to_string()),
+                repair: RepairTier::Auto,
+            },
+            Finding {
+                id: "nu.active_version.invalid".to_string(),
+                severity: Severity::Error,
+                message: "malformed marker".to_string(),
+                fix: None,
+                repair: RepairTier::Auto,
+            },
+        ];
+        let args = DoctorArgs {
+            fix: true,
+            yes: true,
+            json: false,
+            nupm_home: None,
+        };
+        let repairs = apply_repairs(&args, root, &findings, &test_doctor_options()).unwrap();
+        assert!(
+            repairs.iter().all(|r| r.id != "journal.migration_repaired"),
+            "absent journal must not emit a migration repair record: {repairs:?}"
+        );
+        assert!(
+            repairs.iter().any(|r| {
+                r.id == "nu.active_version.repaired" && r.status == RepairStatus::Applied
+            }),
+            "later active-version repair must still run after skipped migration: {repairs:?}"
+        );
+        assert!(!marker.exists(), "malformed marker must be cleared");
     }
 }
