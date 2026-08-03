@@ -44,7 +44,7 @@ Numan is **early-stage**. Core install, activate, update, remove, gc, registry, 
 - **Module autoloads** — managed vendor autoload files with ownership markers and candidate validation
 - **Lifecycle management** — `update`, `remove`, and `gc` with pending-lifecycle journal recovery
 - **nupm interoperability** — `numan nupm status|inspect|import|diff` for migration from [nupm](https://github.com/nushell/nupm)
-- **Health checks** — `numan doctor [--fix]` diagnoses root state and applies safe repairs
+- **Health checks** — `numan doctor` diagnoses root health and applies safe repairs by default; `--scan` reports only
 - **Shell completions** — bash, fish, zsh, PowerShell, and Nushell via `numan completions`
 
 ---
@@ -187,7 +187,7 @@ Or pick a package yourself (`numan search` hides incompatible hits by default; u
 numan search nutest
 numan info vyadh/nutest
 numan install vyadh/nutest
-numan activate vyadh/nutest --yes
+numan activate vyadh/nutest
 ```
 
 Install is **inert** — nothing is registered with Nu until you run `numan activate` (or `numan try`, which activates after install). If a package needs a different Nu minor, Numan explains the mismatch and can offer `numan setup nu <x.y.z>` (activations are per-Nu; re-activate after switching). When no compatible starter exists, `numan try` suggests installing a matching managed Nu version or searching for another package with `numan search`.
@@ -269,8 +269,8 @@ See [docs/snapshots-and-rollback.md](docs/snapshots-and-rollback.md) for scope, 
 #### 6. Verify health
 
 ```bash
-numan doctor                      # report-only diagnosis
-numan doctor --fix --yes          # apply safe automated repairs
+numan doctor                      # diagnose and apply safe automated repairs
+numan doctor --scan               # report-only diagnosis
 ```
 
 ---
@@ -308,7 +308,7 @@ Global flag: `--root <path>` — override the Numan root directory (all commands
 | Command | Description |
 |---------|-------------|
 | `numan init [--refresh]` | Probe Nu and cache paths for activation |
-| `numan try [--yes] [--no-activate]` | Install and activate a curated starter package for your Nu + platform (prefers Nu 0.114 starters; suggests managed Nu pin or search if no compatible starter) |
+| `numan try [--no-activate]` | Install and activate a curated starter package for your Nu + platform (prefers Nu 0.114 starters; suggests managed Nu pin or search if no compatible starter) |
 | `numan search <query>` | Search registry by name, description, or tags |
 | `numan info <owner/name>` | Show package metadata and available versions |
 | `numan install <owner/name[@version]>` | Download, verify, extract, and lock |
@@ -336,15 +336,15 @@ Global flag: `--root <path>` — override the Numan root directory (all commands
 | `numan nupm import --manifest file.toml` | Batch import from manifest |
 | `numan nupm diff <owner/name>` | Compare imported payload vs nupm source |
 | `numan completions <shell>` | Generate bash, fish, zsh, powershell, or nushell completions |
-| `numan doctor [--fix] [--yes] [--json]` | Diagnose root health; optional safe repairs |
+| `numan doctor [--scan] [--json]` | Diagnose root health and repair (use `--scan` for report-only) |
 
 ### Common flags (by command)
 
 | Command | Flags |
 |---------|-------|
 | `install` | `--force` reinstall; `-v` / `--verbose` |
-| `activate` | `--yes` skip prompt; `--verbose`; `--list` status only; `--check` integrity only |
-| `deactivate` | `--yes` skip prompt; `--verbose` |
+| `activate` | `--verbose`; `--list` status only; `--check` integrity only |
+| `deactivate` | `--verbose` |
 | `update` | `--check` report only; `-v` / `--verbose` |
 | `remove` | `--force` remove despite active activation |
 | `gc` | `--dry-run` preview only |
@@ -352,7 +352,7 @@ Global flag: `--root <path>` — override the Numan root directory (all commands
 | `nupm status` | `--nupm-home <path>` |
 | `nupm inspect` | `--all` scan home; `--nupm-home <path>`; `--exit-on-ineligible` fail on ineligible |
 | `nupm import` | `--as owner/name` (single import); `--manifest <file>` (batch); `--nupm-home <path>`; `--yes` skip consent |
-| `doctor` | `--fix` apply safe repairs; `--yes` skip confirm tier; `--json` machine output; `--nupm-home <path>` |
+| `doctor` | `--scan` report only; `--json` machine output; `--nupm-home <path>` (repairs by default) |
 | `setup nu` | `--force` re-download; `--skip-path` don't update PATH; `--yes` skip prompt |
 
 Run `numan <command> --help` for full flag documentation.
@@ -432,7 +432,7 @@ For the cross-repository plan snapshot (as of 2026-07-29) across `numan`,
 | **5** | `update` / `remove` / `gc`, lockfile v2, [snapshots + rollback](docs/snapshots-and-rollback.md) | ✅ (source builds deferred) |
 | **6** | [nupm](docs/nupm-compatibility.md) status, inspect, import, drift | ✅ |
 | **7** | Doctor, completions, onboarding, CI hardening, [winget packaging](docs/PACKAGING.md) | ✅ — [plan](docs/plans/Phase7Plan.md) |
-| **Post-7.6** | Production [official registry](https://tonythethompson.github.io/numan-registry/) cutover; `numan init` and `numan doctor --fix` auto-configure `official` | ✅ (v0.1.4) |
+| **Post-7.6** | Production [official registry](https://tonythethompson.github.io/numan-registry/) cutover; `numan init` and `numan doctor` auto-configure `official` | ✅ (v0.1.4) |
 
 ### Next (toward 1.0)
 

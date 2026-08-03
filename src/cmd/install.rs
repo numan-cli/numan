@@ -24,10 +24,6 @@ pub struct InstallArgs {
     /// Verbose output
     #[arg(short, long)]
     verbose: bool,
-
-    /// Skip confirmation prompts (does not auto-download a different Nu)
-    #[arg(long)]
-    yes: bool,
 }
 
 pub fn execute(args: &InstallArgs, root: &Path) -> Result<()> {
@@ -46,12 +42,8 @@ pub fn execute(args: &InstallArgs, root: &Path) -> Result<()> {
             }
 
             eprintln!("Error: {first_err:#}");
-            let accepted = nu_pin_offer::offer_managed_nu_pin(
-                root,
-                &nu_version.version,
-                &diagnosis,
-                args.yes,
-            )?;
+            let accepted =
+                nu_pin_offer::offer_managed_nu_pin(root, &nu_version.version, &diagnosis)?;
             if !accepted {
                 return Err(first_err);
             }

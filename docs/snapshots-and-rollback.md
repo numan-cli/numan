@@ -58,8 +58,8 @@ Snapshots are cheap: they store JSON metadata and small sidecar files
 (lockfile, autoload content, imports, paths), not payload copies. Storage under
 `<root>/state/snapshots/<uuid-v7>/` grows roughly linearly with the number of
 snapshot-triggering operations (`install`, `update`, `remove`, `activate`,
-`deactivate`, `init --refresh`, nupm imports, and rollback itself), not with
-payload size.
+`deactivate`, `init --refresh`, doctor repairs, nupm imports, and rollback
+itself), not with payload size.
 
 A snapshot does, however, keep any payload directory it references alive:
 `numan gc` treats every committed snapshot's lockfile as a live root, so an

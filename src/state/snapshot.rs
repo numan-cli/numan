@@ -74,7 +74,9 @@ pub enum SnapshotTrigger {
     NupmImport,
     NupmImportManifest,
     Rollback,
-    /// `numan init --refresh` (and related init mutations that rewrite paths).
+    /// `numan doctor` default repair pass.
+    Doctor,
+    /// `numan init --refresh` (paths / activation identity rewrite).
     Init,
 }
 

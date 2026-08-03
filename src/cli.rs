@@ -36,9 +36,9 @@ pub enum Commands {
     Remove(cmd::remove::RemoveArgs),
     /// Garbage-collect orphaned package directories
     Gc(cmd::gc::GcArgs),
-    /// Activate installed plugins with Nu
+    /// Activate installed plugins and modules with Nu
     Activate(cmd::activate::ActivateArgs),
-    /// Deactivate active modules
+    /// Deactivate active plugins and modules
     Deactivate(cmd::deactivate::DeactivateArgs),
     /// List all installed packages
     List,
@@ -54,7 +54,7 @@ pub enum Commands {
     Nupm(cmd::nupm::NupmArgs),
     /// Generate shell completion scripts
     Completions(cmd::completions::CompletionsArgs),
-    /// Diagnose Numan root health and optionally apply safe repairs
+    /// Diagnose Numan root health and apply safe repairs (use `--scan` for report-only)
     Doctor(cmd::doctor::DoctorArgs),
     /// Install optional Nushell integration helpers
     #[command(subcommand)]
