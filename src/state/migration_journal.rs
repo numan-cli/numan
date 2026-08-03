@@ -123,6 +123,19 @@ pub enum MigrationJournalError {
         source: VersionManagerError,
     },
 
+    #[error(
+        "Migration journal at '{}' could not remove stray legacy binary at '{}': {source}. \
+         Journal retained so a follow-up recovery can complete once file permissions or locks are resolved.",
+        path.display(),
+        legacy_binary.display()
+    )]
+    LegacyBinaryRemoveFailed {
+        path: PathBuf,
+        legacy_binary: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error(transparent)]
     VersionManager(#[from] VersionManagerError),
 }
@@ -327,7 +340,13 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>, MigrationJourn
                 let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
                 let legacy_binary = versioned_nu_dir(root).join(bin_name);
                 if legacy_binary.is_file() {
-                    let _ = std::fs::remove_file(&legacy_binary);
+                    if let Err(source) = std::fs::remove_file(&legacy_binary) {
+                        return Err(MigrationJournalError::LegacyBinaryRemoveFailed {
+                            path: PendingMigration::journal_path(root),
+                            legacy_binary,
+                            source,
+                        });
+                    }
                 }
             } else {
                 // PR69 WCq: surface remove_dir failures instead of ignoring
@@ -377,7 +396,13 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>, MigrationJourn
             let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
             let legacy_binary = versioned_nu_dir(root).join(bin_name);
             if legacy_binary.is_file() {
-                let _ = std::fs::remove_file(&legacy_binary);
+                if let Err(source) = std::fs::remove_file(&legacy_binary) {
+                    return Err(MigrationJournalError::LegacyBinaryRemoveFailed {
+                        path: PendingMigration::journal_path(root),
+                        legacy_binary,
+                        source,
+                    });
+                }
             }
             PendingMigration::delete(root)?;
             Ok(Some(journal))
@@ -692,5 +717,42 @@ mod tests {
         assert!(reconcile(root).unwrap().is_some());
         // Second call: no journal left; returns None.
         assert!(reconcile(root).unwrap().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reconcile_retains_journal_when_legacy_binary_remove_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let version_dir = version_install_dir(root, "0.113.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::fs::write(version_dir.join(bin_name()), b"binary").unwrap();
+
+        // Stray legacy binary exists
+        let legacy = versioned_nu_dir(root).join(bin_name());
+        std::fs::write(&legacy, b"stray legacy binary").unwrap();
+
+        write_journal(root, "0.113.1", MigrationStage::Renamed);
+
+        // Make parent dir read-only so remove_file fails
+        let tools_dir = versioned_nu_dir(root);
+        let mut perms = std::fs::metadata(&tools_dir).unwrap().permissions();
+        perms.set_mode(0o555);
+        std::fs::set_permissions(&tools_dir, perms.clone()).unwrap();
+
+        let err = reconcile(root).unwrap_err();
+        assert!(matches!(
+            err,
+            MigrationJournalError::LegacyBinaryRemoveFailed { .. }
+        ));
+
+        // Restore permissions for clean tempdir drop
+        perms.set_mode(0o755);
+        let _ = std::fs::set_permissions(&tools_dir, perms);
+
+        // Journal must still exist on disk so follow-up attempts can recover
+        assert!(PendingMigration::load(root).unwrap().is_some());
     }
 }

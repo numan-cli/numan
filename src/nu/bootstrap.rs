@@ -747,46 +747,41 @@ where
             );
         }
 
-        if options.yes {
-            // PATH/profile mutation still needs a PreMutation snapshot even
-            // when the managed binary itself is left in place.
-            create_snapshot(
-                root,
-                SnapshotReason::PreMutation,
-                SnapshotTrigger::Install,
-                None,
-                None,
-            )
-            .with_context(|| {
-                "Failed to create pre-mutation snapshot for already-installed `numan setup nu --yes`"
-            })?;
-            if let Some(parent) = dest.parent() {
-                prepend_process_path(parent)?;
-            }
-            if !options.skip_path {
-                persist_user_path(dest)?;
-            }
-            println!(
-                "Nushell already installed at '{}' (unchanged).",
-                dest.display()
-            );
-            return Ok(dest.clone());
+        if !options.yes {
+            crate::util::confirm::require_tty_or_yes(options.yes, "Nushell setup")?;
+            crate::util::confirm::confirm_or_bail(
+                &format!(
+                    "Nushell is already installed at '{}'. Configure shell integration?",
+                    dest.display()
+                ),
+                true,
+                "Nushell setup cancelled.",
+            )?;
         }
 
-        crate::util::confirm::require_tty_or_yes(options.yes, "Nushell reinstall")?;
-        crate::util::confirm::confirm_or_bail(
-            &format!(
-                "Nushell is already installed at '{}'. Reinstall {version_label} release?",
-                dest.display()
-            ),
-            false,
-            "Nushell setup cancelled.",
-        )?;
-        bail!(
-            "Refusing in-place overwrite of '{}'. \
-             Run `numan setup nu remove` then install again, or choose a different version.",
+        // PATH/profile mutation still needs a PreMutation snapshot even
+        // when the managed binary itself is left in place.
+        create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Install,
+            None,
+            None,
+        )
+        .with_context(|| {
+            "Failed to create pre-mutation snapshot for already-installed `numan setup nu`"
+        })?;
+        if let Some(parent) = dest.parent() {
+            prepend_process_path(parent)?;
+        }
+        if !options.skip_path {
+            persist_user_path(dest)?;
+        }
+        println!(
+            "Nushell already installed at '{}' (unchanged).",
             dest.display()
         );
+        return Ok(dest.clone());
     }
 
     println!(
@@ -1143,5 +1138,51 @@ mod tests {
             "expected 0.113.1 in installed list, got: {:?}",
             listed
         );
+    }
+
+    #[test]
+    fn execute_nu_setup_already_installed_non_tty_requires_yes() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let platform = Platform::detect();
+
+        // Pre-create installed version
+        let bin = version_manager::version_binary(root, "0.113.1");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        std::fs::write(&bin, b"fake nu").unwrap();
+
+        // Without `--yes` on non-TTY, it must fail-closed
+        let options = NuSetupOptions {
+            yes: false,
+            force: false,
+            skip_path: true,
+            version: Some("0.113.1".to_string()),
+            caller_consented_destructive: false,
+        };
+
+        use std::io::IsTerminal as _;
+        if !std::io::stdin().is_terminal() {
+            let err = execute_nu_setup_with_installer(root, &platform, &options, |_, _| {
+                panic!("installer must not run when already installed");
+            })
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("non-interactive") || err.to_string().contains("--yes")
+            );
+        }
+
+        // With `--yes`, it succeeds and returns the binary path
+        let options_yes = NuSetupOptions {
+            yes: true,
+            force: false,
+            skip_path: true,
+            version: Some("0.113.1".to_string()),
+            caller_consented_destructive: false,
+        };
+        let res = execute_nu_setup_with_installer(root, &platform, &options_yes, |_, _| {
+            panic!("installer must not run when already installed");
+        })
+        .unwrap();
+        assert_eq!(res, bin);
     }
 }
