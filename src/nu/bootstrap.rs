@@ -454,21 +454,8 @@ fn path_parent_for_registration(input: &Path, resolved: &Path) -> Result<PathBuf
         .map(|parent| parent.to_path_buf())
 }
 
-/// Audit-trail text for hoisted destructive-step consent.
-///
-/// Locked behind a pure helper so future hoist surfaces can call the same
-/// formatter (`numan setup nu remove`, `numan setup nu install <v>` one-shot
-/// swap, `numan doctor --fix` repair paths) without silently copy-editing the
-/// text across four-ish call sites. The literal string is golden-tested in
-/// `tests/setup_nu_test.rs::register_existing_nu_audit_text_is_stable` so any
-/// accidental rename or punctuation drift fails CI immediately.
-pub fn hoisted_audit_message(parent: &Path) -> String {
-    format!(
-        "(audit) prompt hoisted; skipping internal PATH-confirmation prompt \
-         for '{}' (caller has already gathered destructive-step consent).",
-        parent.display()
-    )
-}
+/// Re-export for callers that historically imported this from bootstrap.
+pub use crate::util::confirm::hoisted_audit_message;
 
 /// Register an existing Nushell binary: prepend its directory to PATH and persist when allowed.
 pub fn register_existing_nu(
@@ -500,7 +487,7 @@ pub fn register_existing_nu(
         // Direct callers (CLI subcommand and doctor repair) leave the flag
         // `false` and the inner prompt continues to fire, preserving
         // backward-compatible UX.
-        eprintln!("{}", hoisted_audit_message(&parent));
+        eprintln!("{}", crate::util::confirm::hoisted_audit_message(&parent));
     } else {
         println!(
             "This will add '{}' to your user PATH so Nushell can be found.",

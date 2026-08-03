@@ -272,16 +272,15 @@ fn setup_nu_rejects_legacy_use_existing_with_skip_path() {
 
 /// Golden-string stability test for the hoisted-consent audit trail.
 ///
-/// The literal text emitted by `bootstrap::register_existing_nu` in the
-/// `caller_consented_destructive` branch is part of the public contract:
-/// safe-batch automation greps `(audit)` lines out of stderr to reason about
-/// which consent decision was made. Any accidental copy-edit (a punctuation
-/// shift, a reword, a dropped space) would silently break that grep, so
-/// the literal string is pinned here. Update this test deliberately and in
-/// the same commit as the helper's text change.
+/// The literal text emitted when `register_existing_nu` runs with
+/// `caller_consented_destructive` is part of the public contract: safe-batch
+/// automation greps `(audit)` lines out of stderr to reason about which
+/// consent decision was made. Any accidental copy-edit would silently break
+/// that grep, so the literal string is pinned here. Update this test
+/// deliberately and in the same commit as the helper's text change.
 #[test]
 fn register_existing_nu_audit_text_is_stable() {
-    use numan_cli::nu::bootstrap::hoisted_audit_message;
+    use numan_cli::util::confirm::hoisted_audit_message;
     use std::path::Path;
 
     let parent = Path::new("/usr/local/bin");
