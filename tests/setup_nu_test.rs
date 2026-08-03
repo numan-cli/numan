@@ -100,13 +100,23 @@ fn setup_nu_uses_injected_installer_without_network() {
 fn execute_nu_command_wraps_installer() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
+    let _path_guard = PathRestoreGuard::new();
 
-    // Pre-install managed binary so execute_nu short-circuits without network.
-    let binary = bootstrap::managed_nu_binary(root);
+    // Pre-install a VERSIONED managed binary so `numan setup nu --yes`
+    // short-circuits without network. Latest-flow already-installed detection
+    // keys off `<root>/tools/nushell/<X.Y.Z>/<bin>` (legacy `tools/nushell/nu`
+    // is migration-only and cannot supply an active-version marker).
+    let binary = version_manager::version_binary(root, "0.113.1");
     std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
     std::fs::write(&binary, b"fake nu").unwrap();
 
     execute_nu(&NuSetupArgs::install(None, false, true, true), root).unwrap();
+
+    let active = version_manager::read_active_version(root).unwrap().unwrap();
+    assert_eq!(
+        active.version, "0.113.1",
+        "latest short-circuit must still write the active-version marker"
+    );
 }
 
 /// Return the first runnable Nushell binary on `$PATH` (or `/usr/local/bin/nu` on Unix).

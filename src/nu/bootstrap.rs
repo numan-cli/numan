@@ -739,10 +739,23 @@ where
     let any_version_installed =
         options.version.is_none() && !version_manager::list_installed_versions(root)?.is_empty();
     if (dest.is_file() || any_version_installed) && !options.force {
-        // For the `latest` flow `dest` is the legacy placeholder (never a
-        // file in the versioned world); resolve the effective installed
-        // binary so PATH prepend/persist point at a real versioned file.
-        let effective = if dest.is_file() {
+        // For the `latest` flow `dest` is the legacy placeholder. Prefer any
+        // versioned install (active marker, then newest on-tree) so a leftover
+        // `tools/nushell/nu` does not win over `<version>/nu`. Fall back to
+        // the legacy path only when nothing versioned is present.
+        let effective = if options.version.is_none() {
+            version_manager::active_nu_binary(root)
+                .ok()
+                .flatten()
+                .or_else(|| {
+                    version_manager::latest_installed_version(root)
+                        .ok()
+                        .flatten()
+                        .map(|v| version_manager::version_binary(root, &v))
+                })
+                .filter(|p| p.is_file())
+                .unwrap_or_else(|| dest.clone())
+        } else if dest.is_file() {
             dest
         } else {
             // DanglingActive must not abort this short-circuit: other on-tree
@@ -784,7 +797,7 @@ where
                         format!("Failed to normalize requested version '{version}'")
                     })?
                 }
-                None => version_from_on_tree_binary(&effective)?,
+                None => resolve_latest_active_version(root, &effective)?,
             };
             version_manager::write_active_version(root, &active_version).with_context(|| {
                 format!("Failed to persist installed Nu version '{active_version}' as active")
@@ -908,6 +921,37 @@ fn version_from_on_tree_binary(installed: &Path) -> Result<String> {
             installed.display()
         )
     })
+}
+
+/// Resolve the active version for a `latest` short-circuit.
+///
+/// Prefers the versioned on-tree path. When only a legacy
+/// `<root>/tools/nushell/<bin>` remains, migrate it first so the marker can
+/// point at a real `X.Y.Z` install.
+fn resolve_latest_active_version(root: &Path, effective: &Path) -> Result<String> {
+    if let Ok(version) = version_from_on_tree_binary(effective) {
+        return Ok(version);
+    }
+    if let Some(version) = version_manager::latest_installed_version(root)? {
+        return Ok(version);
+    }
+    if effective == managed_nu_binary(root) {
+        crate::nu::migrate_legacy::migrate_legacy_install(root).with_context(|| {
+            format!(
+                "Failed to migrate legacy Nu at '{}' before writing the active-version marker",
+                effective.display()
+            )
+        })?;
+        if let Some(version) = version_manager::latest_installed_version(root)? {
+            return Ok(version);
+        }
+        anyhow::bail!(
+            "Legacy Nu at '{}' could not be migrated to a versioned install. \
+             Run `numan doctor --fix` or `numan use <version>`.",
+            effective.display()
+        );
+    }
+    version_from_on_tree_binary(effective)
 }
 
 #[cfg(test)]
