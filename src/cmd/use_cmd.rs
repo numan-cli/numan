@@ -151,6 +151,7 @@ fn execute_switch(root: &Path, version: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::snapshot::{list_snapshots, SnapshotReason, SnapshotTrigger};
     use tempfile::TempDir;
 
     fn create_fake_version(root: &Path, version: &str) {
@@ -158,6 +159,17 @@ mod tests {
         let dir = version_manager::version_install_dir(root, version);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(binary_name), "fake").unwrap();
+    }
+
+    fn assert_pre_mutation_snapshot(root: &Path) {
+        let snaps = list_snapshots(root).unwrap();
+        assert_eq!(
+            snaps.len(),
+            1,
+            "version-changing `numan use` must create exactly one pre-mutation snapshot"
+        );
+        assert_eq!(snaps[0].reason, SnapshotReason::PreMutation);
+        assert_eq!(snaps[0].trigger, SnapshotTrigger::Update);
     }
 
     #[test]
@@ -186,6 +198,30 @@ mod tests {
     }
 
     #[test]
+    fn test_use_list_creates_no_snapshot() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.113.1");
+        version_manager::write_active_version(root, "0.113.1").unwrap();
+
+        execute(
+            &UseArgs {
+                version: "list".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        assert!(
+            list_snapshots(root).unwrap().is_empty(),
+            "`numan use list` is read-only and must not create a snapshot"
+        );
+        // Active selection unchanged (no mutation / no rollback side effects).
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.113.1");
+    }
+
+    #[test]
     fn test_use_latest_no_versions() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
@@ -208,6 +244,27 @@ mod tests {
         };
         execute(&args, root).unwrap();
 
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.113.1");
+    }
+
+    #[test]
+    fn test_use_latest_creates_pre_mutation_snapshot() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.112.0");
+        create_fake_version(root, "0.113.1");
+        version_manager::write_active_version(root, "0.112.0").unwrap();
+
+        execute(
+            &UseArgs {
+                version: "latest".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        assert_pre_mutation_snapshot(root);
         let active = version_manager::read_active_version(root).unwrap().unwrap();
         assert_eq!(active.version, "0.113.1");
     }
@@ -241,6 +298,27 @@ mod tests {
         };
         execute(&args, root).unwrap();
 
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.113.1");
+    }
+
+    #[test]
+    fn test_use_switch_creates_pre_mutation_snapshot() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.112.0");
+        create_fake_version(root, "0.113.1");
+        version_manager::write_active_version(root, "0.112.0").unwrap();
+
+        execute(
+            &UseArgs {
+                version: "0.113.1".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        assert_pre_mutation_snapshot(root);
         let active = version_manager::read_active_version(root).unwrap().unwrap();
         assert_eq!(active.version, "0.113.1");
     }
