@@ -28,6 +28,7 @@ use crate::state::autoload_state::AutoloadState;
 use crate::state::journal::PendingActivation;
 use crate::state::lifecycle_journal::PendingLifecycle;
 use crate::state::lockfile::Lockfile;
+use crate::state::migration_journal::{self as migration_journal, PendingMigration};
 use crate::state::nupm_import::NupmImportsFile;
 use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
@@ -35,7 +36,7 @@ use crate::util::fs_safety::{acquire_mutation_lock, assert_managed_file_owned};
 use crate::util::hints::{
     self, active_plugin_mutation_gated_doctor_message, registry_none_fix, setup_nu_use_existing,
     ACTIVE_PLUGIN_MUTATION_GATED_FIX, CMD_ACTIVATE, CMD_DEACTIVATE, CMD_DOCTOR_FIX, CMD_INIT,
-    CMD_INIT_REFRESH, CMD_REGISTRY_SYNC, CMD_SETUP_NU,
+    CMD_INIT_REFRESH, CMD_REGISTRY_SYNC, CMD_SETUP_NU, CMD_USE,
 };
 use crate::util::stdio_redirect::StdoutToStderr;
 
@@ -127,7 +128,7 @@ pub struct DoctorOptions {
     pub activate_repair: Option<fn(&ActivateArgs, &Path) -> Result<()>>,
     /// Override deactivate repair (tests inject fakes; production uses `deactivate::execute`).
     pub deactivate_repair: Option<fn(&DeactivateArgs, &Path) -> Result<()>>,
-    /// Override Nushell bootstrap repair (tests inject fakes; production uses `setup::execute_nu_impl`).
+    /// Override Nushell bootstrap repair (tests inject fakes; production uses `setup::execute_nu_repair`).
     pub nu_setup_repair: Option<fn(&NuSetupArgs, &Path) -> Result<()>>,
     /// Override off-PATH Nu discovery (tests inject a known binary path).
     pub discover_off_path: Option<fn() -> Option<PathBuf>>,
@@ -645,6 +646,40 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
             None,
             RepairTier::Manual,
         ));
+    }
+
+    // PR69 WCk: surface read/parse errors instead of silently dropping them.
+    // A malformed `migration-journal.json` previously produced no finding at
+    // all, so `doctor --fix` could report a clean result while the recovery
+    // state is unreadable. Each Err branch carries the journal path so the
+    // fix hint is unambiguous.
+    match PendingMigration::load(root) {
+        Ok(Some(j)) => findings.push(finding(
+            "journal.migration_pending",
+            Severity::Warn,
+            format!(
+                "Pending legacy-Nu migration journal (stage: {}, version: {})",
+                j.stage, j.version
+            ),
+            Some(CMD_USE),
+            RepairTier::Auto,
+        )),
+        Ok(None) => {}
+        Err(e) => {
+            let journal_path = PendingMigration::journal_path(root);
+            let fix = format!("Delete the stale journal at '{}'", journal_path.display());
+            findings.push(finding(
+                "journal.migration_invalid",
+                Severity::Error,
+                format!(
+                    "Migration journal at '{}' is unreadable: {e}. \
+                     Delete the stale journal to recover.",
+                    journal_path.display()
+                ),
+                Some(&fix),
+                RepairTier::Manual,
+            ));
+        }
     }
 }
 
@@ -1165,7 +1200,7 @@ fn apply_repairs(
             let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
             // Never pass `--yes` here: `setup nu use` may wipe a managed install
             // and that path is fail-closed without explicit consent / TTY.
-            match setup_fn(&NuSetupArgs::use_existing(off_path, false), root) {
+            match setup_fn(&NuSetupArgs::use_existing(off_path, false, false), root) {
                 Ok(()) => records.push(RepairRecord {
                     id,
                     status: RepairStatus::Applied,
@@ -1407,6 +1442,39 @@ fn apply_repairs(
         }
     }
 
+    // The migration journal path is self-healing in normal use (top of
+    // `migrate_legacy_install_with_detector`); the doctor repair is the
+    // catch-up for users who ran `numan doctor --fix` without ever calling
+    // `numan use`. Gating on `PendingMigration::load(...).is_some()` keeps
+    // the Applied record honest — re-runs of `doctor --fix` produce no
+    // second repair.
+    if findings
+        .iter()
+        .any(|f| f.id == "journal.migration_pending" && f.severity == Severity::Warn)
+    {
+        if PendingMigration::load(root)?.is_none() {
+            return Ok(records);
+        }
+        let id = "journal.migration_repaired".to_string();
+        // chatgpt PR69 S1A: reacquire the root mutation lock before the
+        // self-healing reconcile so concurrent `numan use` cannot race the
+        // journal stage advance + directory rename the same way AGENTS.md
+        // requires install/remove/activate/deactivate/numan-use to.
+        let _migration_repair_lock = acquire_mutation_lock(root)?;
+        match migration_journal::reconcile(root) {
+            Ok(_) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Applied,
+                reason: None,
+            }),
+            Err(e) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Failed,
+                reason: Some(e.to_string()),
+            }),
+        }
+    }
+
     Ok(records)
 }
 
@@ -1457,6 +1525,8 @@ fn print_report(args: &DoctorArgs, root: &Path, report: &DoctorReport) -> Result
                 "journal.autoload_stale",
                 "journal.lifecycle_pending",
                 "journal.lifecycle_stale",
+                "journal.migration_pending",
+                "journal.migration_invalid",
             ],
         ),
         (
@@ -1555,35 +1625,9 @@ mod tests {
     use crate::core::integrity;
     use crate::nu::autoload::FakeCandidateRunner;
     use crate::state::lockfile::{LockfileEntry, PluginActivation};
+    use crate::util::test_paths::PathRestoreGuard;
     use std::collections::BTreeMap;
-    use std::sync::Mutex;
     use tempfile::TempDir;
-
-    /// Serializes tests that mutate the process-wide `PATH` env var.
-    static TEST_PATH_GUARD: Mutex<()> = Mutex::new(());
-
-    /// RAII guard that restores the original PATH on drop, ensuring restoration
-    /// during both normal return and panic unwinding.
-    struct PathRestoreGuard {
-        original: Option<std::ffi::OsString>,
-    }
-
-    impl PathRestoreGuard {
-        fn new() -> Self {
-            Self {
-                original: std::env::var_os("PATH"),
-            }
-        }
-    }
-
-    impl Drop for PathRestoreGuard {
-        fn drop(&mut self) {
-            match self.original.as_ref() {
-                Some(path) => std::env::set_var("PATH", path),
-                None => std::env::remove_var("PATH"),
-            }
-        }
-    }
 
     fn fake_paths(root: &Path, nu_exe: &Path) -> NuPaths {
         let bytes = std::fs::read(nu_exe).unwrap();
@@ -2066,7 +2110,7 @@ mod tests {
 
     #[test]
     fn doctor_reports_path_nu_version_probe_failure() {
-        let _path_guard = TEST_PATH_GUARD.lock().unwrap();
+        let _path_restore = PathRestoreGuard::new();
 
         let dir = TempDir::new().unwrap();
         let root = dir.path();
@@ -2086,7 +2130,6 @@ mod tests {
             std::fs::set_permissions(&fake_nu, perms).unwrap();
         }
 
-        let _path_restore = PathRestoreGuard::new();
         // Prepend the fake-nu dir; do not replace PATH. `find_nu_on_path` shells
         // out to `which`/`where.exe`, which must remain resolvable.
         let mut path_entries = vec![path_dir];
@@ -2281,5 +2324,134 @@ mod tests {
         assert!(json.contains("nu.path.version"));
         assert!(json.contains("nu.managed.version"));
         assert!(json.contains("registry.trust_root"));
+    }
+    #[test]
+    fn doctor_reports_migration_journal_finding() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        // Pre-stage a half-applied migration: an empty `<version>/`
+        // subdir (the reviewer's original bug state) plus a journal at
+        // `Prepared` recorded by an interrupted `migrate_legacy_install`.
+        let tools = root.join("tools").join("nushell");
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::create_dir_all(tools.join("0.113.1")).unwrap();
+        PendingMigration {
+            schema_version: crate::state::migration_journal::SCHEMA_VERSION,
+            version: "0.113.1".to_string(),
+            stage: crate::state::migration_journal::MigrationStage::Prepared,
+        }
+        .save(root)
+        .unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_pending")
+            .expect("journal.migration_pending finding");
+        assert_eq!(f.severity, Severity::Warn);
+        assert_eq!(f.repair, RepairTier::Auto);
+        assert!(
+            f.message.contains("Prepared") || f.message.contains("prepared"),
+            "finding must name the journal stage: {}",
+            f.message
+        );
+        assert!(f.message.contains("0.113.1"));
+        assert_eq!(f.fix.as_deref(), Some(crate::util::hints::CMD_USE));
+    }
+
+    #[test]
+    fn doctor_fix_reconciles_migration_journal() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        // Same pre-stage as `doctor_reports_migration_journal_finding`.
+        let tools = root.join("tools").join("nushell");
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::create_dir_all(tools.join("0.113.1")).unwrap();
+        PendingMigration {
+            schema_version: crate::state::migration_journal::SCHEMA_VERSION,
+            version: "0.113.1".to_string(),
+            stage: crate::state::migration_journal::MigrationStage::Prepared,
+        }
+        .save(root)
+        .unwrap();
+
+        let args = DoctorArgs {
+            scan: false,
+            json: false,
+            nupm_home: None,
+        };
+        let _ = execute_with_options(&args, root, test_doctor_options()).unwrap();
+
+        // After `doctor --fix`: the empty subdir AND the journal must be gone.
+        assert!(
+            !tools.join("0.113.1").exists(),
+            "empty versioned subdir must be removed by reconcile"
+        );
+        assert!(
+            PendingMigration::load(root).unwrap().is_none(),
+            "journal must be cleared by reconcile"
+        );
+    }
+
+    /// PR69 WCk regression: a malformed `migration-journal.json` must
+    /// surface a `journal.migration_invalid` finding at Error severity with
+    /// a Manual repair tier. Previously the report silently dropped the
+    /// Err branch, so `doctor --fix` could report a clean result while
+    /// recovery state was unreadable.
+    #[test]
+    fn doctor_reports_malformed_migration_journal_as_invalid() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        // Lay down a journal-shaped file with garbage content so
+        // `PendingMigration::load` returns Err (parse failure).
+        let journal_path = PendingMigration::journal_path(root);
+        std::fs::create_dir_all(journal_path.parent().unwrap()).unwrap();
+        std::fs::write(&journal_path, b"{ this is not valid json").unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_invalid")
+            .expect("journal.migration_invalid finding must be published on parse Err");
+        assert_eq!(f.severity, Severity::Error);
+        assert_eq!(f.repair, RepairTier::Manual);
+        assert!(
+            f.message.contains("unreadable"),
+            "finding must mention unreadable so safe-batch can grep it: {}",
+            f.message
+        );
+        let expected_fix = format!("Delete the stale journal at '{}'", journal_path.display());
+        assert_eq!(f.fix.as_deref(), Some(expected_fix.as_str()));
+        // The well-formed pending finding must NOT be published for an
+        // invalid journal — otherwise the user sees conflicting guidance.
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.id != "journal.migration_pending"),
+            "invalid journal must NOT also produce a Pending finding"
+        );
     }
 }

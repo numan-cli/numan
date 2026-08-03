@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use std::io::IsTerminal;
 use std::path::Path;
 
 use crate::state::lifecycle_journal::{LifecycleOp, LifecycleStage, PendingLifecycle};
@@ -15,12 +16,26 @@ pub struct RemoveArgs {
     /// Package to remove (owner/name)
     package: String,
 
+    /// Skip confirmation prompts (required in non-interactive sessions)
+    #[arg(long)]
+    yes: bool,
+
     /// Remove even if the package has an active *module* activation record (does not bypass active plugin activation; see Issue #22)
     #[arg(long)]
     force: bool,
 }
 
 pub fn execute(args: &RemoveArgs, root: &Path) -> Result<()> {
+    execute_with_tty(args, root, std::io::stdin().is_terminal())
+}
+
+/// Same as [`execute`] with an injectable terminal-status seam for tests.
+fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> {
+    // Destructive: permanently deletes the package payload and lockfile entry.
+    // Refuse unattended (non-TTY) sessions without explicit --yes so safe-batch
+    // automation has to opt in; interactive sessions keep the existing flow.
+    crate::util::confirm::require_tty_or_yes_with_seam(args.yes, "package removal", is_tty)?;
+
     let _lock = acquire_mutation_lock(root)?;
 
     let mut lockfile = Lockfile::load(root)?;
@@ -246,5 +261,56 @@ mod tests {
             ..base_entry()
         };
         ensure_removable(&entry, "owner/mod", true).unwrap();
+    }
+
+    #[test]
+    fn execute_refuses_non_tty_without_yes() {
+        // Force non-TTY via the injectable seam so the guard is deterministic
+        // regardless of process stdin terminal status.
+        let dir = tempfile::tempdir().unwrap();
+        let err = execute_with_tty(
+            &RemoveArgs {
+                package: "owner/pkg".to_string(),
+                yes: false,
+                force: false,
+            },
+            dir.path(),
+            false,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(
+                "Refusing destructive package removal in non-interactive session without --yes."
+            ),
+            "guard bail must be the audit contract, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn execute_bypasses_guard_with_explicit_yes() {
+        let dir = tempfile::tempdir().unwrap();
+        // --yes must get past the destructive guard regardless of TTY; the
+        // downstream "not installed" bail proves the guard was the only blocker.
+        // Force non-TTY so this never depends on process stdin terminal status.
+        let err = execute_with_tty(
+            &RemoveArgs {
+                package: "owner/pkg".to_string(),
+                yes: true,
+                force: false,
+            },
+            dir.path(),
+            false,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("is not installed"),
+            "expected downstream bail, got: {msg}"
+        );
+        assert!(
+            !msg.contains("Refusing destructive"),
+            "--yes must bypass the guard: {msg}"
+        );
     }
 }

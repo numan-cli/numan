@@ -96,6 +96,50 @@ pub fn acquire_mutation_lock(root: &Path) -> Result<MutationLock> {
     })
 }
 
+/// Acquire the root mutation lock, run a destructive setup subcommand, and
+/// release the lock on return.
+///
+/// Every destructive setup entry point (install, off-path registration,
+/// PATH-Nu registration, managed removal, derive/active/upgrade via
+/// `numan use`) flows through this helper so the lock boundary has exactly
+/// one source of truth — closing PR #69's WCr (`setup_family_mutation_lock`)
+/// and ensuring that a concurrent `numan use`, `numan install`, or
+/// `numan doctor --fix` cannot interleave filesystem mutations on the same
+/// root.
+///
+/// `what` is a short human-readable label (e.g. `"Nushell install"`,
+/// `"off-path Nu registration"`, `"managed Nushell removal"`); it lands
+/// in the audit log alongside the `(audit)` prefix so safe-batch automation
+/// can grep one consistent shape across the whole destructive setup
+/// surface:
+///
+/// ```text
+/// (audit) setup mutation lock acquired for {what} on '{root}'.
+/// ```
+///
+/// The closure runs while the lock is held; returns the closure's
+/// `Result<T>` verbatim. The lock is released on Drop at the end of this
+/// function's scope (also on panic — RAII).
+///
+/// Use [`crate::util::confirm::require_tty_or_yes`] for non-TTY / `--yes`
+/// gating; this helper does **not** add TTY checks.
+pub fn setup_subcommand_lock<T, F>(root: &Path, what: &str, f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T>,
+{
+    let _lock = acquire_mutation_lock(root).with_context(|| {
+        format!(
+            "Refusing destructive '{what}' on '{}': another Numan mutation is already in progress.",
+            root.display()
+        )
+    })?;
+    eprintln!(
+        "(audit) setup mutation lock acquired for {what} on '{}'.",
+        root.display()
+    );
+    f()
+}
+
 // ── Ownership marker ──────────────────────────────────────────────────────────
 
 /// The exact two-line UTF-8 prefix that every Numan-generated autoload file
@@ -393,5 +437,48 @@ mod tests {
         std::fs::write(&target, b"hello").unwrap();
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert!(is_symlink_or_reparse(&link).unwrap());
+    }
+
+    // ── setup_subcommand_lock ───────────────────────────────────────────────
+
+    #[test]
+    fn setup_subcommand_lock_runs_closure_and_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let seen = setup_subcommand_lock(root, "test op", || Ok::<_, anyhow::Error>(42)).unwrap();
+        assert_eq!(seen, 42);
+        // Lock is released on Drop: a second acquisition after the first
+        // closure returned must succeed.
+        acquire_mutation_lock(root).expect("lock should be free after first closure returns");
+    }
+
+    #[test]
+    fn setup_subcommand_lock_propagates_closure_error_and_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let err = setup_subcommand_lock::<(), _>(root, "test op", || {
+            anyhow::bail!("closure failed");
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("closure failed"));
+        // Lock must still be released on the error path so a retry succeeds.
+        acquire_mutation_lock(root).expect("lock should be free even on error");
+    }
+
+    #[test]
+    fn setup_subcommand_lock_second_concurrent_call_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Hold the lock outside the helper. A second attempt must fail fast
+        // with the "another Numan mutation" message — this is the property
+        // AGENTS.md relies on to serialize destructive setup across
+        // concurrent invocations of the same binary on the same root.
+        let _held = acquire_mutation_lock(root).expect("first acquire");
+        let err = setup_subcommand_lock::<(), _>(root, "test op", || Ok(()))
+            .expect_err("concurrent acquire must fail");
+        assert!(
+            err.to_string().contains("another Numan mutation"),
+            "unexpected error: {err}"
+        );
     }
 }

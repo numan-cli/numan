@@ -98,7 +98,11 @@ impl StepName {
             ],
             Self::List => vec!["list".to_string()],
             Self::Deactivate => vec!["deactivate".to_string(), config.package_id.clone()],
-            Self::Remove => vec!["remove".to_string(), config.package_id.clone()],
+            Self::Remove => vec![
+                "remove".to_string(),
+                config.package_id.clone(),
+                "--yes".to_string(),
+            ],
             Self::Gc => vec!["gc".to_string()],
             Self::Preflight => panic!("preflight has no numan command arguments"),
         }

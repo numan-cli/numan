@@ -10,6 +10,7 @@ use numan_cli::core::platform::Platform;
 use numan_cli::nu::bootstrap::{self, install_from_archive, NuSetupOptions};
 use numan_cli::nu::paths::{find_nu_executable_with_root, validate_nushell_binary};
 use numan_cli::nu::version_manager;
+use numan_cli::util::test_paths::PathRestoreGuard;
 use std::io::Write;
 use std::path::PathBuf;
 use zip::write::SimpleFileOptions;
@@ -36,12 +37,18 @@ fn managed_nu_is_discovered_after_install() {
     }
 
     install_from_archive(&zip_path, root, "0.0.0-test").unwrap();
+    // Discovery keys off the active marker; `install_from_archive` alone does
+    // not write it (the setup flow does). Mirror what `numan setup nu` does
+    // so discovery can resolve the freshly installed versioned binary.
+    version_manager::write_active_version(root, "0.0.0-test").unwrap();
 
     let resolved = find_nu_executable_with_root(root).unwrap();
     let expected = version_manager::version_binary(root, "0.0.0-test");
     assert_eq!(
         std::fs::canonicalize(&resolved).unwrap(),
         std::fs::canonicalize(&expected).unwrap(),
+        "installed binary must live in the versioned layout \
+         (<root>/tools/nushell/<version>/<bin>)",
     );
 }
 
@@ -52,6 +59,8 @@ fn setup_nu_uses_injected_installer_without_network() {
     let platform = Platform::detect();
 
     let installer = |install_root: &std::path::Path, _platform: &Platform| {
+        // PR69 Srm: the injected installer must write the VERSIONED layout,
+        // exactly like the real network installer now does.
         let binary = version_manager::version_binary(install_root, "0.113.1");
         std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
         std::fs::write(&binary, b"fake nu").unwrap();
@@ -65,27 +74,49 @@ fn setup_nu_uses_injected_installer_without_network() {
             yes: true,
             force: false,
             skip_path: true,
-            version: None,
+            version: Some("0.113.1".to_string()),
             caller_consented_destructive: false,
+            is_tty: None,
         },
         installer,
     )
     .unwrap();
 
-    assert!(version_manager::version_binary(root, "0.113.1").is_file());
+    // The versioned binary must exist and be marked active (PR67 round-3
+    // requirement: fake-installer test covering both the active marker and
+    // the resulting `numan use list` state).
+    assert!(
+        version_manager::version_binary(root, "0.113.1").is_file(),
+        "versioned binary must exist after injected install"
+    );
+    let active = version_manager::read_active_version(root).unwrap().unwrap();
+    assert_eq!(
+        active.version, "0.113.1",
+        "freshly installed version must be active"
+    );
 }
 
 #[test]
 fn execute_nu_command_wraps_installer() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
+    let _path_guard = PathRestoreGuard::new();
 
-    // Pre-install managed binary so execute_nu short-circuits without network.
-    let binary = bootstrap::managed_nu_binary(root);
+    // Pre-install a VERSIONED managed binary so `numan setup nu --yes`
+    // short-circuits without network. Latest-flow already-installed detection
+    // keys off `<root>/tools/nushell/<X.Y.Z>/<bin>` (legacy `tools/nushell/nu`
+    // is migration-only and cannot supply an active-version marker).
+    let binary = version_manager::version_binary(root, "0.113.1");
     std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
     std::fs::write(&binary, b"fake nu").unwrap();
 
     execute_nu(&NuSetupArgs::install(None, false, true, true), root).unwrap();
+
+    let active = version_manager::read_active_version(root).unwrap().unwrap();
+    assert_eq!(
+        active.version, "0.113.1",
+        "latest short-circuit must still write the active-version marker"
+    );
 }
 
 /// Return the first runnable Nushell binary on `$PATH` (or `/usr/local/bin/nu` on Unix).
@@ -110,6 +141,9 @@ fn runnable_nu_on_path() -> Option<PathBuf> {
 #[test]
 #[ignore = "requires real Nu binary on $PATH — run in platform acceptance job"]
 fn setup_nu_use_existing_registers_binary_without_download() {
+    // Serialize PATH mutation with sibling ignored tests in this binary.
+    let _path_guard = PathRestoreGuard::new();
+
     let Some(nu_source) = runnable_nu_on_path() else {
         return;
     };
@@ -128,7 +162,11 @@ fn setup_nu_use_existing_registers_binary_without_download() {
         std::fs::set_permissions(&existing, perms).unwrap();
     }
 
-    execute_nu(&NuSetupArgs::use_existing(existing.clone(), true), root).unwrap();
+    execute_nu(
+        &NuSetupArgs::use_existing(existing.clone(), true, false),
+        root,
+    )
+    .unwrap();
 
     assert!(
         !bootstrap::managed_nu_binary(root).is_file(),
@@ -143,11 +181,20 @@ fn setup_nu_use_existing_registers_binary_without_download() {
         .unwrap()
         .to_path_buf();
     let parent_str = parent.to_string_lossy().replace("\\\\?\\", "");
-    let path_contains = std::env::split_paths(&path_var)
-        .any(|part| part.to_string_lossy().eq_ignore_ascii_case(&parent_str));
+    let path_contains = std::env::split_paths(&path_var).any(|part| {
+        let part_str = part.to_string_lossy().replace("\\\\?\\", "");
+        if part_str.eq_ignore_ascii_case(&parent_str) {
+            return true;
+        }
+        // macOS temp dirs often appear as /var/... vs /private/var/...;
+        // compare canonical forms when the entry still exists on disk.
+        part.canonicalize()
+            .map(|canon| canon == parent)
+            .unwrap_or(false)
+    });
     assert!(
         path_contains,
-        "PATH should contain the existing Nu directory after use-existing"
+        "PATH should contain the existing Nu directory after use-existing; PATH={path_var}"
     );
 }
 
@@ -190,15 +237,28 @@ fn cli_parse_remove_subcommand() {
 #[test]
 fn cli_parse_path_subcommand() {
     let args = parse_nu_args(&["path"]);
-    assert!(matches!(args.action, Some(NuAction::Path)));
+    assert!(matches!(args.action, Some(NuAction::Path { .. })));
 }
 
 #[test]
 fn cli_parse_use_subcommand() {
     let args = parse_nu_args(&["use", "/usr/bin/nu"]);
     match &args.action {
-        Some(NuAction::Use { path }) => assert_eq!(path, &PathBuf::from("/usr/bin/nu")),
-        other => panic!("expected Use, got {other:?}"),
+        Some(NuAction::Use { path, force: false }) => {
+            assert_eq!(path, &PathBuf::from("/usr/bin/nu"))
+        }
+        other => panic!("expected Use {{ path, force: false }}, got {other:?}"),
+    }
+}
+
+#[test]
+fn cli_parse_use_subcommand_with_force_flag() {
+    let args = parse_nu_args(&["use", "--force", "/usr/bin/nu"]);
+    match &args.action {
+        Some(NuAction::Use { path, force: true }) => {
+            assert_eq!(path, &PathBuf::from("/usr/bin/nu"))
+        }
+        other => panic!("expected Use {{ path, force: true }}, got {other:?}"),
     }
 }
 
@@ -234,7 +294,19 @@ fn setup_nu_rejects_use_existing_with_skip_path() {
     let existing = root.join("nu");
     std::fs::write(&existing, b"fake nu").unwrap();
 
-    let args = NuSetupArgs::use_existing_for_test(existing, true, true);
+    let args = NuSetupArgs {
+        action: Some(numan_cli::cmd::setup::NuAction::Use {
+            path: existing,
+            force: false,
+        }),
+        version: None,
+        force: false,
+        skip_path: true,
+        yes: true,
+        remove: false,
+        use_path: false,
+        use_existing: None,
+    };
     let err = execute_nu(&args, root).unwrap_err();
     assert!(
         err.to_string()
@@ -266,5 +338,163 @@ fn setup_nu_rejects_legacy_use_existing_with_skip_path() {
     assert!(
         err.to_string().contains("--skip-path"),
         "unexpected error: {err}"
+    );
+}
+
+/// Stage a writable copy of `nu` at `dst` (copies the host's Nu binary so
+/// `validate_nushell_binary` succeeds without spawning a build).
+#[cfg(unix)]
+fn stage_fake_nu(src: &std::path::Path, dst: &std::path::Path) {
+    std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
+    std::fs::copy(src, dst).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(dst).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(dst, perms).unwrap();
+}
+
+#[cfg(windows)]
+fn stage_fake_nu(src: &std::path::Path, dst: &std::path::Path) {
+    std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
+    std::fs::copy(src, dst).unwrap();
+}
+
+// PR spec-ambiguity fix: `numan setup nu use <path>` MUST refuse the
+// destructive two-step flow (managed-tree delete + off-path registration)
+// when a managed Nushell install already exists, unless the caller
+// explicitly opts in with `--force`. The hint message names `--force`
+// and `setup nu remove`, so CLI users have two clean recovery paths.
+#[test]
+#[ignore = "requires real Nu binary on $PATH — run in platform acceptance job"]
+fn setup_nu_use_existing_refuses_when_managed_tree_present_without_force() {
+    // Keep PATH reads consistent with sibling ignored tests that mutate PATH.
+    let _path_guard = PathRestoreGuard::new();
+
+    let Some(nu_source) = runnable_nu_on_path() else {
+        return;
+    };
+    let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    // Stage a managed Nushell install under NUMAN_ROOT.
+    let managed = root.join("tools").join("nushell").join(bin_name);
+    stage_fake_nu(&nu_source, &managed);
+    assert!(managed.is_file(), "managed Nu must be on disk");
+
+    // Stage the user-supplied off-path Nu.
+    let off_path_dir = dir.path().join("off");
+    let off_path = off_path_dir.join(bin_name);
+    stage_fake_nu(&nu_source, &off_path);
+
+    // Without --force: must refuse, naming --force in the hint.
+    let err = execute_nu(
+        &NuSetupArgs::use_existing(off_path.clone(), true, false),
+        root,
+    )
+    .expect_err("expected refusal when managed tree exists and --force omitted");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Refusing"),
+        "hint must lead with the refusal, got: {msg}"
+    );
+    assert!(msg.contains("--force"), "hint must name --force: {msg}");
+    // The gate names the managed-tree DIRECTORY (not the binary inside it),
+    // mirroring what `bootstrap::managed_nu_dir(root)` returns at the prompt
+    // site — so callers can grep exactly one path shape from CI logs.
+    let managed_dir = managed.parent().unwrap();
+    assert!(
+        msg.contains(&managed_dir.display().to_string()),
+        "hint must include managed tree directory: {msg}"
+    );
+    assert!(
+        msg.contains(&off_path.display().to_string()),
+        "hint must include off-path binary: {msg}"
+    );
+    assert!(
+        msg.contains("setup nu remove"),
+        "hint must name the alternate recovery path: {msg}"
+    );
+
+    // The managed Nu must still be on disk — the refusal preserves state.
+    assert!(managed.is_file(), "managed Nu must survive the refusal");
+}
+
+/// With `--force`, the destructive two-step proceeds under the standard
+/// merged confirm prompt. `yes=true` short-circuits the inner confirm so
+/// the test runs without TTY interaction; in production, the user sees a
+/// warn-and-confirm prompt shaped exactly like the existing destructive
+/// prompt on `execute_use_path`.
+#[test]
+#[ignore = "requires real Nu binary on $PATH — run in platform acceptance job"]
+fn setup_nu_use_existing_force_drops_managed_tree() {
+    // Serialize PATH mutation with sibling ignored tests in this binary.
+    let _path_guard = PathRestoreGuard::new();
+
+    let Some(nu_source) = runnable_nu_on_path() else {
+        return;
+    };
+    let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let managed = root.join("tools").join("nushell").join(bin_name);
+    stage_fake_nu(&nu_source, &managed);
+    let off_path_dir = dir.path().join("off");
+    let off_path = off_path_dir.join(bin_name);
+    stage_fake_nu(&nu_source, &off_path);
+
+    // With --force + yes: destructive two-step proceeds; pre-existing
+    // managed Nu is replaced by the off-path binary.
+    execute_nu(
+        &NuSetupArgs::use_existing(off_path.clone(), true, true),
+        root,
+    )
+    .unwrap();
+
+    assert!(
+        !managed.is_file(),
+        "managed Nu must be deleted after force=true execution"
+    );
+}
+
+/// Golden-string stability test for the hoisted-consent audit trail.
+///
+/// The literal text emitted when `register_existing_nu` runs with
+/// `caller_consented_destructive` is part of the public contract: safe-batch
+/// automation greps `(audit)` lines out of stderr to reason about which
+/// consent decision was made. Any accidental copy-edit would silently break
+/// that grep, so the literal string is pinned here. Update this test
+/// deliberately and in the same commit as the helper's text change.
+#[test]
+fn register_existing_nu_audit_text_is_stable() {
+    use numan_cli::util::confirm::hoisted_audit_message;
+    use std::path::Path;
+
+    let parent = Path::new("/usr/local/bin");
+    let actual = hoisted_audit_message(parent);
+    assert_eq!(
+        actual,
+        format!(
+            "(audit) prompt hoisted; skipping internal PATH-confirmation prompt \
+             for '{}' (caller has already gathered destructive-step consent).",
+            parent.display()
+        )
+    );
+
+    // Empty parent path: a corner case the future hoist surfaces (setup nu
+    // remove, install <v> one-shot) might pass through. The helper must still
+    // return a stable shape; an empty `display()` renders as `""`.
+    let empty_parent = Path::new("");
+    let empty = hoisted_audit_message(empty_parent);
+    assert_eq!(
+        empty,
+        format!(
+            "(audit) prompt hoisted; skipping internal PATH-confirmation prompt \
+             for '{}' (caller has already gathered destructive-step consent).",
+            empty_parent.display()
+        )
     );
 }
