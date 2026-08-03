@@ -30,28 +30,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tagged_sha=$(curl --fail-with-body --silent --show-error \
+          ref_file=$(mktemp)
+          curl --fail-with-body --silent --show-error \
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             -H "User-Agent: numan-ci" \
-            "https://api.github.com/repos/tonythethompson/numan/git/refs/tags/${CONTRACT_TAG}" \
-            | python -c "
-import json, os, sys, urllib.request
-ref = json.load(sys.stdin)
-sha = ref['object']['sha']
-if ref['object']['type'] == 'tag':
-    headers = {
-        'Accept': 'application/vnd.github+json',
-        'User-Agent': 'numan-ci',
-    }
-    token = os.environ.get('GITHUB_TOKEN', '')
-    if token:
-        headers['Authorization'] = f'Bearer {token}'
-    req = urllib.request.Request(ref['object']['url'], headers=headers)
-    tag = json.load(urllib.request.urlopen(req))
-    sha = tag['object']['sha']
-print(sha)
-")
+            -o "$ref_file" \
+            "https://api.github.com/repos/tonythethompson/numan/git/refs/tags/${CONTRACT_TAG}"
+          object_type=$(jq -r '.object.type' "$ref_file")
+          tagged_sha=$(jq -r '.object.sha' "$ref_file")
+          if [ "$object_type" = "tag" ]; then
+            tagged_sha=$(curl --fail-with-body --silent --show-error \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "User-Agent: numan-ci" \
+              "$(jq -r '.object.url' "$ref_file")" \
+              | jq -r '.object.sha')
+          fi
           if [ "$tagged_sha" != "$CONTRACT_SHA" ]; then
             echo "::error::Tag $CONTRACT_TAG resolves to $tagged_sha but CONTRACT_SHA=$CONTRACT_SHA."
             echo "Run scripts/bump-contract.sh in numan to coordinate the bump across all three repos."
@@ -77,6 +72,13 @@ print(sha)
             https://raw.githubusercontent.com/tonythethompson/numan/$CONTRACT_SHA/scripts/check-roadmap-drift.py \
             -o scripts/check-roadmap-drift.py
           chmod +x scripts/check-roadmap-drift.py
+      - name: Pull contract doc from pin (numan@$CONTRACT_TAG -> $CONTRACT_SHA)
+        run: |
+          mkdir -p docs/contracts
+          curl --fail-with-body --silent --show-error --location \
+            https://raw.githubusercontent.com/tonythethompson/numan/$CONTRACT_SHA/docs/contracts/roadmap-v1.md \
+            -o docs/contracts/roadmap-v1.md
+          test -s docs/contracts/roadmap-v1.md
       - name: Run drift check
         env:
           CONSOLIDATED_ROADMAP: docs/plans/consolidated-multi-repo-roadmap.md

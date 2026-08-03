@@ -108,8 +108,9 @@ or the bump is invalidated.
 ### Procedure
 
 1. **Author the change locally.** Edit
-   `docs/plans/consolidated-multi-repo-roadmap.md` so its bullets reflect
-   the new state. Sentinel rules must still pass.
+   `docs/plans/consolidated-multi-repo-roadmap.md` (and, when needed,
+   `scripts/check-roadmap-drift.py`) so bullets and sentinel rules
+   reflect the new state. Sentinel rules must still pass.
 2. **Run the bump script.**
 
    ```bash
@@ -119,6 +120,12 @@ or the bump is invalidated.
    For the inaugural v1 freeze, pass `--init -r "freeze the post-audit
    v1"` instead. After v1 exists, all changes go via
    `scripts/bump-contract.sh <N> -r "..."` for `N >= 2`.
+
+   The script commits the contract document (and any staged freeze
+   artifacts) first, re-derives `CONTENT_SHA` from that commit, creates
+   the annotated `numan-roadmap-contract/vN` tag at `CONTENT_SHA`, then
+   makes a **separate** commit for workflow-pin / README / blob-URL
+   rewrites so the tag never self-references the pin-rewrite SHA.
 
 3. **PR sequence (issued by the script, in order):**
    1. PR 1 — `numan`: update consolidated roadmap + bump sentinel
@@ -132,18 +139,20 @@ or the bump is invalidated.
 
 ### Refusing to bump
 
-`scripts/bump-contract.sh` refuses and exits 1 if any of the following
+`scripts/bump-contract.sh` refuses and exits nonzero if any of the following
 hold:
 
 * The current local copy of the consolidated roadmap fails the
-  sentinel rules (run `scripts/check-roadmap-drift.py` first).
+  sentinel rules (run `scripts/check-roadmap-drift.py` first). Exit
+  status **3** when the drift script is missing or validation fails.
 * The new contract tag already exists locally or on origin.
-* The author is not on the `numansh` GitHub org (or is not
-  recognized by `gh auth status` as a maintainer of all three repos).
+* The author is not authenticated with write access to `numan`,
+  `numan-plugins`, and `numan-registry` (checked via `gh`).
 * `BUMP_REASON` is empty.
-* A workflow yml is missing `CONTRACT_TAG` or `CONTRACT_SHA`, or the
-  bump rewrite cannot set `CONTRACT_TAG` to the new tag / `CONTRACT_SHA`
-  to the frozen content commit.
+* A workflow yml is missing `CONTRACT_TAG` or `CONTRACT_SHA`, the
+  existing `CONTRACT_TAG` does not match the previous contract tag, or
+  the bump rewrite cannot set `CONTRACT_TAG` to the new tag /
+  `CONTRACT_SHA` to the frozen content commit.
 
 ### Reverting
 

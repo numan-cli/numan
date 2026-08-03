@@ -27,21 +27,23 @@
 #
 # The script will:
 #   1. Run scripts/check-roadmap-drift.py locally — refuse to proceed if any
-#      sentinel rule fails.
-#   2. Freeze CONTENT_SHA = HEAD (roadmap + drift script must already be on
-#      the branch tip).
-#   3. Rewrite CONTRACT_TAG + CONTRACT_SHA in:
+#      sentinel rule fails (exit 3).
+#   2. Verify gh auth has write access to numan, numan-plugins, and
+#      numan-registry before any tracked-file mutation.
+#   3. Commit the contract document (and any pending freeze artifacts) first,
+#      then set CONTENT_SHA to that commit.
+#   4. Create annotated tag NEW_TAG at CONTENT_SHA (contract content only).
+#   5. In a separate commit, rewrite CONTRACT_TAG + CONTRACT_SHA in:
 #        .github/workflows/ci.yml
 #        cross-repo-mirror/numan-plugins/.github/workflows/roadmap-drift.yml
 #        cross-repo-mirror/numan-registry/.github/workflows/roadmap-drift.yml
 #        cross-repo-mirror/README.md
 #        cross-repo-mirror/*/docs/roadmap.md (blob URLs)
-#      and refresh docs/contracts/roadmap-vN.md from the v1 template.
-#   4. Commit the pin rewrite, then create annotated tag NEW_TAG at CONTENT_SHA.
-#   5. Push the numan branch (tag stays local until after the numan PR merges).
-#   6. Materialize + push sibling branches with the bumped workflow/roadmap,
+#   6. Push the numan branch (tag stays local until after the numan PR merges).
+#   7. Materialize + push sibling branches with the bumped workflow/roadmap,
 #      then open coordinated PRs via `gh pr create`.
 #
+# BUMP_DRY_RUN=1 skips every tracked-file mutation, commit, tag, push, and PR.
 # PR-MERGE GATE
 #   Merge numan first and publish the tag. Sibling CI fails closed until the
 #   tag resolves to CONTRACT_SHA; merge sibling PRs only after that.
@@ -150,17 +152,44 @@ if ! python3 "$DRIFT_SCRIPT"; then
     exit 3
 fi
 
-# --- 2. Freeze content SHA (roadmap + drift script already on tip) -------
-CONTENT_SHA="$(git rev-parse HEAD)"
-log "content SHA (freeze target) = $CONTENT_SHA"
-log "new contract TAG = $NEW_TAG"
+# --- 1b. Auth + write access before any tracked-file mutation -------------
+gh_auth_check() {
+    gh auth status >/dev/null 2>&1 || { err "gh not authenticated"; exit 5; }
+    local login
+    login="$(gh api user -q .login 2>/dev/null || true)"
+    if [ -z "$login" ]; then
+        err "cannot resolve authenticated GitHub login via gh api user"
+        exit 5
+    fi
+    local repo perm
+    for repo in "$REPO_NUMAN" "$REPO_PLUGINS" "$REPO_REGISTRY"; do
+        perm="$(gh api "repos/${repo}/collaborators/${login}/permission" -q .permission 2>/dev/null || echo none)"
+        case "$perm" in
+            admin|maintain|write) ;;
+            *)
+                err "insufficient GitHub access to ${repo} for ${login} (have '${perm}', need write/maintain/admin)"
+                exit 5
+                ;;
+        esac
+    done
+    log "gh auth ok: ${login} has write-level access to numan, numan-plugins, numan-registry"
+}
+gh_auth_check
 
 require_yml_has_pins() {
     local yml="$1"
-    grep -E '^[[:space:]]*CONTRACT_TAG:[[:space:]]*' "$yml" >/dev/null || {
+    local existing_tag
+    existing_tag="$(grep -E '^[[:space:]]*CONTRACT_TAG:[[:space:]]*' "$yml" | head -1 | awk '{print $2}')"
+    if [ -z "$existing_tag" ]; then
         err "$yml is missing CONTRACT_TAG pin; refuse"
         return 1
-    }
+    fi
+    # --init mints v1 against whatever pin is already present; later bumps
+    # must start from the previous contract tag.
+    if [ "$INIT" -eq 0 ] && [ "$existing_tag" != "$OLD_TAG" ]; then
+        err "$yml CONTRACT_TAG is '$existing_tag' but expected previous tag '$OLD_TAG'"
+        return 1
+    fi
     grep -E '^[[:space:]]*CONTRACT_SHA:[[:space:]]*[0-9a-f]{40,}' "$yml" >/dev/null || {
         err "$yml is missing CONTRACT_SHA pin; refuse"
         return 1
@@ -170,7 +199,6 @@ require_yml_has_pins "$NUMAN_CI"
 require_yml_has_pins "$PLUGINS_YML"
 require_yml_has_pins "$REGISTRY_YML"
 
-# --- 3. Rewrite pins to NEW_TAG + CONTENT_SHA ---------------------------
 rewrite_yml_pins() {
     local yml="$1"
     local tmp
@@ -212,21 +240,6 @@ PY
     fi
 }
 
-rewrite_yml_pins "$NUMAN_CI"
-rewrite_yml_pins "$PLUGINS_YML"
-rewrite_yml_pins "$REGISTRY_YML"
-
-log "rewriting CONTRACT_SHA mentions in cross-repo-mirror/README.md"
-python3 - "$MIRROR_README" "$CONTENT_SHA" <<'PY'
-import re, sys
-path, sha = sys.argv[1], sys.argv[2]
-text = open(path, encoding="utf-8").read()
-text2, n = re.subn(r"\b[0-9a-f]{40}\b", sha, text)
-if n < 1:
-    raise SystemExit(f"{path}: no 40-char SHA pins found to rewrite")
-open(path, "w", encoding="utf-8").write(text2)
-PY
-
 rewrite_roadmap_blob_urls() {
     local md="$1"
     python3 - "$md" "$CONTENT_SHA" <<'PY'
@@ -243,41 +256,66 @@ if n < 1:
 open(path, "w", encoding="utf-8").write(text2)
 PY
 }
-rewrite_roadmap_blob_urls "$PLUGINS_ROADMAP"
-rewrite_roadmap_blob_urls "$REGISTRY_ROADMAP"
 
-# --- 4. Refresh contract doc, then commit pins before tagging -----------
-if [ -f "$CONTRACT_DOC_DIR/roadmap-v${VERSION_LABEL}.md" ]; then
-    log "contract doc already exists at docs/contracts/roadmap-v${VERSION_LABEL}.md — leaving as-is"
-else
-    log "creating contract doc from v1 template"
-    sed "s/^v1$/v${VERSION_LABEL}/g; s/Roadmap Contract v1/Roadmap Contract v${VERSION_LABEL}/g" \
-        "$CONTRACT_DOC_DIR/roadmap-v1.md" \
-        > "$CONTRACT_DOC_DIR/roadmap-v${VERSION_LABEL}.md"
-fi
+rewrite_mirror_readme_sha() {
+    python3 - "$MIRROR_README" "$CONTENT_SHA" <<'PY'
+import re, sys
+path, sha = sys.argv[1], sys.argv[2]
+text = open(path, encoding="utf-8").read()
+m = re.search(r"CONTRACT_SHA[:\s=]+([0-9a-fA-F]{40})", text)
+if not m:
+    raise SystemExit(f"{path}: no CONTRACT_SHA pin found to rewrite")
+old = m.group(1)
+if old not in text:
+    raise SystemExit(f"{path}: captured CONTRACT_SHA {old} not present for replacement")
+text2 = text.replace(old, sha)
+if text2 == text:
+    raise SystemExit(f"{path}: CONTRACT_SHA replacement produced no changes")
+open(path, "w", encoding="utf-8").write(text2)
+PY
+}
 
-log "committing pin rewrite (tag will point at content SHA $CONTENT_SHA)"
+# --- 2. Commit contract content, then freeze CONTENT_SHA -----------------
+CONTRACT_DOC="$CONTRACT_DOC_DIR/roadmap-v${VERSION_LABEL}.md"
+
 if [ "$DRY_RUN" -eq 1 ]; then
-    warn "BUMP_DRY_RUN=1 set; skipping git commit/tag/push/PR"
+    warn "BUMP_DRY_RUN=1 set; skipping tracked-file mutations, commits, tags, pushes, and PRs"
+    CONTENT_SHA="$(git rev-parse HEAD)"
+    log "preview CONTENT_SHA=$CONTENT_SHA NEW_TAG=$NEW_TAG (no files rewritten)"
 else
+    if [ ! -f "$CONTRACT_DOC" ]; then
+        log "creating contract doc from v1 template"
+        sed "s/^v1$/v${VERSION_LABEL}/g; s/Roadmap Contract v1/Roadmap Contract v${VERSION_LABEL}/g" \
+            "$CONTRACT_DOC_DIR/roadmap-v1.md" \
+            > "$CONTRACT_DOC"
+    else
+        log "contract doc already exists at docs/contracts/roadmap-v${VERSION_LABEL}.md"
+    fi
+
+    # Stage freeze artifacts so CONTENT_SHA includes the contract doc (and any
+    # author edits to the consolidated roadmap / drift script already present).
     git add \
-        "$NUMAN_CI" "$PLUGINS_YML" "$REGISTRY_YML" \
-        "$MIRROR_README" "$PLUGINS_ROADMAP" "$REGISTRY_ROADMAP" \
-        "$CONTRACT_DOC_DIR/roadmap-v${VERSION_LABEL}.md"
-    git commit -m "chore: pin roadmap contract to ${NEW_TAG}
+        "$CONTRACT_DOC" \
+        "$REPO_ROOT/docs/plans/consolidated-multi-repo-roadmap.md" \
+        "$DRIFT_SCRIPT" 2>/dev/null || true
+    if ! git diff --cached --quiet; then
+        log "committing contract content before deriving CONTENT_SHA"
+        git commit -m "chore: freeze roadmap contract content for ${NEW_TAG}
 
-Freeze content at ${CONTENT_SHA}.
 Reason: ${REASON}"
-fi
+    else
+        log "no pending freeze-artifact changes; CONTENT_SHA will be current HEAD"
+    fi
+    CONTENT_SHA="$(git rev-parse HEAD)"
+    log "content SHA (freeze target) = $CONTENT_SHA"
+    log "new contract TAG = $NEW_TAG"
 
-git fetch origin --tags --prune 2>/dev/null || warn "tag fetch failed (offline?)"
+    git fetch origin --tags --prune 2>/dev/null || warn "tag fetch failed (offline?)"
+    if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
+        err "tag $NEW_TAG already exists locally — refusing to clobber"
+        exit 4
+    fi
 
-if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
-    err "tag $NEW_TAG already exists locally — refusing to clobber"
-    exit 4
-fi
-
-if [ "$DRY_RUN" -eq 0 ]; then
     log "creating annotated tag $NEW_TAG at content SHA $CONTENT_SHA (local only)"
     git tag -a "$NEW_TAG" "$CONTENT_SHA" -m "Roadmap contract v${VERSION_LABEL}.
 
@@ -290,21 +328,35 @@ See docs/contracts/roadmap-v${VERSION_LABEL}.md for what this version freezes."
     if git rev-parse "$OLD_TAG" >/dev/null 2>&1; then
         git tag "$OLD_TAG.bak" "$OLD_TAG" 2>/dev/null || true
     fi
+
+    # --- 3. Separate pin-rewrite commit (not included in NEW_TAG) --------
+    log "rewriting workflow pins to NEW_TAG + CONTENT_SHA"
+    rewrite_yml_pins "$NUMAN_CI"
+    rewrite_yml_pins "$PLUGINS_YML"
+    rewrite_yml_pins "$REGISTRY_YML"
+    log "rewriting CONTRACT_SHA mentions in cross-repo-mirror/README.md"
+    rewrite_mirror_readme_sha
+    rewrite_roadmap_blob_urls "$PLUGINS_ROADMAP"
+    rewrite_roadmap_blob_urls "$REGISTRY_ROADMAP"
+
+    log "committing pin rewrite (separate from tagged content SHA $CONTENT_SHA)"
+    git add \
+        "$NUMAN_CI" "$PLUGINS_YML" "$REGISTRY_YML" \
+        "$MIRROR_README" "$PLUGINS_ROADMAP" "$REGISTRY_ROADMAP"
+    git commit -m "chore: pin roadmap contract to ${NEW_TAG}
+
+Freeze content at ${CONTENT_SHA}.
+Reason: ${REASON}"
 fi
 
-# --- 5. Push numan branch -----------------------------------------------
-gh_auth_check() {
-    gh auth status >/dev/null 2>&1 || { err "gh not authenticated"; exit 5; }
-}
-gh_auth_check
-
+# --- 4. Push numan branch ------------------------------------------------
 if [ "$DRY_RUN" -eq 0 ]; then
     log "pushing branch $BRANCH_NAME (HEAD) to numan"
     git push origin "HEAD:refs/heads/$BRANCH_NAME"
     log "NOT pushing $NEW_TAG yet — publish with: git push origin refs/tags/$NEW_TAG after the numan PR merges"
 fi
 
-# --- 6. Materialize sibling branches, then open PRs ---------------------
+# --- 5. Materialize sibling branches, then open PRs ----------------------
 issue_pr() {
     local repo="$1" branch="$2" title="$3" body="$4"
     log "opening PR on $repo branch=$branch: $title"

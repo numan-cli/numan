@@ -87,23 +87,16 @@ jobs:
             cat "$ref_file"
             exit 1
           fi
-          tagged_sha=$(python -c "
-import json, os, sys, urllib.request
-ref = json.load(sys.stdin)
-sha = ref['object']['sha']
-if ref['object']['type'] == 'tag':
-    headers = {
-        'Accept': 'application/vnd.github+json',
-        'User-Agent': 'numan-ci',
-    }
-    token = os.environ.get('GITHUB_TOKEN', '')
-    if token:
-        headers['Authorization'] = f'Bearer {token}'
-    req = urllib.request.Request(ref['object']['url'], headers=headers)
-    tag = json.load(urllib.request.urlopen(req))
-    sha = tag['object']['sha']
-print(sha)
-" < "$ref_file")
+          object_type=$(jq -r '.object.type' "$ref_file")
+          tagged_sha=$(jq -r '.object.sha' "$ref_file")
+          if [ "$object_type" = "tag" ]; then
+            tagged_sha=$(curl --fail-with-body --silent --show-error \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "User-Agent: numan-ci" \
+              "$(jq -r '.object.url' "$ref_file")" \
+              | jq -r '.object.sha')
+          fi
           if [ "$tagged_sha" != "$CONTRACT_SHA" ]; then
             echo "::error::Tag $CONTRACT_TAG resolves to $tagged_sha but CONTRACT_SHA=$CONTRACT_SHA."
             echo "Run scripts/bump-contract.sh to coordinate the bump across all three repos."
@@ -128,13 +121,23 @@ print(sha)
             || (echo "::error::Local drift script diverges from $CONTRACT_SHA."; \
                 echo "Bump the contract before changing the drift script."; \
                 exit 1)
+      - name: Fetch contract doc from pin (numan@$CONTRACT_SHA)
+        run: |
+          curl --fail-with-body --silent --show-error --location \
+            https://raw.githubusercontent.com/tonythethompson/numan/$CONTRACT_SHA/docs/contracts/roadmap-v1.md \
+            -o /tmp/roadmap-v1.md
+          diff -u docs/contracts/roadmap-v1.md /tmp/roadmap-v1.md \
+            || (echo "::error::Local contract doc diverges from $CONTRACT_SHA."; \
+                echo "Bump the contract before changing docs/contracts/roadmap-v1.md."; \
+                exit 1)
       - name: Run drift check against consolidated roadmap
         run: python scripts/check-roadmap-drift.py
-      - name: Mirror to numan-plugins/numan-registry
+      - name: Sibling repository pointers
         run: |
-          # CI intentionally also runs against this PR's siblings when
-          # those repos pass CONSOLIDATED_ROADMAP via workflow_call; the
-          # numan job here is the canonical reference build.
+          # Sibling repos (numan-plugins, numan-registry) run their own
+          # roadmap-drift workflows against the same CONTRACT_SHA pin.
+          # This step only documents those repositories; it does not
+          # invoke a cross-repo workflow_call.
           echo "see https://github.com/tonythethompson/numan-plugins and https://github.com/tonythethompson/numan-registry for mirrors"
 
   msrv:

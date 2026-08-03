@@ -5,11 +5,11 @@ roadmap-drift guardrail started in PR 67 of `numan`. Each subdirectory
 mirrors both the local-roadmap file and the GitHub Actions workflow
 that runs `scripts/check-roadmap-drift.py` against the consolidated
 roadmap hosted in `numan@<contract-tag>` (pinned by SHA; see
-[`docs/contracts/roadmap-v1.md`](../contracts/roadmap-v1.md)).
+[`docs/contracts/roadmap-v1.md`](../docs/contracts/roadmap-v1.md)).
 
 ## What ships
 
-```
+```text
 cross-repo-mirror/
 ├── README.md                                         ← you are here
 ├── numan-plugins/
@@ -32,9 +32,13 @@ need to run it.
 
 The CI workflow in each sibling repo `curl`s the consolidated roadmap
 straight from `numan@<CONTRACT_SHA>/docs/plans/consolidated-multi-repo-roadmap.md`
-into a temp file at the start of the job, then runs the exact same
-`scripts/check-roadmap-drift.py` against that fetched copy. The contract
-SHA is recorded as `CONTRACT_SHA: 60a015fec1b25886f139d568edb1a2ff6df212f3`
+into `docs/plans/consolidated-multi-repo-roadmap.md` in the working tree
+at the start of the job, then runs the exact same
+`scripts/check-roadmap-drift.py` against that fetched copy. (Only the
+canonical `numan` `.github/workflows/ci.yml` fetch uses
+`/tmp/consolidated-roadmap.md` for a pin-diff against the local copy.)
+The contract SHA is recorded as
+`CONTRACT_SHA: 60a015fec1b25886f139d568edb1a2ff6df212f3`
 in each workflow so a force-push to the contract tag can never
 silently change the guardrail. Bumping the contract is a coordinated
 operation across all three repos — see `scripts/bump-contract.sh` in
