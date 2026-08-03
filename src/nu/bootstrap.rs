@@ -240,10 +240,12 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
         )
     })?;
     make_executable(&dest)?;
-    // Keep the legacy VERSION marker for backwards compat with tooling that
-    // greps for it, but under the versioned dir so it never shadows a sibling
-    // version's marker.
-    std::fs::write(dest_dir.join("VERSION"), version.as_bytes())?;
+    std::fs::write(dest_dir.join("VERSION"), version.as_bytes()).with_context(|| {
+        format!(
+            "Failed to write VERSION file in '{}'",
+            dest_dir.display()
+        )
+    })?;
     Ok(dest)
 }
 
