@@ -14,6 +14,12 @@
 
 use anyhow::{bail, Context, Result};
 use std::path::Path;
+use thiserror::Error;
+
+/// Errors returned by the legacy-install migration API.
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct LegacyMigrationError(#[from] anyhow::Error);
 
 use super::version_manager::{
     legacy_managed_binary_with_bin, normalize_version, nu_binary_name, version_binary,
@@ -94,8 +100,11 @@ pub fn detect_legacy_version(binary: &Path) -> Result<String> {
 /// detect its version and move it to `<root>/tools/nushell/<version>/nu`.
 ///
 /// Returns `Ok(true)` if migration occurred, `Ok(false)` otherwise.
-pub fn migrate_legacy_install(root: &Path) -> Result<bool> {
+pub fn migrate_legacy_install(
+    root: &Path,
+) -> std::result::Result<bool, LegacyMigrationError> {
     migrate_legacy_install_with_detector(root, &detect_legacy_version, None)
+        .map_err(LegacyMigrationError::from)
 }
 
 /// Same as [`migrate_legacy_install`] but accepts an injected version-detection
@@ -107,6 +116,15 @@ pub fn migrate_legacy_install(root: &Path) -> Result<bool> {
 /// bug where the legacy binary move fails between devices, leaving the
 /// empty versioned subdir on disk. Production callers pass `None`.
 pub fn migrate_legacy_install_with_detector(
+    root: &Path,
+    detect: &LegacyVersionDetector,
+    post_create: Option<&LegacyPostCreateHook>,
+) -> std::result::Result<bool, LegacyMigrationError> {
+    migrate_legacy_install_with_detector_inner(root, detect, post_create)
+        .map_err(LegacyMigrationError::from)
+}
+
+fn migrate_legacy_install_with_detector_inner(
     root: &Path,
     detect: &LegacyVersionDetector,
     post_create: Option<&LegacyPostCreateHook>,

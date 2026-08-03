@@ -31,6 +31,12 @@
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+/// Errors returned by the migration journal API.
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct MigrationJournalError(#[from] anyhow::Error);
 use std::path::{Path, PathBuf};
 
 use crate::nu::version_manager::{
@@ -207,7 +213,11 @@ fn versioned_binary_present(root: &Path, version: &str) -> bool {
 ///
 /// Used by `migrate_legacy_install_with_detector` (self-heal), `numan use`
 /// (boot reconciliation), and `numan doctor --fix` (Auto-tier repair).
-pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
+pub fn reconcile(root: &Path) -> std::result::Result<Option<PendingMigration>, MigrationJournalError> {
+    reconcile_inner(root).map_err(MigrationJournalError::from)
+}
+
+fn reconcile_inner(root: &Path) -> Result<Option<PendingMigration>> {
     let Some(journal) = PendingMigration::load(root)? else {
         return Ok(None);
     };
