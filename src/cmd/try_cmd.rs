@@ -20,11 +20,6 @@ use crate::util::hints::{self, CMD_REGISTRY_SYNC};
 /// a matching managed Nu version or searching for another package with `numan search`.
 #[derive(Parser, Debug)]
 pub struct TryArgs {
-    /// Skip confirmation prompts. Does NOT consent to a managed-Nu install or
-    /// version switch via `nu_pin_offer`; that path is hard-gated against
-    /// silent switching even with `--yes`.
-    #[arg(long)]
-    pub yes: bool,
 
     /// Install only; do not activate
     #[arg(long)]
@@ -448,8 +443,14 @@ mod tests {
             available_versions: vec!["1.0.0".to_string()],
         };
         let root = tempfile::tempdir().unwrap();
-        let accepted =
-            nu_pin_offer::offer_managed_nu_pin(root.path(), "0.114.1", &diagnosis).unwrap();
+        // Explicitly pass is_tty: false to avoid depending on process-global stdin state.
+        let accepted = nu_pin_offer::offer_managed_nu_pin_with_tty(
+            root.path(),
+            "0.114.1",
+            &diagnosis,
+            Some(false),
+        )
+        .unwrap();
         assert!(
             !accepted,
             "non-interactive mode must not auto-install managed Nu"

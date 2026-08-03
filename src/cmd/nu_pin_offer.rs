@@ -19,6 +19,16 @@ pub fn offer_managed_nu_pin(
     current_nu: &str,
     diagnosis: &PackageIncompatibility,
 ) -> Result<bool> {
+    offer_managed_nu_pin_with_tty(root, current_nu, diagnosis, None)
+}
+
+/// Same as [`offer_managed_nu_pin`] but allows injecting TTY state for testing.
+pub fn offer_managed_nu_pin_with_tty(
+    root: &Path,
+    current_nu: &str,
+    diagnosis: &PackageIncompatibility,
+    is_tty: Option<bool>,
+) -> Result<bool> {
     let Some(pin) = diagnosis.suggested_pin.as_deref() else {
         return Ok(false);
     };
@@ -35,7 +45,8 @@ pub fn offer_managed_nu_pin(
 
     let setup_cmd = hints::setup_nu_version(pin);
 
-    if !std::io::stdin().is_terminal() {
+    let is_terminal = is_tty.unwrap_or_else(|| std::io::stdin().is_terminal());
+    if !is_terminal {
         println!("To switch Nu, run:");
         println!("  {setup_cmd} --yes --force");
         println!("  {CMD_INIT_REFRESH}");

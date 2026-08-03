@@ -54,7 +54,7 @@ src/
     registry.rs        — Registry management subcommands
     activate.rs        — Plugin + module activation (Phase 3 & 4); public entry: execute_with_candidate_runner
     init.rs            — `numan init [--refresh]`: Nu probe, paths cache, auto-configures official registry
-    doctor.rs          — `numan doctor [--scan]`: health checks + safe repairs (or report-only scan) (Phase 7.2; spec: docs/numan-doctor.md)
+    doctor.rs          — `numan doctor [--scan]`: health checks + safe repairs by default (or report-only with `--scan`) (Phase 7.2; spec: docs/numan-doctor.md)
     snapshot.rs        — `numan snapshot list|inspect|delete|rollback` (Phase 5.3)
     deactivate.rs      — Plugin + module deactivation: journaled plugin unregister (`execute_with_unregistrar`); module full/partial (Phase 4 / Issue #22 PR2)
     plugin_lifecycle.rs — Activate/deactivate-owned lifecycle boundary exposed to opt-in update orchestration (Issue #22 PR3)
@@ -64,7 +64,7 @@ src/
     nupm.rs            — `numan nupm status|inspect|import|diff`: nupm discovery + import + drift (Phase 6.1–6.3)
     completions.rs     — `numan completions <shell>`: bash/fish/zsh/powershell/nushell scripts (Phase 7.3)
     setup.rs           — `numan setup nu [VERSION]|remove|path|use <path>` + `setup loader`: Nushell bootstrap + nushell-loader install
-    try_cmd.rs         — `numan try [--yes] [--no-activate]`: curated starter install + activate for current Nu
+    try_cmd.rs         — `numan try [--no-activate]`: curated starter install + activate for current Nu
     use_cmd.rs         — `numan use <version>|latest|list`: activates a previously installed managed Nu version (no auto-download); writes the active-version marker after a PreMutation snapshot under the root mutation lock
     nu_pin_offer.rs    — Shared TTY offer to `setup nu <version>` + `init --refresh` on Nu mismatch
   install/

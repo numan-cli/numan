@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Args;
 use console::style;
 use serde::Serialize;
@@ -35,6 +35,7 @@ use crate::util::hints::{
     ACTIVE_PLUGIN_MUTATION_GATED_FIX, CMD_ACTIVATE, CMD_DEACTIVATE, CMD_INIT, CMD_INIT_REFRESH,
     CMD_REGISTRY_SYNC, CMD_SETUP_NU,
 };
+use crate::util::stdio_redirect::StdoutToStderr;
 
 const SCHEMA_VERSION: u32 = 1;
 const LAYOUT_DIRS: &[&str] = &["nu_state", "state", "packages", "registries"];
@@ -130,6 +131,9 @@ pub struct DoctorOptions {
     pub discover_off_path: Option<fn() -> Option<PathBuf>>,
     /// Override Nu `--version` probing (tests inject a fixed version string).
     pub nu_version_probe: Option<fn(&Path) -> Result<String>>,
+    /// Override confirm-tier gating (tests inject `|_| true` to exercise repairs
+    /// under non-TTY CI; production uses [`confirm_repairs`]).
+    pub confirm_repairs: Option<fn(&DoctorArgs) -> bool>,
 }
 
 pub fn execute(args: &DoctorArgs, root: &Path) -> Result<i32> {
@@ -982,8 +986,10 @@ fn count_nupm_name_overlap(
 }
 
 fn confirm_repairs(_args: &DoctorArgs) -> bool {
-    // Always proceed without prompting (UX improvement: reduce prompts).
-    true
+    // Confirm-tier repairs require TTY for destructive actions.
+    // Non-TTY sessions will skip confirm-tier repairs unless the user
+    // explicitly runs doctor in an interactive session.
+    std::io::stdin().is_terminal()
 }
 
 fn apply_repairs(
@@ -995,6 +1001,18 @@ fn apply_repairs(
     let needs_lock = findings.iter().any(|f| {
         matches!(f.repair, RepairTier::Auto | RepairTier::Confirm) && f.severity != Severity::Ok
     });
+
+    // Nested repair handlers may println!; redirect only when those handlers
+    // are about to run so healthy --json scans avoid mutating process stdio.
+    let _stdout_guard = if args.json && needs_lock {
+        Some(
+            StdoutToStderr::redirect()
+                .context("Failed to redirect stdout while emitting doctor JSON")?,
+        )
+    } else {
+        None
+    };
+
     let mut lock = if needs_lock {
         Some(acquire_mutation_lock(root)?)
     } else {
@@ -1002,7 +1020,10 @@ fn apply_repairs(
     };
 
     let mut records = Vec::new();
-    let confirm = confirm_repairs(args);
+    let confirm = match options.confirm_repairs {
+        Some(gate) => gate(args),
+        None => confirm_repairs(args),
+    };
 
     for dir in LAYOUT_DIRS {
         let id = format!("layout.{dir}");
@@ -1074,7 +1095,9 @@ fn apply_repairs(
             });
         } else if let Some(off_path) = resolve_off_path(options) {
             let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
-            match setup_fn(&NuSetupArgs::use_existing(off_path, true), root) {
+            // Pass yes: false to let setup code handle TTY checking and confirmation.
+            // If there's a managed install, setup will prompt the user before removal.
+            match setup_fn(&NuSetupArgs::use_existing(off_path, false), root) {
                 Ok(()) => records.push(RepairRecord {
                     id,
                     status: RepairStatus::Applied,
@@ -1114,7 +1137,8 @@ fn apply_repairs(
             });
         } else {
             let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
-            match setup_fn(&NuSetupArgs::install(None, false, false, true), root) {
+            // Pass yes: false to let setup code handle TTY checking and confirmation.
+            match setup_fn(&NuSetupArgs::install(None, false, false, false), root) {
                 Ok(()) => records.push(RepairRecord {
                     id,
                     status: RepairStatus::Applied,
@@ -1463,6 +1487,13 @@ mod tests {
     /// Serializes tests that mutate the process-wide `PATH` env var.
     static TEST_PATH_GUARD: Mutex<()> = Mutex::new(());
 
+    /// Off-PATH discovery seam for unit tests (`discover_off_path` is an fn pointer).
+    static TEST_OFF_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+    fn discover_off_path_test() -> Option<PathBuf> {
+        TEST_OFF_PATH.lock().ok()?.clone()
+    }
+
     /// RAII guard that restores the original PATH on drop, ensuring restoration
     /// during both normal return and panic unwinding.
     struct PathRestoreGuard {
@@ -1578,6 +1609,7 @@ mod tests {
                 nu_setup_repair: None,
                 discover_off_path: None,
                 nu_version_probe: Some(probe_fixed_version),
+                confirm_repairs: Some(confirm_repairs_always),
             },
         )
         .unwrap();
@@ -1621,7 +1653,7 @@ mod tests {
             assert_eq!(none.repair, RepairTier::Manual);
             return;
         }
-        assert_eq!(none.fix.as_deref(), Some(hints::CMD_DOCTOR_FIX));
+        assert_eq!(none.fix.as_deref(), Some(hints::CMD_DOCTOR));
         assert_eq!(none.repair, RepairTier::Auto);
 
         execute_with_options(
@@ -1635,6 +1667,7 @@ mod tests {
                 nu_setup_repair: None,
                 discover_off_path: None,
                 nu_version_probe: Some(probe_fixed_version),
+                confirm_repairs: Some(confirm_repairs_always),
             },
         )
         .unwrap();
@@ -1924,11 +1957,21 @@ mod tests {
         anyhow::bail!("simulated version probe failure")
     }
 
+    fn confirm_repairs_always(_args: &DoctorArgs) -> bool {
+        true
+    }
+
+    fn confirm_repairs_never(_args: &DoctorArgs) -> bool {
+        false
+    }
+
     /// Skip network and never exec a real `nu` during doctor unit tests.
+    /// Force confirm-tier repairs so non-TTY unit tests can exercise them.
     fn test_doctor_options() -> DoctorOptions {
         DoctorOptions {
             skip_network: true,
             nu_version_probe: Some(probe_fixed_version),
+            confirm_repairs: Some(confirm_repairs_always),
             ..DoctorOptions::default()
         }
     }
@@ -2182,5 +2225,61 @@ mod tests {
         assert!(json.contains("nu.path.version"));
         assert!(json.contains("nu.managed.version"));
         assert!(json.contains("registry.trust_root"));
+    }
+
+    fn test_noop_setup_repair(_args: &NuSetupArgs, _root: &Path) -> Result<()> {
+        // No-op for testing: should not be called when repair is skipped.
+        panic!("setup repair should not be called when confirm_repairs returns false");
+    }
+
+    #[test]
+    fn doctor_found_off_path_repair_preserves_managed_install_when_not_confirmed() {
+        // Regression test: found_off_path repair should not destroy an existing
+        // managed installation when confirm-tier repairs are skipped.
+        let _guard = TEST_PATH_GUARD.lock().unwrap();
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Set up a managed Nu installation.
+        let managed_binary = ensure_fake_managed_nu(root);
+        assert!(managed_binary.exists(), "managed binary should exist");
+
+        // Set up an off-path Nu binary for the discover seam (fn pointer, no captures).
+        let off_path_dir = dir.path().join("external_nu");
+        std::fs::create_dir_all(&off_path_dir).unwrap();
+        let off_path_binary = off_path_dir.join("nu");
+        std::fs::write(&off_path_binary, b"external nu").unwrap();
+        *TEST_OFF_PATH.lock().unwrap() = Some(off_path_binary);
+
+        // Force the confirm-tier gate closed so this test is deterministic even
+        // when cargo test has a TTY attached locally.
+        let args = DoctorArgs {
+            scan: false,
+            json: false,
+            nupm_home: None,
+        };
+
+        let options = DoctorOptions {
+            skip_network: true,
+            nu_version_probe: Some(probe_fixed_version),
+            discover_off_path: Some(discover_off_path_test),
+            nu_setup_repair: Some(test_noop_setup_repair),
+            confirm_repairs: Some(confirm_repairs_never),
+            ..DoctorOptions::default()
+        };
+
+        // confirm_repairs_never skips confirm-tier; test_noop_setup_repair must
+        // not panic.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_with_options(&args, root, options).ok();
+        }));
+        *TEST_OFF_PATH.lock().unwrap() = None;
+        result.expect("doctor repair must not call setup when confirm_repairs is false");
+
+        // Verify the managed installation was NOT removed.
+        assert!(
+            managed_binary.exists(),
+            "managed installation should be preserved when confirm-tier repair is skipped"
+        );
     }
 }

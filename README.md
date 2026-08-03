@@ -270,7 +270,7 @@ See [docs/snapshots-and-rollback.md](docs/snapshots-and-rollback.md) for scope, 
 
 ```bash
 numan doctor                      # diagnose and apply safe automated repairs
-numan doctor --scan                # report-only diagnosis
+numan doctor --scan               # report-only diagnosis
 ```
 
 ---
@@ -308,7 +308,7 @@ Global flag: `--root <path>` — override the Numan root directory (all commands
 | Command | Description |
 |---------|-------------|
 | `numan init [--refresh]` | Probe Nu and cache paths for activation |
-| `numan try [--yes] [--no-activate]` | Install and activate a curated starter package for your Nu + platform (prefers Nu 0.114 starters; suggests managed Nu pin or search if no compatible starter) |
+| `numan try [--no-activate]` | Install and activate a curated starter package for your Nu + platform (prefers Nu 0.114 starters; suggests managed Nu pin or search if no compatible starter) |
 | `numan search <query>` | Search registry by name, description, or tags |
 | `numan info <owner/name>` | Show package metadata and available versions |
 | `numan install <owner/name[@version]>` | Download, verify, extract, and lock |
@@ -336,15 +336,15 @@ Global flag: `--root <path>` — override the Numan root directory (all commands
 | `numan nupm import --manifest file.toml` | Batch import from manifest |
 | `numan nupm diff <owner/name>` | Compare imported payload vs nupm source |
 | `numan completions <shell>` | Generate bash, fish, zsh, powershell, or nushell completions |
-| `numan doctor [--scan] [--json]` | Diagnose root health; repairs by default |
+| `numan doctor [--scan] [--json]` | Diagnose root health and repair (use `--scan` for report-only) |
 
 ### Common flags (by command)
 
 | Command | Flags |
 |---------|-------|
 | `install` | `--force` reinstall; `-v` / `--verbose` |
-| `activate` | `--yes` skip prompt; `--verbose`; `--list` status only; `--check` integrity only |
-| `deactivate` | `--yes` skip prompt; `--verbose` |
+| `activate` | `--verbose`; `--list` status only; `--check` integrity only |
+| `deactivate` | `--verbose` |
 | `update` | `--check` report only; `-v` / `--verbose` |
 | `remove` | `--force` remove despite active activation |
 | `gc` | `--dry-run` preview only |
@@ -352,7 +352,7 @@ Global flag: `--root <path>` — override the Numan root directory (all commands
 | `nupm status` | `--nupm-home <path>` |
 | `nupm inspect` | `--all` scan home; `--nupm-home <path>`; `--exit-on-ineligible` fail on ineligible |
 | `nupm import` | `--as owner/name` (single import); `--manifest <file>` (batch); `--nupm-home <path>`; `--yes` skip consent |
-| `doctor` | `--fix` apply safe repairs; `--yes` skip confirm tier; `--json` machine output; `--nupm-home <path>` |
+| `doctor` | `--scan` report-only; `--json` machine output; `--nupm-home <path>` |
 | `setup nu` | `--force` re-download; `--skip-path` don't update PATH; `--yes` skip prompt |
 
 Run `numan <command> --help` for full flag documentation.
