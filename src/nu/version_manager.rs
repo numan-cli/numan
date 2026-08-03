@@ -45,9 +45,7 @@ pub enum VersionManagerError {
     },
     #[error("Invalid Nu version '{version}'; expected X.Y.Z")]
     InvalidVersion { version: String },
-    #[error(
-        "Refusing to persist active-version marker with `..` in binary path '{path}'          (path-traversal segments would let a tampered marker escape the managed tree)."
-    )]
+    #[error("Refusing to persist active-version marker with `..` in binary path '{path}' (path traversal would let a tampered marker escape the managed tree).")]
     PathTraversal { path: String },
     #[error("Failed to read Nu versions directory '{path}'")]
     ReadVersionsDir {
