@@ -291,9 +291,24 @@ fn detect_nu(root: &Path) -> Result<NuVersion> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::{Cli, Commands};
     use crate::core::package::*;
     use crate::core::resolve::{Incompatibility, PackageIncompatibility};
+    use clap::Parser;
     use std::collections::{BTreeMap, HashMap};
+
+    #[test]
+    fn try_cli_rejects_obsolete_yes_flag() {
+        assert!(
+            Cli::try_parse_from(["numan", "try", "--yes"]).is_err(),
+            "numan try --yes must be rejected"
+        );
+        let cli = Cli::try_parse_from(["numan", "try", "--no-activate"]).unwrap();
+        match cli.command {
+            Commands::Try(args) => assert!(args.no_activate),
+            _ => panic!("expected Try command"),
+        }
+    }
 
     fn pkg(id: &str, constraint: &str, plugin: bool) -> Package {
         let (owner, name) = id.split_once('/').unwrap();
@@ -443,12 +458,12 @@ mod tests {
             available_versions: vec!["1.0.0".to_string()],
         };
         let root = tempfile::tempdir().unwrap();
-        // Explicitly pass is_tty: false to avoid depending on process-global stdin state.
-        let accepted = nu_pin_offer::offer_managed_nu_pin_with_tty(
+        let accepted = nu_pin_offer::offer_managed_nu_pin_with_interaction(
             root.path(),
             "0.114.1",
             &diagnosis,
-            Some(false),
+            false,
+            || panic!("non-interactive path must not read stdin"),
         )
         .unwrap();
         assert!(

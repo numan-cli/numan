@@ -18,6 +18,7 @@ use crate::nu::bootstrap::managed_nu_binary;
 use crate::nu::paths::{
     discover_nu_off_path, find_nu_executable_with_root, find_nu_on_path, NuPaths,
 };
+use crate::nu::version_manager;
 use crate::nupm_compat::NupmCompatibility;
 use crate::nupm_compat::{
     count_drifted_imports, resolve_nupm_home, scan_nupm_home, NupmHomeResolution,
@@ -29,6 +30,7 @@ use crate::state::lifecycle_journal::PendingLifecycle;
 use crate::state::lockfile::Lockfile;
 use crate::state::nupm_import::NupmImportsFile;
 use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
+use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::fs_safety::{acquire_mutation_lock, assert_managed_file_owned};
 use crate::util::hints::{
     self, active_plugin_mutation_gated_doctor_message, registry_none_fix, setup_nu_use_existing,
@@ -131,9 +133,6 @@ pub struct DoctorOptions {
     pub discover_off_path: Option<fn() -> Option<PathBuf>>,
     /// Override Nu `--version` probing (tests inject a fixed version string).
     pub nu_version_probe: Option<fn(&Path) -> Result<String>>,
-    /// Override confirm-tier gating (tests inject `|_| true` to exercise repairs
-    /// under non-TTY CI; production uses [`confirm_repairs`]).
-    pub confirm_repairs: Option<fn(&DoctorArgs) -> bool>,
 }
 
 pub fn execute(args: &DoctorArgs, root: &Path) -> Result<i32> {
@@ -195,6 +194,7 @@ pub fn run_checks_with_options(
     let mut findings = Vec::new();
 
     check_root_layout(root, &mut findings);
+    check_active_version_marker(root, &mut findings);
     let nu_paths = check_nu_paths(root, options, &mut findings);
     check_nu_environments(root, options, &mut findings);
     check_journals(root, nu_paths.as_ref(), &mut findings);
@@ -321,6 +321,37 @@ fn nu_is_available(root: &Path) -> bool {
     false
 }
 
+/// Detect a present-but-unreadable `nu_state/active-version.json`.
+///
+/// `find_nu_executable_with_root` treats marker read errors as soft misses and
+/// falls through to PATH. Doctor surfaces the broken marker so repair can clear
+/// it instead of leaving resolution silently degraded.
+fn check_active_version_marker(root: &Path, findings: &mut Vec<Finding>) {
+    match version_manager::read_active_version(root) {
+        Ok(None) => findings.push(finding(
+            "nu.active_version.malformed",
+            Severity::Ok,
+            "No active-version marker",
+            None,
+            RepairTier::None,
+        )),
+        Ok(Some(active)) => findings.push(finding(
+            "nu.active_version.malformed",
+            Severity::Ok,
+            format!("Active Nu version marker: {}", active.version),
+            None,
+            RepairTier::None,
+        )),
+        Err(e) => findings.push(finding(
+            "nu.active_version.malformed",
+            Severity::Error,
+            e.to_string(),
+            Some("numan doctor"),
+            RepairTier::Auto,
+        )),
+    }
+}
+
 fn check_nu_paths(
     root: &Path,
     options: &DoctorOptions,
@@ -350,7 +381,7 @@ fn check_nu_paths(
                 Severity::Error,
                 "Nu not found on PATH or in the Numan tools directory.",
                 Some(CMD_SETUP_NU),
-                RepairTier::Confirm,
+                RepairTier::Manual,
             ));
         }
     } else {
@@ -985,13 +1016,6 @@ fn count_nupm_name_overlap(
     Ok(count)
 }
 
-fn confirm_repairs(_args: &DoctorArgs) -> bool {
-    // Confirm-tier repairs require TTY for destructive actions.
-    // Non-TTY sessions will skip confirm-tier repairs unless the user
-    // explicitly runs doctor in an interactive session.
-    std::io::stdin().is_terminal()
-}
-
 fn apply_repairs(
     args: &DoctorArgs,
     root: &Path,
@@ -1020,10 +1044,30 @@ fn apply_repairs(
     };
 
     let mut records = Vec::new();
-    let confirm = match options.confirm_repairs {
-        Some(gate) => gate(args),
-        None => confirm_repairs(args),
-    };
+    // Snapshot failure must not block independent layout/config repairs.
+    // Nested mutations that rely on a PreMutation baseline are skipped instead.
+    let mut snapshot_ok = true;
+    if needs_lock {
+        if let Err(e) = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Doctor,
+            None,
+            None,
+        )
+        .context("Failed to create doctor pre-mutation snapshot")
+        {
+            snapshot_ok = false;
+            records.push(RepairRecord {
+                id: "snapshot.pre_mutation".to_string(),
+                status: RepairStatus::Failed,
+                reason: Some(format!("{e:#}")),
+            });
+            eprintln!(
+                "warning: doctor PreMutation snapshot failed; applying independent layout/config repairs only: {e:#}"
+            );
+        }
+    }
 
     for dir in LAYOUT_DIRS {
         let id = format!("layout.{dir}");
@@ -1043,6 +1087,30 @@ fn apply_repairs(
                     reason: Some(e.to_string()),
                 }),
             }
+        }
+    }
+
+    if findings
+        .iter()
+        .any(|f| f.id == "nu.active_version.malformed" && f.severity == Severity::Error)
+    {
+        let id = "nu.active_version.malformed".to_string();
+        match version_manager::clear_active_version(root) {
+            Ok(true) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Applied,
+                reason: None,
+            }),
+            Ok(false) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Skipped,
+                reason: Some("marker_already_absent".to_string()),
+            }),
+            Err(e) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Failed,
+                reason: Some(e.to_string()),
+            }),
         }
     }
 
@@ -1087,16 +1155,16 @@ fn apply_repairs(
         .any(|f| f.id == "nu.binary.found_off_path" && f.severity == Severity::Warn)
     {
         let id = "nu.binary.found_off_path".to_string();
-        if !confirm {
+        if !snapshot_ok {
             records.push(RepairRecord {
                 id,
                 status: RepairStatus::Skipped,
-                reason: Some("not_confirmed".to_string()),
+                reason: Some("snapshot_unavailable".to_string()),
             });
         } else if let Some(off_path) = resolve_off_path(options) {
             let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
-            // Pass yes: false to let setup code handle TTY checking and confirmation.
-            // If there's a managed install, setup will prompt the user before removal.
+            // Never pass `--yes` here: `setup nu use` may wipe a managed install
+            // and that path is fail-closed without explicit consent / TTY.
             match setup_fn(&NuSetupArgs::use_existing(off_path, false), root) {
                 Ok(()) => records.push(RepairRecord {
                     id,
@@ -1122,23 +1190,31 @@ fn apply_repairs(
         .iter()
         .any(|f| f.id == "nu.binary.missing_on_path" && f.severity == Severity::Error)
     {
+        // Never auto-download managed Nu from doctor. Print the existing fix
+        // hint; the user opts in explicitly via `numan setup nu`.
         let id = "nu.binary.missing_on_path".to_string();
-        if !confirm {
+        eprintln!("  → Fix: {CMD_SETUP_NU}");
+        records.push(RepairRecord {
+            id,
+            status: RepairStatus::Skipped,
+            reason: Some("requires_explicit_setup_nu".to_string()),
+        });
+    }
+
+    if findings
+        .iter()
+        .any(|f| f.id == "nu_paths.missing" && f.severity == Severity::Error)
+    {
+        let id = "nu_paths.missing".to_string();
+        if !snapshot_ok {
             records.push(RepairRecord {
                 id,
                 status: RepairStatus::Skipped,
-                reason: Some("not_confirmed".to_string()),
-            });
-        } else if options.skip_network {
-            records.push(RepairRecord {
-                id,
-                status: RepairStatus::Skipped,
-                reason: Some("skip_network".to_string()),
+                reason: Some("snapshot_unavailable".to_string()),
             });
         } else {
-            let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
-            // Pass yes: false to let setup code handle TTY checking and confirmation.
-            match setup_fn(&NuSetupArgs::install(None, false, false, false), root) {
+            let init_fn = options.init_repair.unwrap_or(init_execute);
+            match init_fn(&InitArgs { refresh: false }, root) {
                 Ok(()) => records.push(RepairRecord {
                     id,
                     status: RepairStatus::Applied,
@@ -1153,41 +1229,29 @@ fn apply_repairs(
         }
     }
 
-    if findings
-        .iter()
-        .any(|f| f.id == "nu_paths.missing" && f.severity == Severity::Error)
-    {
-        let id = "nu_paths.missing".to_string();
-        let init_fn = options.init_repair.unwrap_or(init_execute);
-        match init_fn(&InitArgs { refresh: false }, root) {
-            Ok(()) => records.push(RepairRecord {
-                id,
-                status: RepairStatus::Applied,
-                reason: None,
-            }),
-            Err(e) => records.push(RepairRecord {
-                id,
-                status: RepairStatus::Failed,
-                reason: Some(e.to_string()),
-            }),
-        }
-    }
-
     if findings.iter().any(|f| {
         f.id == "registry.index_missing" && f.severity == Severity::Info && !options.skip_network
     }) {
         let id = "registry.index_missing".to_string();
-        match registry::execute(RegistryCommands::Sync, root) {
-            Ok(()) => records.push(RepairRecord {
+        if !snapshot_ok {
+            records.push(RepairRecord {
                 id,
-                status: RepairStatus::Applied,
-                reason: None,
-            }),
-            Err(e) => records.push(RepairRecord {
-                id,
-                status: RepairStatus::Failed,
-                reason: Some(e.to_string()),
-            }),
+                status: RepairStatus::Skipped,
+                reason: Some("snapshot_unavailable".to_string()),
+            });
+        } else {
+            match registry::execute(RegistryCommands::Sync, root) {
+                Ok(()) => records.push(RepairRecord {
+                    id,
+                    status: RepairStatus::Applied,
+                    reason: None,
+                }),
+                Err(e) => records.push(RepairRecord {
+                    id,
+                    status: RepairStatus::Failed,
+                    reason: Some(e.to_string()),
+                }),
+            }
         }
     } else if findings.iter().any(|f| f.id == "registry.index_missing") && options.skip_network {
         records.push(RepairRecord {
@@ -1209,11 +1273,11 @@ fn apply_repairs(
 
     if needs_refresh {
         let id = "nu_paths.refresh".to_string();
-        if !confirm {
+        if !snapshot_ok {
             records.push(RepairRecord {
                 id,
                 status: RepairStatus::Skipped,
-                reason: Some("not_confirmed".to_string()),
+                reason: Some("snapshot_unavailable".to_string()),
             });
         } else {
             let init_fn = options.init_repair.unwrap_or(init_execute);
@@ -1248,11 +1312,11 @@ fn apply_repairs(
 
     if needs_activate {
         let id = "activation.reconcile".to_string();
-        if !confirm {
+        if !snapshot_ok {
             records.push(RepairRecord {
                 id,
                 status: RepairStatus::Skipped,
-                reason: Some("not_confirmed".to_string()),
+                reason: Some("snapshot_unavailable".to_string()),
             });
         } else {
             let activate_args = ActivateArgs {
@@ -1288,11 +1352,11 @@ fn apply_repairs(
 
     if needs_deactivate {
         let id = "plugin_deactivate.reconcile".to_string();
-        if !confirm {
+        if !snapshot_ok {
             records.push(RepairRecord {
                 id,
                 status: RepairStatus::Skipped,
-                reason: Some("not_confirmed".to_string()),
+                reason: Some("snapshot_unavailable".to_string()),
             });
         } else {
             let journal_packages = PendingPluginDeactivate::load(root)?
@@ -1365,6 +1429,7 @@ fn print_report(args: &DoctorArgs, root: &Path, report: &DoctorReport) -> Result
                 "nu.binary.found_off_path",
                 "nu.path.version",
                 "nu.managed.version",
+                "nu.active_version.malformed",
                 "nu_paths.missing",
                 "nu_paths.drift",
                 "nu_paths.vendor_drift",
@@ -1487,13 +1552,6 @@ mod tests {
     /// Serializes tests that mutate the process-wide `PATH` env var.
     static TEST_PATH_GUARD: Mutex<()> = Mutex::new(());
 
-    /// Off-PATH discovery seam for unit tests (`discover_off_path` is an fn pointer).
-    static TEST_OFF_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
-
-    fn discover_off_path_test() -> Option<PathBuf> {
-        TEST_OFF_PATH.lock().ok()?.clone()
-    }
-
     /// RAII guard that restores the original PATH on drop, ensuring restoration
     /// during both normal return and panic unwinding.
     struct PathRestoreGuard {
@@ -1609,7 +1667,6 @@ mod tests {
                 nu_setup_repair: None,
                 discover_off_path: None,
                 nu_version_probe: Some(probe_fixed_version),
-                confirm_repairs: Some(confirm_repairs_always),
             },
         )
         .unwrap();
@@ -1653,7 +1710,7 @@ mod tests {
             assert_eq!(none.repair, RepairTier::Manual);
             return;
         }
-        assert_eq!(none.fix.as_deref(), Some(hints::CMD_DOCTOR));
+        assert_eq!(none.fix.as_deref(), Some(hints::CMD_DOCTOR_FIX));
         assert_eq!(none.repair, RepairTier::Auto);
 
         execute_with_options(
@@ -1667,7 +1724,6 @@ mod tests {
                 nu_setup_repair: None,
                 discover_off_path: None,
                 nu_version_probe: Some(probe_fixed_version),
-                confirm_repairs: Some(confirm_repairs_always),
             },
         )
         .unwrap();
@@ -1957,21 +2013,11 @@ mod tests {
         anyhow::bail!("simulated version probe failure")
     }
 
-    fn confirm_repairs_always(_args: &DoctorArgs) -> bool {
-        true
-    }
-
-    fn confirm_repairs_never(_args: &DoctorArgs) -> bool {
-        false
-    }
-
     /// Skip network and never exec a real `nu` during doctor unit tests.
-    /// Force confirm-tier repairs so non-TTY unit tests can exercise them.
     fn test_doctor_options() -> DoctorOptions {
         DoctorOptions {
             skip_network: true,
             nu_version_probe: Some(probe_fixed_version),
-            confirm_repairs: Some(confirm_repairs_always),
             ..DoctorOptions::default()
         }
     }
@@ -2225,61 +2271,5 @@ mod tests {
         assert!(json.contains("nu.path.version"));
         assert!(json.contains("nu.managed.version"));
         assert!(json.contains("registry.trust_root"));
-    }
-
-    fn test_noop_setup_repair(_args: &NuSetupArgs, _root: &Path) -> Result<()> {
-        // No-op for testing: should not be called when repair is skipped.
-        panic!("setup repair should not be called when confirm_repairs returns false");
-    }
-
-    #[test]
-    fn doctor_found_off_path_repair_preserves_managed_install_when_not_confirmed() {
-        // Regression test: found_off_path repair should not destroy an existing
-        // managed installation when confirm-tier repairs are skipped.
-        let _guard = TEST_PATH_GUARD.lock().unwrap();
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
-
-        // Set up a managed Nu installation.
-        let managed_binary = ensure_fake_managed_nu(root);
-        assert!(managed_binary.exists(), "managed binary should exist");
-
-        // Set up an off-path Nu binary for the discover seam (fn pointer, no captures).
-        let off_path_dir = dir.path().join("external_nu");
-        std::fs::create_dir_all(&off_path_dir).unwrap();
-        let off_path_binary = off_path_dir.join("nu");
-        std::fs::write(&off_path_binary, b"external nu").unwrap();
-        *TEST_OFF_PATH.lock().unwrap() = Some(off_path_binary);
-
-        // Force the confirm-tier gate closed so this test is deterministic even
-        // when cargo test has a TTY attached locally.
-        let args = DoctorArgs {
-            scan: false,
-            json: false,
-            nupm_home: None,
-        };
-
-        let options = DoctorOptions {
-            skip_network: true,
-            nu_version_probe: Some(probe_fixed_version),
-            discover_off_path: Some(discover_off_path_test),
-            nu_setup_repair: Some(test_noop_setup_repair),
-            confirm_repairs: Some(confirm_repairs_never),
-            ..DoctorOptions::default()
-        };
-
-        // confirm_repairs_never skips confirm-tier; test_noop_setup_repair must
-        // not panic.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            execute_with_options(&args, root, options).ok();
-        }));
-        *TEST_OFF_PATH.lock().unwrap() = None;
-        result.expect("doctor repair must not call setup when confirm_repairs is false");
-
-        // Verify the managed installation was NOT removed.
-        assert!(
-            managed_binary.exists(),
-            "managed installation should be preserved when confirm-tier repair is skipped"
-        );
     }
 }

@@ -73,6 +73,7 @@ pub enum SnapshotTrigger {
     NupmImport,
     NupmImportManifest,
     Rollback,
+    Doctor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

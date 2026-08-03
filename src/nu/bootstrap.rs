@@ -717,6 +717,15 @@ where
     if let Some(dest) = already_installed.as_ref() {
         if !options.force {
             if options.yes {
+                // PATH persistence mutates user shell state; snapshot first.
+                create_snapshot(
+                    root,
+                    SnapshotReason::PreMutation,
+                    SnapshotTrigger::Install,
+                    None,
+                    None,
+                )
+                .context("Failed to create pre-mutation snapshot for existing `numan setup nu`")?;
                 if let Some(parent) = dest.parent() {
                     prepend_process_path(parent)?;
                 }
