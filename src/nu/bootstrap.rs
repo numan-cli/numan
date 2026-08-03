@@ -719,7 +719,14 @@ where
         let effective = if dest.is_file() {
             dest
         } else {
-            version_manager::active_nu_binary(root)?
+            // DanglingActive must not abort this short-circuit: other on-tree
+            // versions may still be installed (any_version_installed), and the
+            // error text tells users to run `numan setup nu` — the command we
+            // are already in. Degrade like the no-marker path and prefer the
+            // newest installed binary.
+            version_manager::active_nu_binary(root)
+                .ok()
+                .flatten()
                 .or_else(|| {
                     version_manager::latest_installed_version(root)
                         .ok()
@@ -1046,5 +1053,43 @@ mod tests {
             "expected 0.113.1 in installed list, got: {:?}",
             listed
         );
+    }
+
+    #[test]
+    fn latest_setup_short_circuit_ignores_dangling_active_marker() {
+        use crate::util::test_paths::PathRestoreGuard;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let platform = Platform::detect();
+        let _path_guard = PathRestoreGuard::new();
+
+        // Real on-tree install that the latest-flow short-circuit should fall
+        // back to when the active marker is dangling.
+        let good = version_manager::version_binary(root, "0.113.1");
+        std::fs::create_dir_all(good.parent().unwrap()).unwrap();
+        std::fs::write(&good, b"fake nu").unwrap();
+
+        // Stale active marker pointing at a missing version.
+        version_manager::write_active_version(root, "0.99.0").unwrap();
+        assert!(
+            version_manager::active_nu_binary(root).is_err(),
+            "precondition: active marker must be dangling"
+        );
+
+        let options = NuSetupOptions {
+            yes: true,
+            force: false,
+            skip_path: true,
+            version: None,
+            caller_consented_destructive: false,
+        };
+
+        let result = execute_nu_setup_with_installer(root, &platform, &options, |_r, _p| {
+            panic!("installer must not run when another on-tree Nu is already installed");
+        })
+        .expect("dangling active must not block latest short-circuit");
+
+        assert_eq!(result, good);
     }
 }
