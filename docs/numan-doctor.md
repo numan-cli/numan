@@ -129,7 +129,8 @@ Checks run in order below. Implementation should call existing validators (`NuPa
 | `nu.binary.found_off_path` | `warn` | Nu exists in a known install root (e.g. `~/.cargo/bin`, `%LOCALAPPDATA%\Programs\nushell`) but not on PATH → fix: `numan setup nu use <path>` |
 | `nu.path.version` | `info` | PATH-only Nu version (`PATH Nu: 0.114.1`), `PATH Nu: not found`, or `PATH Nu: found at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Does not treat managed Nu as PATH. Report-only (no automatic repair). |
 | `nu.managed.version` | `info` | Managed binary under `$NUMAN_ROOT/tools/nushell/` with version, `Managed Nu: not installed`, or `Managed Nu: present at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Report-only (no automatic repair). |
-| `nu.active_version.malformed` | `error` | `nu_state/active-version.json` is present but unreadable/invalid JSON. Lookup would otherwise soft-miss the marker and fall back to PATH. **auto:** clear the marker via `clear_active_version` so resolution recovers cleanly. || `nu_paths.missing` | `error` | `paths.json` absent → fix: `numan init` |
+| `nu.active_version.malformed` | `error` | `nu_state/active-version.json` is present but unreadable/invalid JSON. Lookup would otherwise soft-miss the marker and fall back to PATH. **auto:** clear the marker via `clear_active_version` so resolution recovers cleanly. |
+| `nu_paths.missing` | `error` | `paths.json` absent → fix: `numan init` |
 | `nu_paths.drift` | `error` | `NuPaths::validate_drift()` fails → fix: `numan init --refresh` |
 | `nu_paths.vendor_drift` | `error` | `validate_vendor_drift()` fails when `data_dir` cached → fix: `numan init --refresh` |
 | `nu_paths.vendor_missing` | `warn` | Active module in lockfile but `vendor_autoload_dir` is `None` → fix: fix Nu install/config, then `numan init --refresh` |
@@ -266,7 +267,8 @@ pub fn execute_with_options(args: &DoctorArgs, root: &Path, options: DoctorOptio
 | `numan init` / `init --refresh` | **Repair** Nu path drift (default doctor delegates here) |
 | `numan setup nu` | **Manual fix** for missing Nushell (`nu.binary.missing_on_path`; doctor prints the hint and does not download) |
 | `numan setup nu use <path>` | **Repair** off-PATH Nushell (`nu.binary.found_off_path`; adds parent dir to user PATH; consented wipe of managed Nu requires `--yes` / TTY; doctor does not auto-approve) |
-| `numan activate` | **Repair** activation + journal reconciliation || `numan registry sync` | **Repair** missing index cache (auto tier) |
+| `numan activate` | **Repair** activation + journal reconciliation |
+| `numan registry sync` | **Repair** missing index cache (auto tier) |
 | `numan activate --check` | Deep **module** check only; no repair |
 | `numan nupm status` | nupm-only summary; doctor embeds optional subset |
 | `numan update` / `remove` / `gc` | Block on stale lifecycle journal; doctor reports, does not fix lifecycle |
