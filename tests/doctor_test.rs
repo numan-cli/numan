@@ -15,10 +15,42 @@ use numan_cli::state::plugin_deactivate_journal::{
     PendingPluginDeactivate, PendingPluginDeactivateEntry, PluginDeactivateStatus,
 };
 use numan_cli::state::snapshot::{list_snapshots, SnapshotTrigger};
-use numan_cli::util::test_paths::PathRestoreGuard;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use tempfile::TempDir;
+
+/// Local copy of the library's test-only PATH guard. The library module is
+/// `#[cfg(test)]`-gated and therefore unavailable to integration tests that
+/// link the non-test build of `numan_cli`.
+static PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+#[must_use = "PathRestoreGuard restores PATH on drop; bind it to a variable"]
+struct PathRestoreGuard {
+    original: Option<OsString>,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl PathRestoreGuard {
+    fn new() -> Self {
+        let lock = PATH_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Self {
+            original: std::env::var_os("PATH"),
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for PathRestoreGuard {
+    fn drop(&mut self) {
+        match self.original.as_ref() {
+            Some(path) => std::env::set_var("PATH", path),
+            None => std::env::remove_var("PATH"),
+        }
+    }
+}
 
 static TEST_OFF_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 static TEST_NU_SETUP_CALLED: Mutex<bool> = Mutex::new(false);

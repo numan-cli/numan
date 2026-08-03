@@ -1,8 +1,9 @@
 //! Helpers for restoring process-wide PATH after a test.
 //!
-//! Compiled into the library so integration tests under `tests/` can share
-//! the same guard as `cfg(test)` unit tests. Production code must not mutate
-//! PATH through this module.
+//! Gated with `#[cfg(test)]` so release builds never compile or export this
+//! module. Integration tests under `tests/` keep a local copy of the guard.
+
+#![cfg(test)]
 
 use std::ffi::OsString;
 use std::sync::{Mutex, MutexGuard};
