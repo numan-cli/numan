@@ -76,7 +76,7 @@ pub fn detect_legacy_version(binary: &Path) -> Result<String> {
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .with_context(|| {
             format!(
@@ -84,6 +84,18 @@ pub fn detect_legacy_version(binary: &Path) -> Result<String> {
                 binary.display()
             )
         })?;
+
+    // Drain stdout in a background thread while the polling loop runs.
+    // Without this, a verbose binary could fill the pipe buffer and deadlock
+    // `try_wait` (the child blocks on write; we block on wait).
+    let stdout_pipe = child.stdout.take().expect("stdout was piped");
+    let reader_handle = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = Vec::new();
+        let mut r = stdout_pipe;
+        let _ = r.read_to_end(&mut buf);
+        buf
+    });
 
     let deadline = std::time::Instant::now() + LEGACY_VERSION_DETECT_TIMEOUT;
     loop {
@@ -107,22 +119,23 @@ pub fn detect_legacy_version(binary: &Path) -> Result<String> {
         }
     }
 
-    let output = child.wait_with_output().with_context(|| {
+    let status = child.wait().with_context(|| {
         format!(
-            "Failed to collect output from legacy Nu binary at '{}'",
+            "Failed to collect exit status from legacy Nu binary at '{}'",
             binary.display()
         )
     })?;
+    let stdout_bytes = reader_handle.join().unwrap_or_default();
 
-    if !output.status.success() {
+    if !status.success() {
         bail!(
             "Legacy Nu binary at '{}' exited with status {}",
             binary.display(),
-            output.status
+            status
         );
     }
 
-    parse_nu_version_from_output(&String::from_utf8_lossy(&output.stdout))
+    parse_nu_version_from_output(&String::from_utf8_lossy(&stdout_bytes))
 }
 
 /// Migrate a legacy single-binary install to the versioned structure.
@@ -131,6 +144,15 @@ pub fn detect_legacy_version(binary: &Path) -> Result<String> {
 /// detect its version and move it to `<root>/tools/nushell/<version>/nu`.
 ///
 /// Returns `Ok(true)` if migration occurred, `Ok(false)` otherwise.
+///
+/// # Caller requirements
+/// The caller must hold the root mutation lock
+/// ([`crate::util::fs_safety::acquire_mutation_lock`]) and have created a
+/// pre-mutation snapshot ([`crate::state::snapshot::create_snapshot`]) before
+/// calling this function.  Both invariants are enforced at the call sites in
+/// `version_manager` and `numan use`; the migration itself does not re-acquire
+/// the lock because the lock is already held for the entire `numan use`
+/// transaction.
 pub fn migrate_legacy_install(root: &Path) -> Result<bool> {
     migrate_legacy_install_with_detector(root, &detect_legacy_version, None)
 }
@@ -143,6 +165,11 @@ pub fn migrate_legacy_install(root: &Path) -> Result<bool> {
 /// `Some(&post_create_hook)` to simulate the original cross-device rename
 /// bug where the legacy binary move fails between devices, leaving the
 /// empty versioned subdir on disk. Production callers pass `None`.
+///
+/// # Caller requirements
+/// Same as [`migrate_legacy_install`]: the caller must hold the root mutation
+/// lock and have created a pre-mutation snapshot.  See that function's
+/// documentation for details.
 pub fn migrate_legacy_install_with_detector(
     root: &Path,
     detect: &LegacyVersionDetector,
@@ -181,6 +208,11 @@ pub fn migrate_legacy_install_with_detector(
     let versioned_dir = versioned_nu_dir(root);
     if versioned_dir.exists() {
         let mut found_installed = false;
+        // Record the first directory that contains foreign (non-binary) files
+        // so we can bail after the full scan rather than short-circuiting
+        // immediately. This lets us still remove all empty sibling dirs before
+        // refusing, giving a more complete clean-up pass.
+        let mut offending_path: Option<std::path::PathBuf> = None;
         let bin_name = nu_binary_name();
         for entry in std::fs::read_dir(&versioned_dir)? {
             let entry = entry?;
@@ -204,14 +236,12 @@ pub fn migrate_legacy_install_with_detector(
                 // migration. Remove it so the user is not permanently stuck
                 // with an empty <version>/ blocking every future attempt.
                 // If the directory contains any other file, preserve it and
-                // refuse to migrate rather than clobbering foreign content.
+                // record the offending path; the bail happens after the loop
+                // so we still clean up any empty siblings in the same pass.
                 if let Some(inner) = std::fs::read_dir(entry.path())?.next() {
                     let _ = inner?;
-                    bail!(
-                        "Refusing to migrate: version directory '{}' exists and contains \
-                         files other than the Nu binary. Remove or rename it, then retry.",
-                        entry.path().display()
-                    );
+                    offending_path.get_or_insert_with(|| entry.path());
+                    continue;
                 }
                 std::fs::remove_dir(entry.path()).with_context(|| {
                     format!(
@@ -223,6 +253,13 @@ pub fn migrate_legacy_install_with_detector(
         }
         if found_installed {
             return Ok(false);
+        }
+        if let Some(foreign) = offending_path {
+            bail!(
+                "Refusing to migrate: version directory '{}' exists and contains \
+                 files other than the Nu binary. Remove or rename it, then retry.",
+                foreign.display()
+            );
         }
     }
 
@@ -508,6 +545,16 @@ mod tests {
             read_active_version(root).unwrap().is_none(),
             "active marker must not be written on the failed first attempt"
         );
+        // The journal must be in Prepared stage after the failed first attempt;
+        // the second attempt's reconcile path will use it to clean up.
+        let journal = PendingMigration::load(root)
+            .unwrap()
+            .expect("journal must be present after a failed Prepared-stage migration");
+        assert_eq!(
+            journal.stage,
+            MigrationStage::Prepared,
+            "journal stage must be Prepared after failed post-create hook"
+        );
 
         // Second attempt: no hook — the cleanup path now removes the empty
         // subdir and the rename succeeds.
@@ -529,6 +576,43 @@ mod tests {
         );
         let active = read_active_version(root).unwrap().unwrap();
         assert_eq!(active.version, "0.113.1");
+        // Journal must be cleared after successful migration.
+        assert!(
+            PendingMigration::load(root).unwrap().is_none(),
+            "journal must be cleared after successful recovery migration"
+        );
+    }
+
+    /// `migrate_legacy_install_with_detector` must refuse when
+    /// `<root>/tools/nushell` is a symlink (same guard as `reconcile`).
+    #[cfg(unix)]
+    #[test]
+    fn migrate_legacy_refuses_symlinked_managed_dir() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let bin_name = nu_binary_name();
+
+        // Create a real directory that will be the symlink target.
+        let real_dir = tmp.path().join("real_nushell");
+        std::fs::create_dir_all(&real_dir).unwrap();
+        std::fs::write(real_dir.join(bin_name), b"fake legacy nu").unwrap();
+
+        // Create tools/nushell as a symlink pointing to real_dir.
+        let tools_parent = root.join("tools");
+        std::fs::create_dir_all(&tools_parent).unwrap();
+        std::os::unix::fs::symlink(&real_dir, tools_parent.join("nushell")).unwrap();
+
+        let err = migrate_legacy_install_with_detector(
+            root,
+            &|_| panic!("detector must not be called on a symlinked managed dir"),
+            None,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("symlink") || msg.contains("reparse"),
+            "must mention symlink in error, got: {msg}"
+        );
     }
 
     #[test]

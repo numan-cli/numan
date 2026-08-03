@@ -99,12 +99,20 @@ fn execute_nu_command_wraps_installer() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
-    // Pre-install managed binary so execute_nu short-circuits without network.
-    let binary = bootstrap::managed_nu_binary(root);
-    std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+    // Pre-install at the versioned path so execute_nu short-circuits without
+    // network.  The versioned layout is now the only gate checked; the legacy
+    // flat path no longer triggers the short-circuit.
+    let version = "0.113.1";
+    let bin_dir = version_manager::version_install_dir(root, version);
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let binary = version_manager::version_binary(root, version);
     std::fs::write(&binary, b"fake nu").unwrap();
 
-    execute_nu(&NuSetupArgs::install(None, false, true, true), root).unwrap();
+    execute_nu(
+        &NuSetupArgs::install(Some(version.to_string()), false, true, true),
+        root,
+    )
+    .unwrap();
 }
 
 /// Return the first runnable Nushell binary on `$PATH` (or `/usr/local/bin/nu` on Unix).
@@ -213,7 +221,10 @@ fn cli_parse_remove_subcommand() {
 #[test]
 fn cli_parse_path_subcommand() {
     let args = parse_nu_args(&["path"]);
-    assert!(matches!(args.action, Some(NuAction::Path { .. })));
+    match &args.action {
+        Some(NuAction::Path { force: false }) => {}
+        other => panic!("expected Path {{ force: false }}, got {other:?}"),
+    }
 }
 
 #[test]
@@ -340,6 +351,7 @@ fn stage_fake_nu(src: &std::path::Path, dst: &std::path::Path) {
 // when a managed Nushell install already exists, unless the caller
 // explicitly opts in with `--force`. The hint message names `--force`
 // and `setup nu remove`, so CLI users have two clean recovery paths.
+#[ignore = "requires real Nu binary on $PATH — run in platform acceptance job"]
 #[test]
 fn setup_nu_use_existing_refuses_when_managed_tree_present_without_force() {
     let Some(nu_source) = runnable_nu_on_path() else {
@@ -398,6 +410,7 @@ fn setup_nu_use_existing_refuses_when_managed_tree_present_without_force() {
 /// the test runs without TTY interaction; in production, the user sees a
 /// warn-and-confirm prompt shaped exactly like the existing destructive
 /// prompt on `execute_use_path`.
+#[ignore = "requires real Nu binary on $PATH — run in platform acceptance job"]
 #[test]
 fn setup_nu_use_existing_force_drops_managed_tree() {
     let Some(nu_source) = runnable_nu_on_path() else {

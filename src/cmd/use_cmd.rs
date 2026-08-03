@@ -78,11 +78,10 @@ fn execute_latest(root: &Path) -> Result<()> {
     let latest = version_manager::latest_installed_version(root)?;
     match latest {
         Some(version) => {
-            // cubic PR69 UzV: preserve off-tree `binary_path` when the existing
-            // marker already names this version with an off-tree entry.
-            // Without this, every successful `numan use latest` overwrites the
-            // marker with `None`, breaking resolution of `setup nu use <path>`
-            // choices.
+            // Preserve off-tree `binary_path` when the existing marker already
+            // names this version with a valid off-tree entry. Without this,
+            // every successful `numan use latest` overwrites the marker with
+            // `None`, breaking resolution of `setup nu use <path>` choices.
             if let Some(existing) = version_manager::read_active_version(root)? {
                 if existing.version == version
                     && existing
@@ -90,13 +89,10 @@ fn execute_latest(root: &Path) -> Result<()> {
                         .as_deref()
                         .is_some_and(|path| std::path::Path::new(path).is_file())
                 {
-                    version_manager::write_active_version_with_binary(
-                        root,
-                        &version,
-                        &std::path::PathBuf::from(existing.binary_path.as_deref().unwrap_or("")),
-                    )?;
+                    // Marker is already valid for this version; skip the write
+                    // to avoid clobbering the off-tree binary_path.
                     println!(
-                        "Switched to Nu {} (latest installed; off-tree path preserved).",
+                        "Nu {} is already active (latest installed; off-tree path preserved).",
                         version
                     );
                     return Ok(());
@@ -326,5 +322,51 @@ mod tests {
         assert_pre_mutation_snapshot(root);
         let active = version_manager::read_active_version(root).unwrap().unwrap();
         assert_eq!(active.version, "0.113.1");
+    }
+
+    #[test]
+    fn execute_fails_while_mutation_lock_held() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.113.1");
+
+        // Hold the root mutation lock — concurrent `numan use` must refuse.
+        let _lock = acquire_mutation_lock(root).unwrap();
+
+        let err = execute(
+            &UseArgs {
+                version: "0.113.1".to_string(),
+            },
+            root,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("lock")
+                || msg.contains("mutex")
+                || msg.contains("busy")
+                || msg.contains("mutation")
+                || msg.contains("progress"),
+            "error must mention lock contention: {msg}"
+        );
+    }
+
+    #[test]
+    fn list_succeeds_while_mutation_lock_held() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.113.1");
+        version_manager::write_active_version(root, "0.113.1").unwrap();
+
+        // Hold the lock — `numan use list` is read-only and must NOT acquire it.
+        let _lock = acquire_mutation_lock(root).unwrap();
+
+        execute(
+            &UseArgs {
+                version: "list".to_string(),
+            },
+            root,
+        )
+        .unwrap();
     }
 }
