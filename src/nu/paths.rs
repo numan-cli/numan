@@ -332,14 +332,26 @@ pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
         }
     }
 
+    // 3. Any on-tree/off-tree installed version (covers direct installs where
+    //    no active marker has been written yet).
+    if let Ok(versions) = version_manager::list_installed_versions(root) {
+        for version in versions {
+            if let Some(binary) = version_manager::resolve_installed_version(root, &version) {
+                if binary.is_file() {
+                    return Ok(binary.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+
     if let Ok(path) = find_nu_on_path() {
         return Ok(path);
     }
 
     if let Some(off_path) = discover_nu_off_path() {
         bail!(
-            "Nu not found on PATH or in '{}', but an install exists at '{}'. \\
-             Add it to PATH with: numan setup nu --use-existing {}",
+            "Nu not found on PATH or in '{}', but an install exists at '{}'. \
+             Add it to PATH with: numan setup nu use {}",
             managed.display(),
             off_path.display(),
             off_path.display()
@@ -424,7 +436,9 @@ pub fn probe_nu_config_path(nu_exe: &str) -> Result<PathBuf> {
 }
 
 /// Validate that a path is an executable Nushell binary before PATH mutation.
-pub fn validate_nushell_binary(path: &Path) -> Result<()> {
+///
+/// Returns the Nu version string on success.
+pub fn validate_nushell_binary(path: &Path) -> Result<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -440,8 +454,8 @@ pub fn validate_nushell_binary(path: &Path) -> Result<()> {
         }
     }
 
-    probe_nu(&path.to_string_lossy())?;
-    Ok(())
+    let output = probe_nu(&path.to_string_lossy())?;
+    Ok(output.version)
 }
 
 /// Run a single Nu invocation and parse the resulting JSON probe output.

@@ -9,6 +9,7 @@ use numan_cli::cmd::setup::{execute_nu, NuAction, NuSetupArgs};
 use numan_cli::core::platform::Platform;
 use numan_cli::nu::bootstrap::{self, install_from_archive, NuSetupOptions};
 use numan_cli::nu::paths::{find_nu_executable_with_root, validate_nushell_binary};
+use numan_cli::nu::version_manager;
 use std::io::Write;
 use std::path::PathBuf;
 use zip::write::SimpleFileOptions;
@@ -37,7 +38,7 @@ fn managed_nu_is_discovered_after_install() {
     install_from_archive(&zip_path, root, "0.0.0-test").unwrap();
 
     let resolved = find_nu_executable_with_root(root).unwrap();
-    let expected = bootstrap::managed_nu_binary(root);
+    let expected = version_manager::version_binary(root, "0.0.0-test");
     assert_eq!(
         std::fs::canonicalize(&resolved).unwrap(),
         std::fs::canonicalize(&expected).unwrap(),
@@ -51,7 +52,7 @@ fn setup_nu_uses_injected_installer_without_network() {
     let platform = Platform::detect();
 
     let installer = |install_root: &std::path::Path, _platform: &Platform| {
-        let binary = bootstrap::managed_nu_binary(install_root);
+        let binary = version_manager::version_binary(install_root, "0.113.1");
         std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
         std::fs::write(&binary, b"fake nu").unwrap();
         Ok(binary)
@@ -66,12 +67,13 @@ fn setup_nu_uses_injected_installer_without_network() {
             skip_path: true,
             version: None,
             caller_consented_destructive: false,
+            is_tty: None,
         },
         installer,
     )
     .unwrap();
 
-    assert!(bootstrap::managed_nu_binary(root).is_file());
+    assert!(version_manager::version_binary(root, "0.113.1").is_file());
 }
 
 #[test]
@@ -280,21 +282,30 @@ fn setup_nu_rejects_legacy_use_existing_with_skip_path() {
 #[test]
 fn register_existing_nu_audit_text_is_stable() {
     use numan_cli::nu::bootstrap::hoisted_audit_message;
+    use std::path::Path;
 
-    let actual = hoisted_audit_message(std::path::Path::new("/usr/local/bin"));
+    let parent = Path::new("/usr/local/bin");
+    let actual = hoisted_audit_message(parent);
     assert_eq!(
         actual,
-        "(audit) prompt hoisted; skipping internal PATH-confirmation prompt \
-         for '/usr/local/bin' (caller has already gathered destructive-step consent)."
+        format!(
+            "(audit) prompt hoisted; skipping internal PATH-confirmation prompt \
+             for '{}' (caller has already gathered destructive-step consent).",
+            parent.display()
+        )
     );
 
     // Empty parent path: a corner case the future hoist surfaces (setup nu
     // remove, install <v> one-shot) might pass through. The helper must still
     // return a stable shape; an empty `display()` renders as `""`.
-    let empty = hoisted_audit_message(std::path::Path::new(""));
+    let empty_parent = Path::new("");
+    let empty = hoisted_audit_message(empty_parent);
     assert_eq!(
         empty,
-        "(audit) prompt hoisted; skipping internal PATH-confirmation prompt \
-         for '' (caller has already gathered destructive-step consent)."
+        format!(
+            "(audit) prompt hoisted; skipping internal PATH-confirmation prompt \
+             for '{}' (caller has already gathered destructive-step consent).",
+            empty_parent.display()
+        )
     );
 }
