@@ -10,9 +10,11 @@ use anyhow::{bail, Context, Result};
 use clap::Args;
 use std::path::Path;
 
+use crate::nu::paths::NuPaths;
 use crate::nu::version_manager;
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::fs_safety::acquire_mutation_lock;
+use crate::util::hints::CMD_INIT_REFRESH;
 
 #[derive(Args, Debug)]
 pub struct UseArgs {
@@ -22,39 +24,16 @@ pub struct UseArgs {
 }
 
 pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
-    match args.version.as_str() {
-        // `list` is read-only: no lock, no snapshot, no migration. Taking the
-        // non-blocking mutation lock here would make a pure read fail under
-        // contention with a concurrent `install`/`setup`, and the snapshot
-        // would be clutter.
-        "list" => execute_list(root),
-        // The mutating arms flip the active-version marker, so they hold the
-        // lock for the whole operation (to prevent races with concurrent
-        // `numan setup nu` / `numan use`) and snapshot established state first.
-        "latest" => with_mutation_guard(root, execute_latest),
-        version => with_mutation_guard(root, |root| execute_switch(root, version)),
+    // Listing reconciles the legacy single-binary layout first so a flat
+    // `tools/nushell/nu` install is not invisible. Migration is a no-op when
+    // already versioned, and preserves any existing active selection.
+    if args.version == "list" {
+        let _lock = acquire_mutation_lock(root)?;
+        crate::nu::migrate_legacy::migrate_legacy_install(root)
+            .with_context(|| "Failed to migrate legacy Nu installation before list")?;
+        return execute_list(root);
     }
-}
 
-/// Acquire the mutation lock and take a `PreMutation` snapshot before running a
-/// mutating `numan use` arm. Also runs journaled legacy-install migration so a
-/// single-binary layout is versioned before the active-marker flip.
-fn with_mutation_guard(root: &Path, op: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
-    with_mutation_guard_and_migrator(root, op, crate::nu::migrate_legacy::migrate_legacy_install)
-}
-
-/// Test seam for [`with_mutation_guard`]: inject the legacy-migration step so
-/// unit tests can cover success and failure without spawning Nu or touching
-/// a real legacy layout. Signature matches [`migrate_legacy_install`]
-/// (`Result<bool, _>`: whether a migration ran).
-fn with_mutation_guard_and_migrator<E>(
-    root: &Path,
-    op: impl FnOnce(&Path) -> Result<()>,
-    migrate: impl FnOnce(&Path) -> std::result::Result<bool, E>,
-) -> Result<()>
-where
-    E: Into<anyhow::Error>,
-{
     // Hold the mutation lock for the entire operation to prevent races
     // between concurrent `numan setup nu` and `numan use` invocations.
     let _lock = acquire_mutation_lock(root)?;
@@ -71,14 +50,13 @@ where
     )
     .with_context(|| "Failed to create pre-mutation snapshot for `numan use`")?;
 
-    let migrated = migrate(root)
-        .map_err(Into::into)
+    crate::nu::migrate_legacy::migrate_legacy_install(root)
         .with_context(|| "Failed to migrate legacy Nu installation")?;
-    if migrated {
-        println!("Migrated legacy Nushell install to the versioned layout.");
-    }
 
-    op(root)
+    match args.version.as_str() {
+        "latest" => execute_latest(root),
+        version => execute_switch(root, version),
+    }
 }
 
 /// List all installed Nu versions, marking the active one.
@@ -102,26 +80,37 @@ fn execute_list(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Persist the active-version marker, preserving an off-tree binary path when
-/// the resolved binary lives outside `tools/nushell/<version>/`.
-fn select_version(root: &Path, version: &str, installed_binary: &Path) -> Result<()> {
-    if installed_binary == version_manager::version_binary(root, version) {
-        version_manager::write_active_version(root, version)
-    } else {
-        version_manager::write_active_version_with_binary(root, version, installed_binary)
-    }
-    .with_context(|| format!("Failed to switch to Nu {}", version))
-}
-
 /// Switch to the latest (newest) installed Nu version.
 fn execute_latest(root: &Path) -> Result<()> {
     let latest = version_manager::latest_installed_version(root)?;
     match latest {
         Some(version) => {
-            let installed_binary = version_manager::resolve_installed_version(root, &version)
-                .with_context(|| format!("Nu {} is no longer present", version))?;
-            select_version(root, &version, &installed_binary)?;
+            // Preserve off-tree `binary_path` only when it still resolves to a
+            // real file. An empty or stale path must not be rewritten; fall
+            // through to a clean on-tree active marker instead.
+            if let Some(existing) = version_manager::read_active_version(root)? {
+                if existing.version == version {
+                    if let Some(off_tree) = existing.binary_path.as_ref() {
+                        let off_tree_path = std::path::Path::new(off_tree);
+                        if !off_tree.is_empty() && off_tree_path.is_file() {
+                            version_manager::write_active_version_with_binary(
+                                root,
+                                &version,
+                                off_tree_path,
+                            )?;
+                            println!(
+                                "Switched to Nu {} (latest installed; off-tree path preserved).",
+                                version
+                            );
+                            refresh_cached_nu_paths_after_switch(root)?;
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+            version_manager::write_active_version(root, &version)?;
             println!("Switched to Nu {} (latest installed).", version);
+            refresh_cached_nu_paths_after_switch(root)?;
             Ok(())
         }
         None => {
@@ -136,43 +125,86 @@ fn execute_latest(root: &Path) -> Result<()> {
 /// Switch to a specific Nu version.
 fn execute_switch(root: &Path, version: &str) -> Result<()> {
     let version = version_manager::normalize_version(version)?;
-    // Validate the version is installed (on-tree or off-tree).
-    let installed_binary = match version_manager::resolve_installed_version(root, &version) {
-        Some(path) => path,
-        None => {
-            let installed = version_manager::list_installed_versions(root).with_context(|| {
-                format!(
-                    "Nu {} is not installed, and listing installed versions also failed",
-                    version
-                )
-            })?;
-            if installed.is_empty() {
-                bail!(
-                    "No Nu versions installed.\n\
-                     Run 'numan setup nu {}' to install.",
-                    version
-                );
-            }
-            bail!(
+    // Resolve on-tree or off-tree so versions shown by `numan use list`
+    // (including off-tree marker selections) remain switchable.
+    let Some(resolved) = version_manager::resolve_installed_version(root, &version)? else {
+        let installed = version_manager::list_installed_versions(root)?;
+        let hint = if installed.is_empty() {
+            format!(
+                "No Nu versions installed.\n\
+                 Run 'numan setup nu {}' to install.",
+                version
+            )
+        } else {
+            format!(
                 "Nu {} is not installed.\n\
                  Installed versions: {}\n\
                  Run 'numan setup nu {}' to install, or 'numan use list' to see available versions.",
                 version,
                 installed.join(", "),
                 version
-            );
-        }
+            )
+        };
+        bail!("{}", hint);
     };
 
-    // Switch to the requested version, preserving an off-tree binary path.
-    select_version(root, &version, &installed_binary)?;
+    let on_tree = version_manager::version_binary(root, &version);
+    if resolved == on_tree {
+        version_manager::write_active_version(root, &version)
+            .with_context(|| format!("Failed to switch to Nu {}", version))?;
+    } else {
+        version_manager::write_active_version_with_binary(root, &version, &resolved)
+            .with_context(|| format!("Failed to switch to Nu {}", version))?;
+    }
     println!("Switched to Nu {}.", version);
+    refresh_cached_nu_paths_after_switch(root)?;
     Ok(())
+}
+
+/// Keep `nu_state/paths.json` aligned with the newly selected active Nu.
+///
+/// `activate` loads the cached paths and only checks that the cached binary
+/// still hashes — side-by-side installs leave the previous binary intact, so
+/// a stale cache would silently keep activating against the old Nu. Re-probe
+/// when possible; if probing fails, delete the cache so callers fail closed
+/// with an `init --refresh` hint instead of using the wrong Nu.
+fn refresh_cached_nu_paths_after_switch(root: &Path) -> Result<()> {
+    let paths_file = root.join("nu_state").join("paths.json");
+    if !paths_file.is_file() {
+        return Ok(());
+    }
+
+    match NuPaths::detect_with_root(root) {
+        Ok(refreshed) => {
+            refreshed.save(root).with_context(|| {
+                format!(
+                    "Failed to write refreshed Nu paths to '{}'",
+                    paths_file.display()
+                )
+            })?;
+            println!("Refreshed cached Nu paths for the selected version.");
+            Ok(())
+        }
+        Err(e) => {
+            std::fs::remove_file(&paths_file).with_context(|| {
+                format!(
+                    "Failed to clear stale Nu paths at '{}' after version switch",
+                    paths_file.display()
+                )
+            })?;
+            eprintln!(
+                "warning: could not re-probe Nu after switch ({e:#}). \
+                 Cleared cached paths; run '{CMD_INIT_REFRESH}' before activating packages."
+            );
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::snapshot::{list_snapshots, SnapshotReason, SnapshotTrigger};
     use tempfile::TempDir;
 
     fn create_fake_version(root: &Path, version: &str) {
@@ -180,6 +212,17 @@ mod tests {
         let dir = version_manager::version_install_dir(root, version);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(binary_name), "fake").unwrap();
+    }
+
+    fn assert_pre_mutation_snapshot(root: &Path) {
+        let snaps = list_snapshots(root).unwrap();
+        assert_eq!(
+            snaps.len(),
+            1,
+            "version-changing `numan use` must create exactly one pre-mutation snapshot"
+        );
+        assert_eq!(snaps[0].reason, SnapshotReason::PreMutation);
+        assert_eq!(snaps[0].trigger, SnapshotTrigger::Update);
     }
 
     #[test]
@@ -208,6 +251,30 @@ mod tests {
     }
 
     #[test]
+    fn test_use_list_creates_no_snapshot() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.113.1");
+        version_manager::write_active_version(root, "0.113.1").unwrap();
+
+        execute(
+            &UseArgs {
+                version: "list".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        assert!(
+            list_snapshots(root).unwrap().is_empty(),
+            "`numan use list` is read-only and must not create a snapshot"
+        );
+        // Active selection unchanged (no mutation / no rollback side effects).
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.113.1");
+    }
+
+    #[test]
     fn test_use_latest_no_versions() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
@@ -230,6 +297,132 @@ mod tests {
         };
         execute(&args, root).unwrap();
 
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.113.1");
+    }
+
+    #[test]
+    fn test_use_switch_clears_stale_paths_cache_when_probe_fails() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.112.0");
+        create_fake_version(root, "0.113.1");
+        version_manager::write_active_version(root, "0.112.0").unwrap();
+
+        // Seed a paths.json that still points at the previous Nu. Fake binaries
+        // cannot be probed, so the refresh path must fail closed and delete it.
+        let stale = NuPaths {
+            nu_executable: version_manager::version_binary(root, "0.112.0")
+                .to_string_lossy()
+                .into_owned(),
+            nu_version: "0.112.0".to_string(),
+            plugin_registry_path: root.join("plugins.msgpackz").to_string_lossy().into_owned(),
+            nu_executable_hash: "deadbeef".to_string(),
+            platform: "test".to_string(),
+            data_dir: None,
+            vendor_autoload_dirs: vec![],
+            vendor_autoload_dir: None,
+        };
+        stale.save(root).unwrap();
+        assert!(root.join("nu_state/paths.json").is_file());
+
+        execute(
+            &UseArgs {
+                version: "0.113.1".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        assert_eq!(
+            version_manager::read_active_version(root)
+                .unwrap()
+                .unwrap()
+                .version,
+            "0.113.1"
+        );
+        assert!(
+            !root.join("nu_state/paths.json").exists(),
+            "stale paths.json must be cleared so activate cannot keep using old Nu"
+        );
+    }
+
+    #[test]
+    fn test_use_latest_drops_stale_offtree_binary_path() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.113.1");
+        // Marker names latest but points at a missing off-tree binary.
+        version_manager::write_active_version_with_binary(
+            root,
+            "0.113.1",
+            std::path::Path::new("/nonexistent/opt-nu"),
+        )
+        .unwrap();
+
+        execute(
+            &UseArgs {
+                version: "latest".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.113.1");
+        assert!(
+            active.binary_path.is_none(),
+            "stale/empty off-tree path must not be preserved: {:?}",
+            active.binary_path
+        );
+    }
+
+    #[test]
+    fn test_use_latest_preserves_live_offtree_binary_path() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.113.1");
+        let off_tree = tmp
+            .path()
+            .join("opt-nu")
+            .join(if cfg!(windows) { "nu.exe" } else { "nu" });
+        std::fs::create_dir_all(off_tree.parent().unwrap()).unwrap();
+        std::fs::write(&off_tree, b"off-tree latest").unwrap();
+        version_manager::write_active_version_with_binary(root, "0.113.1", &off_tree).unwrap();
+
+        execute(
+            &UseArgs {
+                version: "latest".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.113.1");
+        assert_eq!(
+            active.binary_path.as_deref(),
+            Some(off_tree.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn test_use_latest_creates_pre_mutation_snapshot() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.112.0");
+        create_fake_version(root, "0.113.1");
+        version_manager::write_active_version(root, "0.112.0").unwrap();
+
+        execute(
+            &UseArgs {
+                version: "latest".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        assert_pre_mutation_snapshot(root);
         let active = version_manager::read_active_version(root).unwrap().unwrap();
         assert_eq!(active.version, "0.113.1");
     }
@@ -268,68 +461,12 @@ mod tests {
     }
 
     #[test]
-    fn test_use_list_takes_no_snapshot() {
-        // `numan use list` is read-only: it must not create a PreMutation
-        // snapshot (which lands under `<root>/state/snapshots`), otherwise a
-        // pure listing would leave clutter and take the mutation lock.
+    fn test_use_switch_creates_pre_mutation_snapshot() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
+        create_fake_version(root, "0.112.0");
         create_fake_version(root, "0.113.1");
-
-        let args = UseArgs {
-            version: "list".to_string(),
-        };
-        execute(&args, root).unwrap();
-
-        assert!(
-            !root.join("state/snapshots").exists(),
-            "`numan use list` must not create a snapshot"
-        );
-    }
-
-    #[test]
-    fn test_use_list_runs_no_migration() {
-        // Stage a legacy single-binary layout. A read-only `list` must leave it
-        // exactly as-is; only the mutating arms may migrate.
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-        let legacy = version_manager::versioned_nu_dir(root).join(if cfg!(windows) {
-            "nu.exe"
-        } else {
-            "nu"
-        });
-        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-        std::fs::write(&legacy, "fake legacy nu").unwrap();
-
-        execute(
-            &UseArgs {
-                version: "list".to_string(),
-            },
-            root,
-        )
-        .unwrap();
-
-        assert!(
-            legacy.is_file(),
-            "`numan use list` must not migrate the legacy binary"
-        );
-        assert!(
-            version_manager::read_active_version(root)
-                .unwrap()
-                .is_none(),
-            "`numan use list` must not write the active-version marker"
-        );
-    }
-
-    #[test]
-    fn test_use_switch_preserves_off_tree_binary_path() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-
-        // Off-tree Nu recorded by `numan setup nu use <path>`.
-        let external = tmp.path().join("external-nu");
-        std::fs::write(&external, "fake").unwrap();
-        version_manager::write_active_version_with_binary(root, "0.113.1", &external).unwrap();
+        version_manager::write_active_version(root, "0.112.0").unwrap();
 
         execute(
             &UseArgs {
@@ -339,90 +476,8 @@ mod tests {
         )
         .unwrap();
 
+        assert_pre_mutation_snapshot(root);
         let active = version_manager::read_active_version(root).unwrap().unwrap();
         assert_eq!(active.version, "0.113.1");
-        assert_eq!(
-            active.binary_path.as_deref(),
-            Some(external.to_string_lossy().as_ref()),
-            "`numan use` must not downgrade an off-tree selection to an on-tree path"
-        );
-    }
-
-    #[test]
-    fn test_use_switch_takes_snapshot() {
-        // A mutating switch must snapshot established state before flipping the
-        // active-version marker.
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-        create_fake_version(root, "0.113.1");
-
-        let args = UseArgs {
-            version: "0.113.1".to_string(),
-        };
-        execute(&args, root).unwrap();
-
-        assert!(
-            root.join("state/snapshots").exists(),
-            "a version switch must create a PreMutation snapshot"
-        );
-    }
-
-    #[test]
-    fn test_use_runs_migration_before_version_selection() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        static MIGRATED: AtomicBool = AtomicBool::new(false);
-
-        fn migrate_ok(_root: &Path) -> Result<bool> {
-            MIGRATED.store(true, Ordering::SeqCst);
-            Ok(true)
-        }
-
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-        create_fake_version(root, "0.113.1");
-        MIGRATED.store(false, Ordering::SeqCst);
-
-        with_mutation_guard_and_migrator(root, |root| execute_switch(root, "0.113.1"), migrate_ok)
-            .unwrap();
-
-        assert!(
-            MIGRATED.load(Ordering::SeqCst),
-            "legacy migration must run before version selection"
-        );
-        let active = version_manager::read_active_version(root).unwrap().unwrap();
-        assert_eq!(active.version, "0.113.1");
-    }
-
-    #[test]
-    fn test_use_propagates_migration_error() {
-        fn migrate_err(_root: &Path) -> Result<bool> {
-            bail!("simulated migration failure")
-        }
-
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-        create_fake_version(root, "0.113.1");
-
-        let err = with_mutation_guard_and_migrator(
-            root,
-            |root| execute_switch(root, "0.113.1"),
-            migrate_err,
-        )
-        .unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("Failed to migrate legacy Nu installation"),
-            "migration error must keep context, got: {msg}"
-        );
-        assert!(
-            msg.contains("simulated migration failure"),
-            "underlying migration error must surface, got: {msg}"
-        );
-        assert!(
-            version_manager::read_active_version(root)
-                .unwrap()
-                .is_none(),
-            "failed migration must not flip the active marker"
-        );
     }
 }

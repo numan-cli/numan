@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Subcommand;
+use std::io::IsTerminal;
 use std::path::Path;
 
 use crate::nu::autoload::NuCandidateRunner;
@@ -201,24 +202,43 @@ fn inspect(root: &Path, id: &str) -> Result<()> {
 }
 
 fn delete(root: &Path, id: &str, yes: bool) -> Result<()> {
+    delete_with_tty(root, id, yes, std::io::stdin().is_terminal())
+}
+
+fn delete_with_tty(root: &Path, id: &str, yes: bool, is_tty: bool) -> Result<()> {
+    // Destructive: permanently removes the rollback history for this snapshot.
+    // Refuse unattended (non-TTY) sessions without explicit --yes; interactive
+    // sessions keep the confirmation prompt below.
+    crate::util::confirm::require_tty_or_yes_with_seam(yes, "snapshot deletion", is_tty)?;
     let _lock = acquire_mutation_lock(root)?;
-    if !yes {
-        confirm(&format!("Delete snapshot '{id}'? This cannot be undone."))?;
-    }
+    crate::util::confirm::confirm_or_bail(
+        &format!("Delete snapshot '{id}'? This cannot be undone."),
+        yes,
+        "Cancelled.",
+    )?;
     delete_snapshot(root, id)?;
     println!("{} Deleted snapshot {}", console::style("✓").green(), id);
     Ok(())
 }
 
 fn rollback(root: &Path, id: &str, yes: bool) -> Result<()> {
-    let _lock = acquire_mutation_lock(root)?;
+    rollback_with_tty(root, id, yes, std::io::stdin().is_terminal())
+}
 
-    if !yes {
-        confirm(&format!(
+fn rollback_with_tty(root: &Path, id: &str, yes: bool, is_tty: bool) -> Result<()> {
+    // Destructive: rewrites Numan-managed state to a past snapshot. Refuse
+    // unattended sessions without explicit --yes; interactive sessions keep
+    // the confirmation prompt (a pre-rollback snapshot is still taken first).
+    crate::util::confirm::require_tty_or_yes_with_seam(yes, "snapshot rollback", is_tty)?;
+    let _lock = acquire_mutation_lock(root)?;
+    crate::util::confirm::confirm_or_bail(
+        &format!(
             "Roll back Numan-managed state to snapshot '{id}'? \
              A snapshot of the current state will be taken first."
-        ))?;
-    }
+        ),
+        yes,
+        "Cancelled.",
+    )?;
 
     let nu_paths = NuPaths::load(root)?;
     let runner = NuCandidateRunner::new(&nu_paths.nu_executable);
@@ -239,10 +259,69 @@ fn rollback(root: &Path, id: &str, yes: bool) -> Result<()> {
     Ok(())
 }
 
-fn confirm(prompt: &str) -> Result<()> {
-    crate::util::confirm::confirm_or_bail(prompt, false, "Cancelled.")
-}
-
 fn short_hash(h: &str) -> String {
     h.chars().take(12).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ID: &str = "00000000-0000-0000-0000-000000000000";
+
+    #[test]
+    fn delete_refuses_non_tty_without_yes() {
+        // Force non-TTY via the injectable seam so the guard is deterministic
+        // regardless of process stdin terminal status.
+        let dir = tempfile::tempdir().unwrap();
+        let err = delete_with_tty(dir.path(), ID, false, false).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(
+                "Refusing destructive snapshot deletion in non-interactive session without --yes."
+            ),
+            "guard bail must be the audit contract, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn delete_bypasses_guard_with_explicit_yes() {
+        let dir = tempfile::tempdir().unwrap();
+        // --yes must get past the destructive guard regardless of TTY; the
+        // downstream error proves the guard was the only blocker.
+        // Force non-TTY so this never depends on process stdin terminal status.
+        let err = delete_with_tty(dir.path(), ID, true, false).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("Refusing destructive"),
+            "--yes must bypass the guard, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn rollback_refuses_non_tty_without_yes() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = rollback_with_tty(dir.path(), ID, false, false).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(
+                "Refusing destructive snapshot rollback in non-interactive session without --yes."
+            ),
+            "guard bail must be the audit contract, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn rollback_bypasses_guard_with_explicit_yes() {
+        let dir = tempfile::tempdir().unwrap();
+        // --yes gets past the guard; the downstream "not initialized" bail
+        // (NuPaths::load on an empty root) proves the guard was the blocker.
+        // Force non-TTY so this never depends on process stdin terminal status.
+        let err = rollback_with_tty(dir.path(), ID, true, false).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("Refusing destructive"),
+            "--yes must bypass the guard, got: {msg}"
+        );
+    }
 }

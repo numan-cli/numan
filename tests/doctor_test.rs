@@ -15,48 +15,16 @@ use numan_cli::state::plugin_deactivate_journal::{
     PendingPluginDeactivate, PendingPluginDeactivateEntry, PluginDeactivateStatus,
 };
 use numan_cli::state::snapshot::{list_snapshots, SnapshotTrigger};
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::Mutex;
 use tempfile::TempDir;
-
-/// Local copy of the library's test-only PATH guard. The library module is
-/// `#[cfg(test)]`-gated and therefore unavailable to integration tests that
-/// link the non-test build of `numan_cli`.
-static PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
-
-#[must_use = "PathRestoreGuard restores PATH on drop; bind it to a variable"]
-struct PathRestoreGuard {
-    original: Option<OsString>,
-    _lock: MutexGuard<'static, ()>,
-}
-
-impl PathRestoreGuard {
-    fn new() -> Self {
-        let lock = PATH_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        Self {
-            original: std::env::var_os("PATH"),
-            _lock: lock,
-        }
-    }
-}
-
-impl Drop for PathRestoreGuard {
-    fn drop(&mut self) {
-        match self.original.as_ref() {
-            Some(path) => std::env::set_var("PATH", path),
-            None => std::env::remove_var("PATH"),
-        }
-    }
-}
 
 static TEST_OFF_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 static TEST_NU_SETUP_CALLED: Mutex<bool> = Mutex::new(false);
 static TEST_DEACTIVATE_REPAIR_CALLED: Mutex<bool> = Mutex::new(false);
 static TEST_DEACTIVATE_REPAIR_SHOULD_FAIL: Mutex<bool> = Mutex::new(false);
 static TEST_DEACTIVATE_REPAIR_GUARD: Mutex<()> = Mutex::new(());
+static TEST_PATH_GUARD: Mutex<()> = Mutex::new(());
 
 fn discover_off_path_test() -> Option<PathBuf> {
     TEST_OFF_PATH.lock().ok()?.clone()
@@ -64,12 +32,12 @@ fn discover_off_path_test() -> Option<PathBuf> {
 
 fn nu_setup_repair_test(
     args: &numan_cli::cmd::setup::NuSetupArgs,
-    _root: &Path,
+    root: &Path,
 ) -> anyhow::Result<()> {
     let expected = TEST_OFF_PATH.lock().unwrap().clone();
     // The doctor passes the off-path binary via NuSetupArgs::use_existing(),
-    // which sets action = Some(NuAction::Use { path }) and leaves use_existing unset.
-    let Some(NuAction::Use { path }) = &args.action else {
+    // which sets action = Some(NuAction::Use { path, force }) and leaves use_existing unset.
+    let Some(NuAction::Use { path, .. }) = &args.action else {
         panic!("expected NuAction::Use, got {:?}", args.action);
     };
     assert_eq!(Some(path.as_path()), expected.as_ref().map(|p| p.as_path()));
@@ -83,7 +51,24 @@ fn nu_setup_repair_test(
         "doctor found_off_path repair must not pass --yes"
     );
     *TEST_NU_SETUP_CALLED.lock().unwrap() = true;
-    Ok(())
+
+    // Seed a managed install just before the production use path. Seeding earlier
+    // would make Nu "available" and suppress `nu.binary.found_off_path`.
+    let managed = managed_nu_binary(root);
+    std::fs::create_dir_all(managed.parent().unwrap())?;
+    std::fs::write(&managed, b"managed-nu")?;
+    // Use a missing binary so execute_nu fails before PATH persistence or wipe.
+    let missing = root.join("missing-off-path-nu");
+    let err = setup::execute_nu(
+        &setup::NuSetupArgs::use_existing(missing, args.yes, false),
+        root,
+    )
+    .expect_err("expected resolve failure for missing off-PATH binary");
+    assert!(
+        managed.exists(),
+        "doctor off-PATH repair must not delete managed tools/nushell without consent: {err}"
+    );
+    Err(err)
 }
 
 /// Valid fake Nu for consent-gate tests (Unix). Must look runnable to
@@ -114,8 +99,11 @@ fn execute_nu_use_existing_refuses_without_consent_and_keeps_managed() {
     std::fs::write(&managed, b"managed-nu").unwrap();
 
     let off_path = write_valid_off_path_nu(dir.path());
-    let err = setup::execute_nu(&setup::NuSetupArgs::use_existing(off_path, false), root)
-        .expect_err("expected consent-gate refusal with yes=false");
+    let err = setup::execute_nu(
+        &setup::NuSetupArgs::use_existing(off_path, false, false),
+        root,
+    )
+    .expect_err("expected consent-gate refusal with yes=false");
     let msg = format!("{err:#}");
     assert!(
         msg.contains("non-interactive") || msg.contains("--yes"),
@@ -127,23 +115,25 @@ fn execute_nu_use_existing_refuses_without_consent_and_keeps_managed() {
     );
 }
 
-#[test]
-fn execute_nu_use_existing_missing_path_keeps_managed() {
-    let dir = TempDir::new().unwrap();
-    let root = dir.path();
-    std::fs::create_dir_all(root).unwrap();
+struct ClearedPath {
+    saved: Option<String>,
+}
 
-    let managed = managed_nu_binary(root);
-    std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
-    std::fs::write(&managed, b"managed-nu").unwrap();
+impl ClearedPath {
+    fn new() -> Self {
+        let saved = std::env::var("PATH").ok();
+        std::env::set_var("PATH", "");
+        Self { saved }
+    }
+}
 
-    let missing = root.join("missing-off-path-nu");
-    let err = setup::execute_nu(&setup::NuSetupArgs::use_existing(missing, false), root)
-        .expect_err("expected resolve failure for missing off-PATH binary");
-    assert!(
-        managed.exists(),
-        "managed install must remain when off-PATH resolve fails before wipe: {err}"
-    );
+impl Drop for ClearedPath {
+    fn drop(&mut self) {
+        match &self.saved {
+            Some(path) => std::env::set_var("PATH", path),
+            None => std::env::remove_var("PATH"),
+        }
+    }
 }
 
 fn fake_runner(_exe: &str) -> Box<dyn numan_cli::nu::autoload::CandidateRunner> {
@@ -242,8 +232,8 @@ fn doctor_repairs_malformed_active_version_marker() {
     let finding = scan
         .findings
         .iter()
-        .find(|f| f.id == "nu.active_version.invalid")
-        .expect("expected nu.active_version.invalid");
+        .find(|f| f.id == "nu.active_version.malformed")
+        .expect("expected nu.active_version.malformed");
     assert_eq!(finding.severity, Severity::Error);
 
     let code = execute_with_options(
@@ -280,7 +270,7 @@ fn doctor_repairs_malformed_active_version_marker() {
     let repaired = after
         .findings
         .iter()
-        .find(|f| f.id == "nu.active_version.invalid")
+        .find(|f| f.id == "nu.active_version.malformed")
         .expect("finding remains as ok after repair");
     assert_eq!(repaired.severity, Severity::Ok);
 }
@@ -314,7 +304,6 @@ fn doctor_repairs_layout_when_lockfile_malformed() {
             "--json",
         ])
         .env("NUMAN_ALLOW_UNSIGNED", "1")
-        .stdin(std::process::Stdio::null())
         .output()
         .expect("run numan doctor --json with malformed lockfile");
 
@@ -460,8 +449,8 @@ fn doctor_reports_off_path_nu_without_download() {
 
     *TEST_OFF_PATH.lock().unwrap() = Some(off_path.clone());
 
-    let _path_guard = PathRestoreGuard::new();
-    std::env::set_var("PATH", "");
+    let _path_guard = TEST_PATH_GUARD.lock().unwrap();
+    let _cleared_path = ClearedPath::new();
     let args = DoctorArgs {
         scan: true,
         json: false,
@@ -508,8 +497,8 @@ fn doctor_default_does_not_auto_install_managed_nu() {
     std::fs::create_dir_all(root).unwrap();
 
     *TEST_NU_SETUP_CALLED.lock().unwrap() = false;
-    let _path_guard = PathRestoreGuard::new();
-    std::env::set_var("PATH", "");
+    let _path_guard = TEST_PATH_GUARD.lock().unwrap();
+    let _cleared_path = ClearedPath::new();
     let args = DoctorArgs {
         scan: false,
         json: false,
@@ -546,8 +535,8 @@ fn doctor_fix_registers_off_path_nu_without_network() {
     *TEST_OFF_PATH.lock().unwrap() = Some(off_path.clone());
     *TEST_NU_SETUP_CALLED.lock().unwrap() = false;
 
-    let _path_guard = PathRestoreGuard::new();
-    std::env::set_var("PATH", "");
+    let _path_guard = TEST_PATH_GUARD.lock().unwrap();
+    let _cleared_path = ClearedPath::new();
     let args = DoctorArgs {
         scan: false,
         json: false,
@@ -560,17 +549,17 @@ fn doctor_fix_registers_off_path_nu_without_network() {
             skip_network: true,
             nu_setup_repair: Some(nu_setup_repair_test),
             discover_off_path: Some(discover_off_path_test),
-            init_repair: Some(fake_init),
             ..test_doctor_options()
         },
     )
     .unwrap();
 
     assert!(*TEST_NU_SETUP_CALLED.lock().unwrap());
-    assert_eq!(
-        code, 0,
-        "successful off-PATH registration must leave doctor with a clean exit"
+    assert!(
+        managed_nu_binary(root).exists(),
+        "off-PATH registration must not delete managed tools/nushell"
     );
+    assert_eq!(code, 1);
 }
 
 fn fake_deactivate_repair(args: &DeactivateArgs, root: &Path) -> anyhow::Result<()> {
@@ -725,8 +714,8 @@ fn test_doctor_options() -> DoctorOptions {
 
 #[test]
 fn doctor_reports_path_nu_not_found_when_path_cleared() {
-    let _path_guard = PathRestoreGuard::new();
-    std::env::set_var("PATH", "");
+    let _path_guard = TEST_PATH_GUARD.lock().unwrap();
+    let _cleared_path = ClearedPath::new();
 
     let dir = TempDir::new().unwrap();
     let root = dir.path();

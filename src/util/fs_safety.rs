@@ -438,4 +438,47 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert!(is_symlink_or_reparse(&link).unwrap());
     }
+
+    // ── setup_subcommand_lock ───────────────────────────────────────────────
+
+    #[test]
+    fn setup_subcommand_lock_runs_closure_and_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let seen = setup_subcommand_lock(root, "test op", || Ok::<_, anyhow::Error>(42)).unwrap();
+        assert_eq!(seen, 42);
+        // Lock is released on Drop: a second acquisition after the first
+        // closure returned must succeed.
+        acquire_mutation_lock(root).expect("lock should be free after first closure returns");
+    }
+
+    #[test]
+    fn setup_subcommand_lock_propagates_closure_error_and_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let err = setup_subcommand_lock::<(), _>(root, "test op", || {
+            anyhow::bail!("closure failed");
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("closure failed"));
+        // Lock must still be released on the error path so a retry succeeds.
+        acquire_mutation_lock(root).expect("lock should be free even on error");
+    }
+
+    #[test]
+    fn setup_subcommand_lock_second_concurrent_call_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Hold the lock outside the helper. A second attempt must fail fast
+        // with the "another Numan mutation" message — this is the property
+        // AGENTS.md relies on to serialize destructive setup across
+        // concurrent invocations of the same binary on the same root.
+        let _held = acquire_mutation_lock(root).expect("first acquire");
+        let err = setup_subcommand_lock::<(), _>(root, "test op", || Ok(()))
+            .expect_err("concurrent acquire must fail");
+        assert!(
+            err.to_string().contains("another Numan mutation"),
+            "unexpected error: {err}"
+        );
+    }
 }

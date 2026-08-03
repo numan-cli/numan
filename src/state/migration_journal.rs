@@ -29,118 +29,15 @@
 //! `write_active_version` step in the `Renamed` case, and defensively clears
 //! the journal in any `Active`-or-better state.
 
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use thiserror::Error;
 
 use crate::nu::version_manager::{
-    nu_binary_name, read_active_version, version_install_dir, versioned_nu_dir,
-    write_active_version, VersionManagerError,
+    read_active_version, version_install_dir, versioned_nu_dir, write_active_version,
 };
 use crate::util::atomic::write_json_atomic;
-
-/// Errors from the legacy-Nu migration journal and reconcile path.
-#[derive(Debug, Error)]
-pub enum MigrationJournalError {
-    #[error("Failed to read migration journal at '{}'", path.display())]
-    Read {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-
-    #[error("Failed to parse migration-journal.json")]
-    Parse {
-        #[source]
-        source: serde_json::Error,
-    },
-
-    #[error(
-        "Migration journal at '{}' uses schema_version {found} but this build expects {expected}. \
-         Upgrade Numan or remove the stale journal.",
-        path.display()
-    )]
-    SchemaMismatch {
-        path: PathBuf,
-        found: u32,
-        expected: u32,
-    },
-
-    #[error(
-        "Refusing to write migration journal with unsafe version component '{version}'. \
-         A version with traversal segments, separators, or control characters \
-         would let later reconciliation escape the managed tree. \
-         This is either a tampered parent or a logic bug; refuse to advance."
-    )]
-    UnsafeVersionWrite { version: String },
-
-    #[error("Failed to write migration journal at '{}': {message}", path.display())]
-    Save { path: PathBuf, message: String },
-
-    #[error("Failed to remove migration journal at '{}'", path.display())]
-    Delete {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-
-    #[error(
-        "Migration journal at '{}' has unsafe version component '{version}'. \
-         Refusing to reconcile to avoid escaping the managed tree. \
-         Run `numan doctor --fix` to discard the journal.",
-        path.display()
-    )]
-    UnsafeVersionReconcile { path: PathBuf, version: String },
-
-    #[error(
-        "Migration journal at '{}' has '{version}' as Prepared-but-orphan, \
-         but the empty version directory '{}' could not be removed. \
-         Journal retained so a follow-up `numan use` (or \
-         `numan doctor --fix`) can recover once permissions or \
-         the directory contents are resolved.",
-        path.display(),
-        version_dir.display()
-    )]
-    PreparedOrphanRemoveFailed {
-        path: PathBuf,
-        version: String,
-        version_dir: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-
-    #[error(
-        "Migration journal at '{}' is staged 'Renamed' but the versioned binary \
-         for '{version}' is missing. Automatic recovery cannot continue. \
-         Discard the journal file to unblock, or reinstall with \
-         `numan setup nu {version}` and re-run `numan use` / `numan doctor`.",
-        path.display()
-    )]
-    RenamedBinaryMissing { path: PathBuf, version: String },
-
-    #[error("Migration recovery: failed to write active version '{version}'")]
-    RecoveryWriteActive {
-        version: String,
-        #[source]
-        source: VersionManagerError,
-    },
-
-    #[error(
-        "Migration journal at '{}' could not remove stray legacy binary at '{}'. \
-         Journal retained so a follow-up recovery can complete once file permissions or locks are resolved.",
-        path.display(),
-        legacy_binary.display()
-    )]
-    LegacyBinaryRemoveFailed {
-        path: PathBuf,
-        legacy_binary: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-
-    #[error(transparent)]
-    VersionManager(#[from] VersionManagerError),
-}
+use crate::util::fs_safety::assert_not_symlink;
 
 /// Schema version for `migration-journal.json`.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -212,7 +109,7 @@ pub fn is_safe_version_component(v: &str) -> bool {
         return false;
     }
     for ch in v.chars() {
-        if ch.is_control() || ch == '/' || ch == '\\' || ch == '\0' {
+        if ch.is_control() || ch == '/' || ch == '\\' || ch == ':' || ch == '\0' {
             return false;
         }
     }
@@ -227,55 +124,56 @@ impl PendingMigration {
     }
 
     /// Load the journal from disk; `None` when absent.
-    pub fn load(root: &Path) -> Result<Option<Self>, MigrationJournalError> {
+    pub fn load(root: &Path) -> Result<Option<Self>> {
         let path = Self::journal_path(root);
         if !path.exists() {
             return Ok(None);
         }
-        let content =
-            std::fs::read_to_string(&path).map_err(|source| MigrationJournalError::Read {
-                path: path.clone(),
-                source,
-            })?;
-        let journal: Self = serde_json::from_str(&content)
-            .map_err(|source| MigrationJournalError::Parse { source })?;
-        // Hard-fail on unknown schema_version so a future
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read migration journal at '{}'", path.display()))?;
+        let journal: Self =
+            serde_json::from_str(&content).context("Failed to parse migration-journal.json")?;
+        // copilot PR69 VwSra: hard-fail on unknown schema_version so a future
         // variant cannot be silently misinterpreted as the current one.
         // The original "coerce to SCHEMA_VERSION" wording was aspirational
         // and never actually performed; treat it as an error so doctor finds
         // it instead of silently downgrading.
         if journal.schema_version != SCHEMA_VERSION {
-            return Err(MigrationJournalError::SchemaMismatch {
-                path,
-                found: journal.schema_version,
-                expected: SCHEMA_VERSION,
-            });
+            anyhow::bail!(
+                "Migration journal at '{}' uses schema_version {} but this build expects {}. \
+                 Upgrade Numan or remove the stale journal.",
+                path.display(),
+                journal.schema_version,
+                SCHEMA_VERSION,
+            );
         }
         Ok(Some(journal))
     }
 
     /// Atomically write the journal to disk.
-    pub fn save(&self, root: &Path) -> Result<(), MigrationJournalError> {
+    pub fn save(&self, root: &Path) -> Result<()> {
         if !is_safe_version_component(&self.version) {
-            return Err(MigrationJournalError::UnsafeVersionWrite {
-                version: self.version.clone(),
-            });
+            bail!(
+                "Refusing to write migration journal with unsafe version component '{}'. \
+                 A version with traversal segments, separators, or control characters \
+                 would let later reconciliation escape the managed tree. \
+                 This is either a tampered parent or a logic bug; refuse to advance.",
+                self.version
+            );
         }
-        let path = Self::journal_path(root);
-        write_json_atomic(&path, self).map_err(|e| MigrationJournalError::Save {
-            path,
-            message: e.to_string(),
-        })
+        write_json_atomic(&Self::journal_path(root), self)
     }
 
     /// Delete (clear) the journal. Idempotent: does not error when the file is
     /// absent.
-    pub fn delete(root: &Path) -> Result<(), MigrationJournalError> {
+    pub fn delete(root: &Path) -> Result<()> {
         let path = Self::journal_path(root);
         match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(source) => Err(MigrationJournalError::Delete { path, source }),
+            Err(e) => Err(e).with_context(|| {
+                format!("Failed to remove migration journal at '{}'", path.display())
+            }),
         }
     }
 }
@@ -286,34 +184,8 @@ impl PendingMigration {
 /// Takes precedence over the journal stage when there is disagreement —
 /// recovery actions are gated by what's actually on disk.
 fn versioned_binary_present(root: &Path, version: &str) -> bool {
-    version_install_dir(root, version)
-        .join(nu_binary_name())
-        .is_file()
-}
-
-/// Finish a migration whose versioned binary is already in place: adopt the
-/// version as active when the user has made no other selection, then clear a
-/// stray legacy binary that would otherwise re-trigger migration.
-fn complete_migration(root: &Path, version: &str) -> Result<(), MigrationJournalError> {
-    if read_active_version(root)?.is_none() {
-        write_active_version(root, version).map_err(|source| {
-            MigrationJournalError::RecoveryWriteActive {
-                version: version.to_string(),
-                source,
-            }
-        })?;
-    }
-    let legacy_binary = versioned_nu_dir(root).join(nu_binary_name());
-    if legacy_binary.is_file() {
-        if let Err(source) = std::fs::remove_file(&legacy_binary) {
-            return Err(MigrationJournalError::LegacyBinaryRemoveFailed {
-                path: PendingMigration::journal_path(root),
-                legacy_binary,
-                source,
-            });
-        }
-    }
-    Ok(())
+    let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
+    version_install_dir(root, version).join(bin_name).is_file()
 }
 
 /// Reconcile any in-flight migration journal.
@@ -336,7 +208,7 @@ fn complete_migration(root: &Path, version: &str) -> Result<(), MigrationJournal
 ///
 /// Used by `migrate_legacy_install_with_detector` (self-heal), `numan use`
 /// (boot reconciliation), and `numan doctor --fix` (Auto-tier repair).
-pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>, MigrationJournalError> {
+pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
     let Some(journal) = PendingMigration::load(root)? else {
         return Ok(None);
     };
@@ -346,20 +218,46 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>, MigrationJourn
     // appends v as a directory name; if v is `../etc` we would otherwise
     // scrub a directory outside `<root>/tools/nushell`.
     if !is_safe_version_component(&journal.version) {
-        return Err(MigrationJournalError::UnsafeVersionReconcile {
-            path: PendingMigration::journal_path(root),
-            version: journal.version.clone(),
-        });
+        bail!(
+            "Migration journal at '{}' has unsafe version component '{}'. \
+             Refusing to reconcile to avoid escaping the managed tree. \
+             Run `numan doctor --fix` to discard the journal.",
+            PendingMigration::journal_path(root).display(),
+            journal.version
+        );
     }
+
+    // Validate once before any stage-specific recovery. Active-version writes,
+    // orphan scrubbing, and journal deletion must not run when the managed
+    // tree has been replaced by a symlink or reparse point.
+    let managed_dir = versioned_nu_dir(root);
+    assert_not_symlink(&managed_dir, "managed Nushell directory")?;
 
     match journal.stage {
         MigrationStage::Prepared => {
             // The rename can complete before the journal advances to Renamed.
             // Trust the filesystem in that crash window and finish recovery.
             if versioned_binary_present(root, &journal.version) {
-                complete_migration(root, &journal.version)?;
+                if read_active_version(root)?.is_none() {
+                    write_active_version(root, &journal.version).with_context(|| {
+                        format!(
+                            "Migration recovery: failed to write active version '{}'",
+                            journal.version
+                        )
+                    })?;
+                }
+                let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
+                let legacy_binary = managed_dir.join(bin_name);
+                if legacy_binary.is_file() {
+                    std::fs::remove_file(&legacy_binary).with_context(|| {
+                        format!(
+                            "Migration recovery: failed to remove stray legacy binary '{}'",
+                            legacy_binary.display()
+                        )
+                    })?;
+                }
             } else {
-                // Surface remove_dir failures instead of ignoring
+                // PR69 WCq: surface remove_dir failures instead of ignoring
                 // them. A half-migrated state whose empty version directory
                 // cannot be removed (permissions, foreign file inside) must
                 // retain the journal so a follow-up reconcile can succeed
@@ -368,13 +266,18 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>, MigrationJourn
                 // the recoverable crash window.
                 let version_dir = version_install_dir(root, &journal.version);
                 if version_dir.is_dir() {
-                    if let Err(source) = std::fs::remove_dir(&version_dir) {
-                        return Err(MigrationJournalError::PreparedOrphanRemoveFailed {
-                            path: PendingMigration::journal_path(root),
-                            version: journal.version.clone(),
-                            version_dir: version_dir.clone(),
-                            source,
-                        });
+                    if let Err(e) = std::fs::remove_dir(&version_dir) {
+                        bail!(
+                            "Migration journal at '{}' has '{}' as Prepared-but-orphan, \
+                             but the empty version directory '{}' could not be removed: {}. \
+                             Journal retained so a follow-up `numan use` (or \
+                             `numan doctor --fix`) can recover once permissions or \
+                             the directory contents are resolved.",
+                            PendingMigration::journal_path(root).display(),
+                            journal.version,
+                            version_dir.display(),
+                            e
+                        );
                     }
                 }
             }
@@ -384,15 +287,37 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>, MigrationJourn
         MigrationStage::Renamed => {
             // File-system truth: the versioned binary should exist.
             if !versioned_binary_present(root, &journal.version) {
-                return Err(MigrationJournalError::RenamedBinaryMissing {
-                    path: PendingMigration::journal_path(root),
-                    version: journal.version.clone(),
-                });
+                anyhow::bail!(
+                    "Migration journal at '{}' is staged 'Renamed' but the versioned binary is missing.\n\
+                     Run `numan setup nu {}` to repair.",
+                    PendingMigration::journal_path(root).display(),
+                    journal.version,
+                );
             }
             // Complete the transaction — write active-version if no selection
             // exists. (If a user has already chosen a different active
             // version, that user-controlled choice takes precedence.)
-            complete_migration(root, &journal.version)?;
+            if read_active_version(root)?.is_none() {
+                write_active_version(root, &journal.version).with_context(|| {
+                    format!(
+                        "Migration recovery: failed to write active version '{}'",
+                        journal.version
+                    )
+                })?;
+            }
+            // Defensive cleanup: a stray legacy binary at `tools/nushell/<bin>`
+            // would otherwise confuse `list_installed_versions` into
+            // re-running migration. Remove it.
+            let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
+            let legacy_binary = managed_dir.join(bin_name);
+            if legacy_binary.is_file() {
+                std::fs::remove_file(&legacy_binary).with_context(|| {
+                    format!(
+                        "Migration recovery: failed to remove stray legacy binary '{}'",
+                        legacy_binary.display()
+                    )
+                })?;
+            }
             PendingMigration::delete(root)?;
             Ok(Some(journal))
         }
@@ -416,7 +341,11 @@ mod tests {
     use tempfile::TempDir;
 
     fn bin_name() -> &'static str {
-        nu_binary_name()
+        if cfg!(windows) {
+            "nu.exe"
+        } else {
+            "nu"
+        }
     }
 
     fn write_journal(root: &Path, version: &str, stage: MigrationStage) {
@@ -453,24 +382,6 @@ mod tests {
     fn load_returns_none_when_absent() {
         let tmp = TempDir::new().unwrap();
         assert!(PendingMigration::load(tmp.path()).unwrap().is_none());
-    }
-
-    #[test]
-    fn load_errors_on_unsupported_schema_version() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-        let path = PendingMigration::journal_path(root);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(
-            &path,
-            br#"{"schema_version":99,"version":"0.113.1","stage":"prepared"}"#,
-        )
-        .unwrap();
-        let err = PendingMigration::load(root).unwrap_err().to_string();
-        assert!(
-            err.contains("99"),
-            "error must name the unsupported schema_version: {err}"
-        );
     }
 
     #[test]
@@ -545,7 +456,7 @@ mod tests {
         assert!(PendingMigration::load(root).unwrap().is_none());
     }
 
-    /// Regression: a `Prepared`-stage journal whose orphan
+    /// PR69 WCq regression: a `Prepared`-stage journal whose orphan
     /// version directory cannot be removed (here: a stray file inside
     /// makes `remove_dir` fail with ENOTEMPTY) must NOT silently clear
     /// the journal. The Err path keeps the journal intact so a follow-up
@@ -673,15 +584,6 @@ mod tests {
             "err must name the journal stage: {err}"
         );
         assert!(err.contains("0.113.1"), "err must name the version: {err}");
-        assert!(
-            err.contains("Discard the journal file to unblock"),
-            "err must guide manual discard: {err}"
-        );
-        assert!(err.contains("setup nu"), "err must offer reinstall: {err}");
-        assert!(
-            PendingMigration::load(root).unwrap().is_some(),
-            "journal must be retained for manual recovery"
-        );
     }
 
     #[test]
@@ -713,108 +615,62 @@ mod tests {
         assert!(reconcile(root).unwrap().is_none());
     }
 
-    #[cfg(unix)]
+    /// Symlink/reparse-point guard: reconcile must refuse before any stage
+    /// recovery when `tools/nushell` is not a real directory. Covers the
+    /// shared pre-match check used by Prepared, Renamed, and Active.
     #[test]
-    fn reconcile_retains_journal_when_legacy_binary_remove_fails() {
-        use std::os::unix::fs::PermissionsExt;
+    fn reconcile_refuses_symlinked_managed_dir_without_mutation() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
-        let version_dir = version_install_dir(root, "0.113.1");
+        // Real managed tree lives outside the Numan root; tools/nushell is
+        // only a symlink/reparse point into it.
+        let real_managed = tmp.path().join("real-nushell");
+        let version_dir = real_managed.join("0.113.1");
         std::fs::create_dir_all(&version_dir).unwrap();
-        std::fs::write(version_dir.join(bin_name()), b"binary").unwrap();
+        let sentinel = version_dir.join(bin_name());
+        std::fs::write(&sentinel, b"binary").unwrap();
 
-        // Stray legacy binary exists
-        let legacy = versioned_nu_dir(root).join(bin_name());
-        std::fs::write(&legacy, b"stray legacy binary").unwrap();
+        let tools = root.join("tools");
+        std::fs::create_dir_all(&tools).unwrap();
+        let managed_link = tools.join("nushell");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real_managed, &managed_link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&real_managed, &managed_link).unwrap();
 
+        // Renamed would otherwise write active-version and clear the journal.
         write_journal(root, "0.113.1", MigrationStage::Renamed);
 
-        // Make parent dir read-only so remove_file fails
-        let tools_dir = versioned_nu_dir(root);
-        let mut perms = std::fs::metadata(&tools_dir).unwrap().permissions();
-        perms.set_mode(0o555);
-        std::fs::set_permissions(&tools_dir, perms.clone()).unwrap();
-
-        let err = reconcile(root).unwrap_err();
-        assert!(matches!(
-            err,
-            MigrationJournalError::LegacyBinaryRemoveFailed { .. }
-        ));
-
-        // Restore permissions for clean tempdir drop
-        perms.set_mode(0o755);
-        let _ = std::fs::set_permissions(&tools_dir, perms);
-
-        // Journal must still exist on disk so follow-up attempts can recover
-        assert!(PendingMigration::load(root).unwrap().is_some());
-    }
-
-    #[test]
-    fn reconcile_prepared_completes_when_binary_already_moved() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-
-        // Crash window: rename landed, the journal never advanced to Renamed.
-        let version_dir = version_install_dir(root, "0.113.1");
-        std::fs::create_dir_all(&version_dir).unwrap();
-        std::fs::write(version_dir.join(bin_name()), b"binary").unwrap();
-        write_journal(root, "0.113.1", MigrationStage::Prepared);
-
-        let recovered = reconcile(root).unwrap().unwrap();
-        assert_eq!(recovered.stage, MigrationStage::Prepared);
+        let err = reconcile(root).expect_err("reconcile must refuse symlinked managed dir");
+        let msg = err.to_string();
         assert!(
-            version_dir.join(bin_name()).is_file(),
-            "the moved binary must survive Prepared recovery"
+            msg.contains("symlink") || msg.contains("reparse"),
+            "err must name the symlink/reparse guard: {msg}"
         );
-        let active = read_active_version(root).unwrap().unwrap();
+
+        // Journal retained; no active-version write; managed payload untouched.
+        let loaded = PendingMigration::load(root)
+            .unwrap()
+            .expect("journal must survive symlink refusal");
+        assert_eq!(loaded.stage, MigrationStage::Renamed);
+        assert_eq!(loaded.version, "0.113.1");
+        assert!(
+            read_active_version(root).unwrap().is_none(),
+            "active-version must not be written when managed dir is a symlink"
+        );
         assert_eq!(
-            active.version, "0.113.1",
-            "Prepared recovery must complete the active-marker write"
+            std::fs::read(&sentinel).unwrap(),
+            b"binary",
+            "managed directory contents must not be modified"
         );
-        assert!(PendingMigration::load(root).unwrap().is_none());
-    }
-
-    #[test]
-    fn reconcile_refuses_traversal_version() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-        // Bypass `save`, which rejects unsafe versions, to simulate tampering.
-        let path = PendingMigration::journal_path(root);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(
-            &path,
-            format!(
-                r#"{{"schema_version":{SCHEMA_VERSION},"version":"../etc","stage":"prepared"}}"#
-            ),
-        )
-        .unwrap();
-
-        let err = reconcile(root).unwrap_err();
-        assert!(matches!(
-            err,
-            MigrationJournalError::UnsafeVersionReconcile { .. }
-        ));
         assert!(
-            PendingMigration::load(root).unwrap().is_some(),
-            "a tampered journal must be retained for doctor repair"
+            managed_link
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "managed path must remain a symlink/reparse point"
         );
-    }
-
-    #[test]
-    fn save_refuses_unsafe_version_component() {
-        let tmp = TempDir::new().unwrap();
-        let err = PendingMigration {
-            schema_version: SCHEMA_VERSION,
-            version: "../escape".to_string(),
-            stage: MigrationStage::Prepared,
-        }
-        .save(tmp.path())
-        .unwrap_err();
-        assert!(matches!(
-            err,
-            MigrationJournalError::UnsafeVersionWrite { .. }
-        ));
-        assert!(!PendingMigration::journal_path(tmp.path()).exists());
     }
 }

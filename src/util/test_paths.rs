@@ -1,44 +1,44 @@
-//! Helpers for restoring process-wide PATH after a test.
+//! Helpers for restoring process-wide state after a test.
 //!
-//! Gated with `#[cfg(test)]` so release builds never compile or export this
-//! module. Integration tests under `tests/` keep a local copy of the guard.
-
-#![cfg(test)]
+//! Available to crate unit tests and `tests/` integration tests. Prefer wrapping
+//! any PATH mutation with [`PathRestoreGuard`] so concurrent tests cannot race
+//! on the process-global environment and so a developer shell is not left with
+//! a poisoned PATH after the test binary exits.
 
 use std::ffi::OsString;
 use std::sync::{Mutex, MutexGuard};
 
-/// Serializes process-global PATH mutations across tests.
-///
-/// Held for the lifetime of every [`PathRestoreGuard`] (including through
-/// `Drop` restoration) so concurrent tests cannot interleave `set_var` /
-/// `remove_var` on `PATH`.
-static PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
+/// Serializes every PATH snapshot/restore so concurrent tests cannot
+/// race through the process-global environment.
+static PATH_MUTEX: Mutex<()> = Mutex::new(());
 
 /// RAII guard that snapshots the process PATH on construction and
-/// restores it on drop. Use this around any test that mutates PATH so
-/// real-Nu runs from a developer terminal are not poisoned by the test
-/// process.
+/// restores it on drop. Acquires a shared process-wide mutex so callers
+/// never need a separate `Mutex` for PATH serialization.
+///
+/// Use this around any test that mutates PATH so real-Nu runs from a
+/// developer terminal are not poisoned by the test process, and so
+/// parallel ignored acceptance tests cannot overwrite each other's PATH.
 ///
 /// # Example
 ///
+/// Prefer a non-doctest fence (`text`): Real-Nu acceptance runs
+/// `cargo test -- --ignored`, which also executes rustdoc examples marked
+/// `ignore`.
+///
 /// ```text
 /// let _path_guard = PathRestoreGuard::new();
-/// // mutate PATH for the test...
+/// // mutate PATH...
 /// // drop restores original PATH (or unsets it if it was unset)
 /// ```
-#[must_use = "PathRestoreGuard restores PATH on drop; bind it to a variable"]
 pub struct PathRestoreGuard {
     original: Option<OsString>,
-    /// Held until drop completes so PATH restore is race-free.
     _lock: MutexGuard<'static, ()>,
 }
 
 impl PathRestoreGuard {
     pub fn new() -> Self {
-        // Poisoned lock still allows progress: a panicking PATH test should
-        // not permanently brick the suite.
-        let lock = PATH_ENV_LOCK
+        let lock = PATH_MUTEX
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         Self {
