@@ -1,32 +1,49 @@
-//! Test-only helpers for restoring process-wide state after a test.
+//! Helpers for restoring process-wide state after a test.
 //!
-//! `#[cfg(test)]`-gated at the module declaration in `src/util/mod.rs`, so
-//! this module is never compiled into release builds. It is reachable only
-//! from inline `cfg(test)` unit tests, not from integration tests under
-//! `tests/`.
+//! Available to crate unit tests and `tests/` integration tests. Prefer wrapping
+//! any PATH mutation with [`PathRestoreGuard`] so concurrent tests cannot race
+//! on the process-global environment and so a developer shell is not left with
+//! a poisoned PATH after the test binary exits.
 
 use std::ffi::OsString;
+use std::sync::{Mutex, MutexGuard};
+
+/// Serializes every PATH snapshot/restore so concurrent tests cannot
+/// race through the process-global environment.
+static PATH_MUTEX: Mutex<()> = Mutex::new(());
 
 /// RAII guard that snapshots the process PATH on construction and
-/// restores it on drop. Use this around any test that mutates PATH so
-/// real-Nu runs from a developer terminal are not poisoned by the test
-/// process.
+/// restores it on drop. Acquires a shared process-wide mutex so callers
+/// never need a separate `Mutex` for PATH serialization.
+///
+/// Use this around any test that mutates PATH so real-Nu runs from a
+/// developer terminal are not poisoned by the test process, and so
+/// parallel ignored acceptance tests cannot overwrite each other's PATH.
 ///
 /// # Example
 ///
-/// ```ignore
+/// Prefer a non-doctest fence (`text`): Real-Nu acceptance runs
+/// `cargo test -- --ignored`, which also executes rustdoc examples marked
+/// `ignore`.
+///
+/// ```text
 /// let _path_guard = PathRestoreGuard::new();
-/// prepend_process_path_for_test("...");
+/// // mutate PATH...
 /// // drop restores original PATH (or unsets it if it was unset)
 /// ```
 pub struct PathRestoreGuard {
     original: Option<OsString>,
+    _lock: MutexGuard<'static, ()>,
 }
 
 impl PathRestoreGuard {
     pub fn new() -> Self {
+        let lock = PATH_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         Self {
             original: std::env::var_os("PATH"),
+            _lock: lock,
         }
     }
 }

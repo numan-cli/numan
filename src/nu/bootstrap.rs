@@ -2,6 +2,7 @@
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use crate::core::integrity;
@@ -19,6 +20,19 @@ use crate::util::fs_safety::assert_not_symlink;
 const RELEASES_LATEST: &str = "https://api.github.com/repos/nushell/nushell/releases/latest";
 const RELEASES_TAGS_BASE: &str = "https://api.github.com/repos/nushell/nushell/releases/tags/";
 const USER_AGENT: &str = "numan-cli (https://github.com/tonythethompson/numan)";
+
+/// Snapshot established Numan state before a `setup nu` install/PATH mutation.
+fn snapshot_before_nu_setup(root: &Path, context: &'static str) -> Result<()> {
+    create_snapshot(
+        root,
+        SnapshotReason::PreMutation,
+        SnapshotTrigger::Install,
+        None,
+        None,
+    )
+    .context(context)?;
+    Ok(())
+}
 
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
@@ -240,12 +254,10 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
         )
     })?;
     make_executable(&dest)?;
-    std::fs::write(dest_dir.join("VERSION"), version.as_bytes()).with_context(|| {
-        format!(
-            "Failed to write VERSION file in '{}'",
-            dest_dir.display()
-        )
-    })?;
+    // Keep the legacy VERSION marker for backwards compat with tooling that
+    // greps for it, but under the versioned dir so it never shadows a sibling
+    // version's marker.
+    std::fs::write(dest_dir.join("VERSION"), version.as_bytes())?;
     Ok(dest)
 }
 
@@ -446,6 +458,9 @@ fn path_parent_for_registration(input: &Path, resolved: &Path) -> Result<PathBuf
         .map(|parent| parent.to_path_buf())
 }
 
+/// Re-export for callers that historically imported this from bootstrap.
+pub use crate::util::confirm::hoisted_audit_message;
+
 /// Register an existing Nushell binary: prepend its directory to PATH and persist when allowed.
 pub fn register_existing_nu(binary: &Path, options: &NuSetupOptions) -> Result<PathBuf> {
     let input = binary.to_path_buf();
@@ -468,16 +483,22 @@ pub fn register_existing_nu(binary: &Path, options: &NuSetupOptions) -> Result<P
         // Audit trail for the hoisted consent: the caller (typically
         // `execute_use_path` / `execute_use_existing`) already collected
         // the destructive-step consent (managed-tree deletion + PATH add)
-        // via its own `confirm_or_bail(...)` before reaching this point.
-        // Direct callers (CLI subcommand and doctor --fix) leave the flag
+        // via `require_tty_or_yes` + `confirm_or_bail` before reaching here.
+        // Direct callers (CLI subcommand and doctor repair) leave the flag
         // `false` and the inner prompt continues to fire, preserving
         // backward-compatible UX.
-        eprintln!(
-            "(audit) prompt hoisted; skipping internal PATH-confirmation prompt \
-             for '{}' (caller has already gathered destructive-step consent).",
-            parent.display()
-        );
+        eprintln!("{}", crate::util::confirm::hoisted_audit_message(&parent));
     } else {
+        // Fail closed on non-TTY without `--yes`. `confirm_or_bail` alone
+        // would auto-confirm and mutate PATH / active-version state.
+        let is_tty = options
+            .is_tty
+            .unwrap_or_else(|| std::io::stdin().is_terminal());
+        crate::util::confirm::require_tty_or_yes_with_tty(
+            options.yes,
+            "off-path Nu PATH registration",
+            is_tty,
+        )?;
         println!(
             "This will add '{}' to your user PATH so Nushell can be found.",
             parent.display()
@@ -663,8 +684,11 @@ pub struct NuSetupOptions {
     /// suppressed and replaced with an audit log, so the user sees one prompt
     /// instead of two. Default `false` preserves the original two-prompt UX
     /// for direct callers (`numan setup nu use <path>`, hidden legacy flags,
-    /// `numan doctor --fix`'s off-PATH repair).
+    /// doctor off-PATH repair).
     pub caller_consented_destructive: bool,
+    /// Override stdin TTY detection for the non-interactive guard (tests).
+    /// `None` uses `stdin().is_terminal()`.
+    pub is_tty: Option<bool>,
 }
 
 pub fn execute_nu_setup(
@@ -715,13 +739,33 @@ where
     let any_version_installed =
         options.version.is_none() && !version_manager::list_installed_versions(root)?.is_empty();
     if (dest.is_file() || any_version_installed) && !options.force {
-        // For the `latest` flow `dest` is the legacy placeholder (never a
-        // file in the versioned world); resolve the effective installed
-        // binary so PATH prepend/persist point at a real versioned file.
-        let effective = if dest.is_file() {
+        // For the `latest` flow `dest` is the legacy placeholder. Prefer any
+        // versioned install (active marker, then newest on-tree) so a leftover
+        // `tools/nushell/nu` does not win over `<version>/nu`. Fall back to
+        // the legacy path only when nothing versioned is present.
+        let effective = if options.version.is_none() {
+            version_manager::active_nu_binary(root)
+                .ok()
+                .flatten()
+                .or_else(|| {
+                    version_manager::latest_installed_version(root)
+                        .ok()
+                        .flatten()
+                        .map(|v| version_manager::version_binary(root, &v))
+                })
+                .filter(|p| p.is_file())
+                .unwrap_or_else(|| dest.clone())
+        } else if dest.is_file() {
             dest
         } else {
-            version_manager::active_nu_binary(root)?
+            // DanglingActive must not abort this short-circuit: other on-tree
+            // versions may still be installed (any_version_installed), and the
+            // error text tells users to run `numan setup nu` — the command we
+            // are already in. Degrade like the no-marker path and prefer the
+            // newest installed binary.
+            version_manager::active_nu_binary(root)
+                .ok()
+                .flatten()
                 .or_else(|| {
                     version_manager::latest_installed_version(root)
                         .ok()
@@ -731,6 +775,11 @@ where
                 .unwrap_or_else(|| dest.clone())
         };
         if options.yes {
+            // PATH persistence mutates user shell state; snapshot first.
+            snapshot_before_nu_setup(
+                root,
+                "Failed to create pre-mutation snapshot for existing `numan setup nu`",
+            )?;
             let tools_dir = match effective.parent() {
                 Some(parent) => parent.to_path_buf(),
                 None => managed_nu_dir(root),
@@ -739,17 +788,20 @@ where
             if !options.skip_path {
                 persist_user_path(&effective)?;
             }
-            // Pinned re-runs with `--yes` must still record the requested
-            // version as active so `numan use list` stays consistent even
-            // when the binary is already present.
-            if let Some(version) = &options.version {
-                let pinned = version_manager::normalize_version(version).with_context(|| {
-                    format!("Failed to normalize requested version '{version}'")
-                })?;
-                version_manager::write_active_version(root, &pinned).with_context(|| {
-                    format!("Failed to persist installed Nu version '{pinned}' as active")
-                })?;
-            }
+            // Both pinned and latest re-runs with `--yes` must still record an
+            // active marker so `numan use list` stays consistent when the
+            // binary is already present.
+            let active_version = match &options.version {
+                Some(version) => {
+                    version_manager::normalize_version(version).with_context(|| {
+                        format!("Failed to normalize requested version '{version}'")
+                    })?
+                }
+                None => resolve_latest_active_version(root, &effective)?,
+            };
+            version_manager::write_active_version(root, &active_version).with_context(|| {
+                format!("Failed to persist installed Nu version '{active_version}' as active")
+            })?;
             println!(
                 "Nushell already installed at '{}' (unchanged).",
                 effective.display()
@@ -772,37 +824,38 @@ where
         platform.triple
     );
     // Refuse to proceed without explicit consent in non-interactive sessions.
-    // `confirm_or_bail` auto-confirms on a pipe otherwise, which would silently
-    // trigger a download and subsequent PATH mutation.
-    crate::util::confirm::require_tty_or_yes(options.yes, "Nushell setup")?;
+    // Routes through `require_tty_or_yes` so the audit-grade eprintln output
+    // is identical across every destructive setup entry — `cmd::setup::*`
+    // (off-path registration, managed removal) and this download path share
+    // one helper, one audit pattern, one source of truth. The pipe fallback
+    // that `confirm_or_bail` would auto-promote is closed here instead.
+    let is_tty = options
+        .is_tty
+        .unwrap_or_else(|| std::io::stdin().is_terminal());
+    crate::util::confirm::require_tty_or_yes_with_tty(options.yes, "Nushell setup", is_tty)?;
     crate::util::confirm::confirm_or_bail("Proceed?", options.yes, "Nushell setup cancelled.")?;
 
     // Snapshot established state right before the download/install mutates the
     // filesystem. Same lifecycle boundary used by install/update/remove/activate
     // per AGENTS.md.
-    create_snapshot(
+    snapshot_before_nu_setup(
         root,
-        SnapshotReason::PreMutation,
-        SnapshotTrigger::Install,
-        None,
-        None,
-    )
-    .with_context(|| "Failed to create pre-install snapshot for `numan setup nu`")?;
+        "Failed to create pre-install snapshot for `numan setup nu`",
+    )?;
 
     let installed = install(root, platform)?;
 
-    // Always mark the version that was actually installed.  For a `latest`
-    // request this avoids leaving a stale marker pointing at an older binary.
-    let installed_version = installed
-        .parent()
-        .and_then(|parent| parent.file_name())
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| anyhow::anyhow!("Installed Nu path has no version directory"))?;
-    version_manager::write_active_version(root, installed_version).with_context(|| {
-        format!(
-            "Failed to persist installed Nu version '{}' as active",
-            installed_version
-        )
+    // Persist the freshly installed version as active for both pinned and
+    // latest flows. Latest derives the concrete tag from the on-tree path
+    // (`…/tools/nushell/<version>/<bin>`) so `numan use list` marks it
+    // `(active)` without requiring a follow-up `numan use latest`.
+    let active_version = match &options.version {
+        Some(version) => version_manager::normalize_version(version)
+            .with_context(|| format!("Failed to normalize requested version '{version}'"))?,
+        None => version_from_on_tree_binary(&installed)?,
+    };
+    version_manager::write_active_version(root, &active_version).with_context(|| {
+        format!("Failed to persist installed Nu version '{active_version}' as active")
     })?;
 
     // PR69 Srm: with the versioned layout, the binary lives at
@@ -837,8 +890,68 @@ where
     println!("Next steps:");
     println!("  {}", crate::util::hints::CMD_INIT_REFRESH);
     println!("  numan doctor");
-    println!("  Re-activate packages you still want: numan activate");
+    println!(
+        "  Re-activate packages you still want: {}",
+        crate::util::hints::CMD_ACTIVATE
+    );
     Ok(installed)
+}
+
+/// Derive the managed version label from an on-tree install path
+/// (`…/tools/nushell/<version>/<bin>`).
+fn version_from_on_tree_binary(installed: &Path) -> Result<String> {
+    let version_dir = installed.parent().with_context(|| {
+        format!(
+            "Installed Nu binary '{}' has no parent directory",
+            installed.display()
+        )
+    })?;
+    let name = version_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .with_context(|| {
+            format!(
+                "Installed Nu version directory '{}' is not valid UTF-8",
+                version_dir.display()
+            )
+        })?;
+    version_manager::normalize_version(name).with_context(|| {
+        format!(
+            "Failed to normalize Nu version '{name}' from install path '{}'",
+            installed.display()
+        )
+    })
+}
+
+/// Resolve the active version for a `latest` short-circuit.
+///
+/// Prefers the versioned on-tree path. When only a legacy
+/// `<root>/tools/nushell/<bin>` remains, migrate it first so the marker can
+/// point at a real `X.Y.Z` install.
+fn resolve_latest_active_version(root: &Path, effective: &Path) -> Result<String> {
+    if let Ok(version) = version_from_on_tree_binary(effective) {
+        return Ok(version);
+    }
+    if let Some(version) = version_manager::latest_installed_version(root)? {
+        return Ok(version);
+    }
+    if effective == managed_nu_binary(root) {
+        crate::nu::migrate_legacy::migrate_legacy_install(root).with_context(|| {
+            format!(
+                "Failed to migrate legacy Nu at '{}' before writing the active-version marker",
+                effective.display()
+            )
+        })?;
+        if let Some(version) = version_manager::latest_installed_version(root)? {
+            return Ok(version);
+        }
+        anyhow::bail!(
+            "Legacy Nu at '{}' could not be migrated to a versioned install. \
+             Run `numan doctor --fix` or `numan use <version>`.",
+            effective.display()
+        );
+    }
+    version_from_on_tree_binary(effective)
 }
 
 #[cfg(test)]
@@ -1016,6 +1129,7 @@ mod tests {
             // Install path doesn't enter `register_existing_nu`, but the
             // initializer needs this field for the struct to compile.
             caller_consented_destructive: false,
+            is_tty: None,
         };
 
         // Fake installer: write a versioned-style binary at tools/nushell/<v>/
@@ -1043,6 +1157,195 @@ mod tests {
             listed.contains(&"0.113.1".to_string()),
             "expected 0.113.1 in installed list, got: {:?}",
             listed
+        );
+    }
+
+    #[test]
+    fn execute_nu_setup_latest_persists_active_marker_from_install_path() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let platform = Platform::detect();
+        let options = NuSetupOptions {
+            yes: true,
+            force: false,
+            skip_path: true,
+            version: None,
+            caller_consented_destructive: false,
+            is_tty: None,
+        };
+
+        let result = execute_nu_setup_with_installer(root, &platform, &options, |r, _p| {
+            let bin_dir = version_manager::version_install_dir(r, "0.114.0");
+            std::fs::create_dir_all(&bin_dir).unwrap();
+            let bin = version_manager::version_binary(r, "0.114.0");
+            std::fs::write(&bin, b"fake nu").unwrap();
+            Ok(bin)
+        })
+        .unwrap();
+
+        assert!(result.is_file());
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.114.0");
+        assert_eq!(
+            version_manager::active_nu_binary(root).unwrap().unwrap(),
+            result
+        );
+    }
+
+    #[test]
+    fn execute_nu_setup_latest_already_installed_yes_writes_active_marker() {
+        use crate::util::test_paths::PathRestoreGuard;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let platform = Platform::detect();
+        let _path_guard = PathRestoreGuard::new();
+        let bin_dir = version_manager::version_install_dir(root, "0.112.0");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let bin = version_manager::version_binary(root, "0.112.0");
+        std::fs::write(&bin, b"fake nu").unwrap();
+
+        let options = NuSetupOptions {
+            yes: true,
+            force: false,
+            skip_path: true,
+            version: None,
+            caller_consented_destructive: false,
+            is_tty: None,
+        };
+
+        // Installer must not run: already-installed + `--yes` short-circuits.
+        let result = execute_nu_setup_with_installer(root, &platform, &options, |_r, _p| {
+            panic!("installer should not run when a versioned Nu is already present");
+        })
+        .unwrap();
+
+        assert_eq!(result, bin);
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.112.0");
+    }
+
+    #[test]
+    fn latest_setup_short_circuit_ignores_dangling_active_marker() {
+        use crate::util::test_paths::PathRestoreGuard;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let platform = Platform::detect();
+        let _path_guard = PathRestoreGuard::new();
+
+        // Real on-tree install that the latest-flow short-circuit should fall
+        // back to when the active marker is dangling.
+        let good = version_manager::version_binary(root, "0.113.1");
+        std::fs::create_dir_all(good.parent().unwrap()).unwrap();
+        std::fs::write(&good, b"fake nu").unwrap();
+
+        // Stale active marker pointing at a missing version.
+        version_manager::write_active_version(root, "0.99.0").unwrap();
+        assert!(
+            version_manager::active_nu_binary(root).is_err(),
+            "precondition: active marker must be dangling"
+        );
+
+        let options = NuSetupOptions {
+            yes: true,
+            force: false,
+            skip_path: true,
+            version: None,
+            caller_consented_destructive: false,
+            is_tty: None,
+        };
+
+        let result = execute_nu_setup_with_installer(root, &platform, &options, |_r, _p| {
+            panic!("installer must not run when another on-tree Nu is already installed");
+        })
+        .expect("dangling active must not block latest short-circuit");
+
+        assert_eq!(result, good);
+        // Short-circuit should heal the dangling marker to the effective install.
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.113.1");
+    }
+
+    #[test]
+    fn execute_nu_setup_refuses_non_tty_without_yes_and_skips_installer() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let platform = Platform::detect();
+        let options = NuSetupOptions {
+            yes: false,
+            force: false,
+            skip_path: true,
+            version: Some("0.113.1".to_string()),
+            caller_consented_destructive: false,
+            is_tty: Some(false),
+        };
+
+        let err = execute_nu_setup_with_installer(root, &platform, &options, |_r, _p| {
+            panic!("installer must not run when non-TTY guard refuses");
+        })
+        .expect_err("non-TTY without --yes must refuse before install");
+
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("non-interactive") || msg.contains("Refusing destructive"),
+            "expected non-TTY refusal, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn register_existing_nu_refuses_non_tty_without_yes_before_path_mutation() {
+        let nu_name = nu_binary_name();
+        let Some(src) = std::env::var_os("PATH").and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join(nu_name))
+                .find(|p| p.is_file() && validate_nushell_binary(p).is_ok())
+        }) else {
+            // Unit CI without Nu on PATH cannot exercise the post-validate gate.
+            return;
+        };
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let existing_dir = dir.path().join("existing-nu");
+        std::fs::create_dir_all(&existing_dir).unwrap();
+        let existing = existing_dir.join(nu_name);
+        std::fs::copy(&src, &existing).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&existing).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&existing, perms).unwrap();
+        }
+
+        let before_path = std::env::var_os("PATH");
+        let options = NuSetupOptions {
+            yes: false,
+            force: false,
+            skip_path: true,
+            version: None,
+            caller_consented_destructive: false,
+            is_tty: Some(false),
+        };
+
+        let err = register_existing_nu(&existing, &options)
+            .expect_err("non-TTY without --yes must refuse before PATH/active mutation");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("non-interactive") || msg.contains("Refusing destructive"),
+            "expected non-TTY refusal, got: {msg}"
+        );
+        assert_eq!(
+            std::env::var_os("PATH"),
+            before_path,
+            "PATH must be unchanged after refusal"
+        );
+        assert!(
+            version_manager::read_active_version(root)
+                .unwrap()
+                .is_none(),
+            "active-version marker must not be written after refusal"
         );
     }
 }

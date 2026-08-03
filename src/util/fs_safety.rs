@@ -129,7 +129,7 @@ where
 {
     let _lock = acquire_mutation_lock(root).with_context(|| {
         format!(
-            "Failed to acquire mutation lock for destructive '{what}' on '{}'.",
+            "Refusing destructive '{what}' on '{}': another Numan mutation is already in progress.",
             root.display()
         )
     })?;

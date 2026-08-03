@@ -31,13 +31,13 @@
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// Errors returned by the migration journal API.
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct MigrationJournalError(#[from] anyhow::Error);
-use std::path::{Path, PathBuf};
 
 use crate::nu::version_manager::{
     read_active_version, version_install_dir, versioned_nu_dir, write_active_version,
@@ -146,7 +146,8 @@ impl PendingMigration {
         // it instead of silently downgrading.
         if journal.schema_version != SCHEMA_VERSION {
             anyhow::bail!(
-                "Migration journal at '{}' uses schema_version {} but this build expects {}.                  Upgrade Numan or remove the stale journal.",
+                "Migration journal at '{}' uses schema_version {} but this build expects {}. \
+                 Upgrade Numan or remove the stale journal.",
                 path.display(),
                 journal.schema_version,
                 SCHEMA_VERSION,
@@ -213,7 +214,9 @@ fn versioned_binary_present(root: &Path, version: &str) -> bool {
 ///
 /// Used by `migrate_legacy_install_with_detector` (self-heal), `numan use`
 /// (boot reconciliation), and `numan doctor --fix` (Auto-tier repair).
-pub fn reconcile(root: &Path) -> std::result::Result<Option<PendingMigration>, MigrationJournalError> {
+pub fn reconcile(
+    root: &Path,
+) -> std::result::Result<Option<PendingMigration>, MigrationJournalError> {
     reconcile_inner(root).map_err(MigrationJournalError::from)
 }
 
@@ -236,6 +239,12 @@ fn reconcile_inner(root: &Path) -> Result<Option<PendingMigration>> {
         );
     }
 
+    // Validate once before any stage-specific recovery. Active-version writes,
+    // orphan scrubbing, and journal deletion must not run when the managed
+    // tree has been replaced by a symlink or reparse point.
+    let managed_dir = versioned_nu_dir(root);
+    assert_not_symlink(&managed_dir, "managed Nushell directory")?;
+
     match journal.stage {
         MigrationStage::Prepared => {
             // The rename can complete before the journal advances to Renamed.
@@ -249,8 +258,6 @@ fn reconcile_inner(root: &Path) -> Result<Option<PendingMigration>> {
                         )
                     })?;
                 }
-                let managed_dir = versioned_nu_dir(root);
-                assert_not_symlink(&managed_dir, "managed Nushell directory")?;
                 let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
                 let legacy_binary = managed_dir.join(bin_name);
                 if legacy_binary.is_file() {
@@ -269,8 +276,6 @@ fn reconcile_inner(root: &Path) -> Result<Option<PendingMigration>> {
                 // once the user resolves the underlying issue. Discarding
                 // both the orphan dir AND the journal would silently lose
                 // the recoverable crash window.
-                let managed_dir = versioned_nu_dir(root);
-                assert_not_symlink(&managed_dir, "managed Nushell directory")?;
                 let version_dir = version_install_dir(root, &journal.version);
                 if version_dir.is_dir() {
                     if let Err(e) = std::fs::remove_dir(&version_dir) {
@@ -315,8 +320,6 @@ fn reconcile_inner(root: &Path) -> Result<Option<PendingMigration>> {
             // Defensive cleanup: a stray legacy binary at `tools/nushell/<bin>`
             // would otherwise confuse `list_installed_versions` into
             // re-running migration. Remove it.
-            let managed_dir = versioned_nu_dir(root);
-            assert_not_symlink(&managed_dir, "managed Nushell directory")?;
             let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
             let legacy_binary = managed_dir.join(bin_name);
             if legacy_binary.is_file() {
@@ -622,5 +625,64 @@ mod tests {
         assert!(reconcile(root).unwrap().is_some());
         // Second call: no journal left; returns None.
         assert!(reconcile(root).unwrap().is_none());
+    }
+
+    /// Symlink/reparse-point guard: reconcile must refuse before any stage
+    /// recovery when `tools/nushell` is not a real directory. Covers the
+    /// shared pre-match check used by Prepared, Renamed, and Active.
+    #[test]
+    fn reconcile_refuses_symlinked_managed_dir_without_mutation() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // Real managed tree lives outside the Numan root; tools/nushell is
+        // only a symlink/reparse point into it.
+        let real_managed = tmp.path().join("real-nushell");
+        let version_dir = real_managed.join("0.113.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        let sentinel = version_dir.join(bin_name());
+        std::fs::write(&sentinel, b"binary").unwrap();
+
+        let tools = root.join("tools");
+        std::fs::create_dir_all(&tools).unwrap();
+        let managed_link = tools.join("nushell");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real_managed, &managed_link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&real_managed, &managed_link).unwrap();
+
+        // Renamed would otherwise write active-version and clear the journal.
+        write_journal(root, "0.113.1", MigrationStage::Renamed);
+
+        let err = reconcile(root).expect_err("reconcile must refuse symlinked managed dir");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("symlink") || msg.contains("reparse"),
+            "err must name the symlink/reparse guard: {msg}"
+        );
+
+        // Journal retained; no active-version write; managed payload untouched.
+        let loaded = PendingMigration::load(root)
+            .unwrap()
+            .expect("journal must survive symlink refusal");
+        assert_eq!(loaded.stage, MigrationStage::Renamed);
+        assert_eq!(loaded.version, "0.113.1");
+        assert!(
+            read_active_version(root).unwrap().is_none(),
+            "active-version must not be written when managed dir is a symlink"
+        );
+        assert_eq!(
+            std::fs::read(&sentinel).unwrap(),
+            b"binary",
+            "managed directory contents must not be modified"
+        );
+        assert!(
+            managed_link
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "managed path must remain a symlink/reparse point"
+        );
     }
 }

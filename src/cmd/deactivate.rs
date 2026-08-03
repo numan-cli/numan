@@ -39,10 +39,6 @@ pub struct DeactivateArgs {
     /// Package IDs (owner/name) to deactivate. Omit to deactivate all active plugins and modules.
     pub packages: Vec<String>,
 
-    /// Skip confirmation prompts
-    #[arg(long)]
-    pub yes: bool,
-
     /// Show detailed output
     #[arg(long)]
     pub verbose: bool,
@@ -146,10 +142,8 @@ pub fn execute_with_candidate_runner_and_unregistrar(
     }
     drop(planning_lock);
 
-    // 5. Show consent table and confirm
+    // 5. Show consent table (informational only; no prompt)
     print_consent_table(&targets_requested, &nu_paths.plugin_registry_path);
-
-    crate::util::confirm::confirm_or_bail("Proceed?", args.yes, "Deactivation cancelled.")?;
 
     // 6. Reacquire the root mutation lock after consent.
     let _lock = acquire_mutation_lock(root)?;
@@ -166,7 +160,7 @@ pub fn execute_with_candidate_runner_and_unregistrar(
     // on the current authoritative state.
     let mut lockfile = Lockfile::load(root)?;
     let targets_requested =
-        reclassify_confirmed_targets(args, &lockfile, root, &nu_paths, &targets_requested)?;
+        reclassify_targets(args, &lockfile, root, &nu_paths, &targets_requested)?;
     if targets_requested.is_empty() {
         println!("Nothing to deactivate.");
         return Ok(());
@@ -505,17 +499,17 @@ fn active_plugin_from_entry(
     })
 }
 
-fn reclassify_confirmed_targets(
+fn reclassify_targets(
     args: &DeactivateArgs,
     lockfile: &Lockfile,
     root: &Path,
     nu_paths: &NuPaths,
-    confirmed_targets: &ClassifiedTargets,
+    planned_targets: &ClassifiedTargets,
 ) -> Result<ClassifiedTargets> {
     let current_targets = classify_and_validate_packages(args, lockfile, root, nu_paths)?;
-    if current_targets != *confirmed_targets {
+    if current_targets != *planned_targets {
         bail!(
-            "Activation state changed after confirmation. No packages were deactivated; retry the command to review the current targets."
+            "Activation state changed since planning; no packages were deactivated. Retry to review current targets."
         );
     }
     Ok(current_targets)
@@ -1339,7 +1333,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/myplugin".to_string()],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1360,7 +1354,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/myplugin".to_string()],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1381,7 +1375,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec![],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1397,7 +1391,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/myplugin".to_string()],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1414,7 +1408,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/myscript".to_string()],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1433,7 +1427,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/mycomp".to_string()],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1453,7 +1447,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/mymod".to_string()],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1472,7 +1466,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/nosuchpkg".to_string()],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1492,7 +1486,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/mymod".to_string()],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1552,7 +1546,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec![],
-            yes: true,
+
             verbose: false,
         };
 
@@ -1564,11 +1558,11 @@ mod tests {
     }
 
     #[test]
-    fn reclassification_rejects_expanded_implicit_targets_after_confirmation() {
+    fn reclassification_rejects_expanded_implicit_targets_after_planning() {
         let dir = TempDir::new().unwrap();
         let args = DeactivateArgs {
             packages: vec![],
-            yes: true,
+
             verbose: false,
         };
         let confirmed_lockfile = make_lockfile_with_modules(vec![("owner/alpha", "module", true)]);
@@ -1584,7 +1578,7 @@ mod tests {
             ("owner/beta", "module", true),
         ]);
 
-        let error = reclassify_confirmed_targets(
+        let error = reclassify_targets(
             &args,
             &changed_lockfile,
             dir.path(),
@@ -1592,7 +1586,7 @@ mod tests {
             &confirmed_targets,
         )
         .unwrap_err();
-        assert!(error.to_string().contains("changed after confirmation"));
+        assert!(error.to_string().contains("changed since planning"));
     }
 
     #[test]
@@ -1613,7 +1607,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/highlight".to_string()],
-            yes: true,
+
             verbose: false,
         };
         execute_with_unregistrar(&args, env.root(), &|_nu, identity, _cfg| {
@@ -1670,7 +1664,7 @@ mod tests {
         let called = AtomicBool::new(false);
         let args = DeactivateArgs {
             packages: vec![],
-            yes: true,
+
             verbose: false,
         };
         let err = execute_with_unregistrar(&args, env.root(), &|_nu, _identity, _cfg| {
@@ -1730,7 +1724,7 @@ mod tests {
         let called = AtomicBool::new(false);
         let args = DeactivateArgs {
             packages: vec!["owner/highlight".to_string()],
-            yes: true,
+
             verbose: false,
         };
         execute_with_unregistrar(&args, env.root(), &|_nu, _identity, _cfg| {
@@ -1761,7 +1755,7 @@ mod tests {
 
         let args = DeactivateArgs {
             packages: vec!["owner/highlight".to_string()],
-            yes: true,
+
             verbose: false,
         };
         let err = execute_with_unregistrar(&args, env.root(), &|_nu, _name, _cfg| {

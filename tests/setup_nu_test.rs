@@ -10,6 +10,7 @@ use numan_cli::core::platform::Platform;
 use numan_cli::nu::bootstrap::{self, install_from_archive, NuSetupOptions};
 use numan_cli::nu::paths::{find_nu_executable_with_root, validate_nushell_binary};
 use numan_cli::nu::version_manager;
+use numan_cli::util::test_paths::PathRestoreGuard;
 use std::io::Write;
 use std::path::PathBuf;
 use zip::write::SimpleFileOptions;
@@ -75,6 +76,7 @@ fn setup_nu_uses_injected_installer_without_network() {
             skip_path: true,
             version: Some("0.113.1".to_string()),
             caller_consented_destructive: false,
+            is_tty: None,
         },
         installer,
     )
@@ -98,13 +100,23 @@ fn setup_nu_uses_injected_installer_without_network() {
 fn execute_nu_command_wraps_installer() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
+    let _path_guard = PathRestoreGuard::new();
 
-    // Pre-install managed binary so execute_nu short-circuits without network.
-    let binary = bootstrap::managed_nu_binary(root);
+    // Pre-install a VERSIONED managed binary so `numan setup nu --yes`
+    // short-circuits without network. Latest-flow already-installed detection
+    // keys off `<root>/tools/nushell/<X.Y.Z>/<bin>` (legacy `tools/nushell/nu`
+    // is migration-only and cannot supply an active-version marker).
+    let binary = version_manager::version_binary(root, "0.113.1");
     std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
     std::fs::write(&binary, b"fake nu").unwrap();
 
     execute_nu(&NuSetupArgs::install(None, false, true, true), root).unwrap();
+
+    let active = version_manager::read_active_version(root).unwrap().unwrap();
+    assert_eq!(
+        active.version, "0.113.1",
+        "latest short-circuit must still write the active-version marker"
+    );
 }
 
 /// Return the first runnable Nushell binary on `$PATH` (or `/usr/local/bin/nu` on Unix).
@@ -129,6 +141,9 @@ fn runnable_nu_on_path() -> Option<PathBuf> {
 #[test]
 #[ignore = "requires real Nu binary on $PATH — run in platform acceptance job"]
 fn setup_nu_use_existing_registers_binary_without_download() {
+    // Serialize PATH mutation with sibling ignored tests in this binary.
+    let _path_guard = PathRestoreGuard::new();
+
     let Some(nu_source) = runnable_nu_on_path() else {
         return;
     };
@@ -166,11 +181,20 @@ fn setup_nu_use_existing_registers_binary_without_download() {
         .unwrap()
         .to_path_buf();
     let parent_str = parent.to_string_lossy().replace("\\\\?\\", "");
-    let path_contains = std::env::split_paths(&path_var)
-        .any(|part| part.to_string_lossy().eq_ignore_ascii_case(&parent_str));
+    let path_contains = std::env::split_paths(&path_var).any(|part| {
+        let part_str = part.to_string_lossy().replace("\\\\?\\", "");
+        if part_str.eq_ignore_ascii_case(&parent_str) {
+            return true;
+        }
+        // macOS temp dirs often appear as /var/... vs /private/var/...;
+        // compare canonical forms when the entry still exists on disk.
+        part.canonicalize()
+            .map(|canon| canon == parent)
+            .unwrap_or(false)
+    });
     assert!(
         path_contains,
-        "PATH should contain the existing Nu directory after use-existing"
+        "PATH should contain the existing Nu directory after use-existing; PATH={path_var}"
     );
 }
 
@@ -341,7 +365,11 @@ fn stage_fake_nu(src: &std::path::Path, dst: &std::path::Path) {
 // explicitly opts in with `--force`. The hint message names `--force`
 // and `setup nu remove`, so CLI users have two clean recovery paths.
 #[test]
+#[ignore = "requires real Nu binary on $PATH — run in platform acceptance job"]
 fn setup_nu_use_existing_refuses_when_managed_tree_present_without_force() {
+    // Keep PATH reads consistent with sibling ignored tests that mutate PATH.
+    let _path_guard = PathRestoreGuard::new();
+
     let Some(nu_source) = runnable_nu_on_path() else {
         return;
     };
@@ -399,7 +427,11 @@ fn setup_nu_use_existing_refuses_when_managed_tree_present_without_force() {
 /// warn-and-confirm prompt shaped exactly like the existing destructive
 /// prompt on `execute_use_path`.
 #[test]
+#[ignore = "requires real Nu binary on $PATH — run in platform acceptance job"]
 fn setup_nu_use_existing_force_drops_managed_tree() {
+    // Serialize PATH mutation with sibling ignored tests in this binary.
+    let _path_guard = PathRestoreGuard::new();
+
     let Some(nu_source) = runnable_nu_on_path() else {
         return;
     };
@@ -425,5 +457,44 @@ fn setup_nu_use_existing_force_drops_managed_tree() {
     assert!(
         !managed.is_file(),
         "managed Nu must be deleted after force=true execution"
+    );
+}
+
+/// Golden-string stability test for the hoisted-consent audit trail.
+///
+/// The literal text emitted when `register_existing_nu` runs with
+/// `caller_consented_destructive` is part of the public contract: safe-batch
+/// automation greps `(audit)` lines out of stderr to reason about which
+/// consent decision was made. Any accidental copy-edit would silently break
+/// that grep, so the literal string is pinned here. Update this test
+/// deliberately and in the same commit as the helper's text change.
+#[test]
+fn register_existing_nu_audit_text_is_stable() {
+    use numan_cli::util::confirm::hoisted_audit_message;
+    use std::path::Path;
+
+    let parent = Path::new("/usr/local/bin");
+    let actual = hoisted_audit_message(parent);
+    assert_eq!(
+        actual,
+        format!(
+            "(audit) prompt hoisted; skipping internal PATH-confirmation prompt \
+             for '{}' (caller has already gathered destructive-step consent).",
+            parent.display()
+        )
+    );
+
+    // Empty parent path: a corner case the future hoist surfaces (setup nu
+    // remove, install <v> one-shot) might pass through. The helper must still
+    // return a stable shape; an empty `display()` renders as `""`.
+    let empty_parent = Path::new("");
+    let empty = hoisted_audit_message(empty_parent);
+    assert_eq!(
+        empty,
+        format!(
+            "(audit) prompt hoisted; skipping internal PATH-confirmation prompt \
+             for '{}' (caller has already gathered destructive-step consent).",
+            empty_parent.display()
+        )
     );
 }
