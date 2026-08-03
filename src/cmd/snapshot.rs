@@ -288,10 +288,14 @@ mod tests {
     fn delete_bypasses_guard_with_explicit_yes() {
         let dir = tempfile::tempdir().unwrap();
         // --yes must get past the destructive guard regardless of TTY; the
-        // downstream error proves the guard was the only blocker.
+        // downstream "does not exist" bail proves the guard was the only blocker.
         // Force non-TTY so this never depends on process stdin terminal status.
         let err = delete_with_tty(dir.path(), ID, true, false).unwrap_err();
         let msg = err.to_string();
+        assert!(
+            msg.contains("does not exist") || msg.contains("not a UUIDv7"),
+            "expected downstream snapshot ID/missing bail, got: {msg}"
+        );
         assert!(
             !msg.contains("Refusing destructive"),
             "--yes must bypass the guard, got: {msg}"
@@ -322,6 +326,10 @@ mod tests {
         assert!(
             !msg.contains("Refusing destructive"),
             "--yes must bypass the guard, got: {msg}"
+        );
+        assert!(
+            msg.contains("not initialized") || msg.contains("numan init"),
+            "--yes must fail at downstream init check (got: {msg})"
         );
     }
 }

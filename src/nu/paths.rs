@@ -328,26 +328,26 @@ pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
             // tolerate here is `io::ErrorKind::NotFound` from a missing
             // marker file (race between exists-check and read).
             use version_manager::VersionManagerError;
-            match e {
-                VersionManagerError::ReadMarker { source, .. }
-                    if source.kind() == std::io::ErrorKind::NotFound =>
-                {
-                    None
-                }
-                VersionManagerError::ReadMarker { source, .. } => {
-                    return Err(anyhow::anyhow!(
-                        "Failed to read active-version marker (io: {source}); \
-                         a torn marker must not silently fall back to PATH Nu. \
-                         Run `numan doctor --fix` to reconcile."
-                    ));
-                }
-                other => {
-                    return Err(anyhow::anyhow!(
-                        "Failed to parse active-version marker: {other}. \
-                         A malformed marker must not silently fall back to PATH Nu. \
-                         Run `numan doctor --fix` to reconcile."
-                    ));
-                }
+            let not_found = if let VersionManagerError::ReadMarker { source, .. } = &e {
+                source.kind() == std::io::ErrorKind::NotFound
+            } else {
+                false
+            };
+            let is_read_err = matches!(&e, VersionManagerError::ReadMarker { .. });
+            if not_found {
+                None
+            } else if is_read_err {
+                return Err(anyhow::Error::from(e)).context(
+                    "Failed to read active-version marker; \
+                     a torn marker must not silently fall back to PATH Nu. \
+                     Run `numan doctor --fix` to reconcile.",
+                );
+            } else {
+                return Err(anyhow::Error::from(e)).context(
+                    "Failed to parse active-version marker; \
+                     a malformed marker must not silently fall back to PATH Nu. \
+                     Run `numan doctor --fix` to reconcile.",
+                );
             }
         }
     };

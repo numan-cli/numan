@@ -429,11 +429,19 @@ fn setup_nu_use_existing_force_drops_managed_tree() {
 
     // With --force + yes: destructive two-step proceeds; pre-existing
     // managed Nu is replaced by the off-path binary.
-    execute_nu(
+    // Note: `setup nu use` refuses `--skip-path` (PATH persistence is required
+    // for off-path registration), so this ignored acceptance test may mutate
+    // PATH. Unit coverage of the same leaf uses `PathRestoreGuard` instead.
+    let saved_path = std::env::var_os("PATH");
+    let result = execute_nu(
         &NuSetupArgs::use_existing(off_path.clone(), true, true),
         root,
-    )
-    .unwrap();
+    );
+    match saved_path {
+        Some(p) => std::env::set_var("PATH", p),
+        None => std::env::remove_var("PATH"),
+    }
+    result.unwrap();
 
     assert!(
         !managed.is_file(),

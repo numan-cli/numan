@@ -477,10 +477,7 @@ pub(crate) fn nu_binary_name() -> &'static str {
 
 /// Legacy single-binary path that older installs wrote:
 /// `<root>/tools/nushell/${bin}`.
-pub(crate) fn legacy_managed_binary_with_bin(
-    root: &std::path::Path,
-    bin: &str,
-) -> std::path::PathBuf {
+pub(crate) fn legacy_managed_binary_with_bin(root: &Path, bin: &str) -> PathBuf {
     root.join("tools").join("nushell").join(bin)
 }
 
