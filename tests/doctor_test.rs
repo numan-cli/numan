@@ -43,7 +43,11 @@ fn nu_setup_repair_test(
         args.use_existing.is_none(),
         "doctor must not use the deprecated flag"
     );
-    assert!(args.yes);
+    // Doctor must not auto-approve consented wipe of a managed install.
+    assert!(
+        !args.yes,
+        "doctor found_off_path repair must not pass --yes"
+    );
     *TEST_NU_SETUP_CALLED.lock().unwrap() = true;
     Ok(())
 }
@@ -98,8 +102,7 @@ fn doctor_report_only_leaves_root_unchanged() {
     std::fs::create_dir_all(root).unwrap();
 
     let args = DoctorArgs {
-        fix: false,
-        yes: false,
+        scan: true,
         json: false,
         nupm_home: None,
     };
@@ -118,8 +121,7 @@ fn doctor_fix_auto_creates_layout_without_network() {
     std::fs::write(&nu_exe, b"nu").unwrap();
 
     let args = DoctorArgs {
-        fix: true,
-        yes: true,
+        scan: false,
         json: false,
         nupm_home: None,
     };
@@ -164,8 +166,7 @@ fn doctor_reports_pending_plugin_journal() {
     journal.save(root).unwrap();
 
     let args = DoctorArgs {
-        fix: false,
-        yes: false,
+        scan: true,
         json: false,
         nupm_home: None,
     };
@@ -195,8 +196,7 @@ fn doctor_detects_nu_path_drift() {
     paths.save(root).unwrap();
 
     let args = DoctorArgs {
-        fix: false,
-        yes: false,
+        scan: true,
         json: false,
         nupm_home: None,
     };
@@ -221,8 +221,7 @@ fn doctor_reports_off_path_nu_without_download() {
     let _path_guard = TEST_PATH_GUARD.lock().unwrap();
     let _cleared_path = ClearedPath::new();
     let args = DoctorArgs {
-        fix: false,
-        yes: false,
+        scan: true,
         json: false,
         nupm_home: None,
     };
@@ -267,8 +266,7 @@ fn doctor_fix_registers_off_path_nu_without_network() {
     let _path_guard = TEST_PATH_GUARD.lock().unwrap();
     let _cleared_path = ClearedPath::new();
     let args = DoctorArgs {
-        fix: true,
-        yes: true,
+        scan: false,
         json: false,
         nupm_home: None,
     };
@@ -289,7 +287,7 @@ fn doctor_fix_registers_off_path_nu_without_network() {
 }
 
 fn fake_deactivate_repair(args: &DeactivateArgs, root: &Path) -> anyhow::Result<()> {
-    assert!(args.yes);
+    assert!(!args.verbose);
     assert_eq!(args.packages, vec!["owner/plugin".to_string()]);
     *TEST_DEACTIVATE_REPAIR_CALLED.lock().unwrap() = true;
     if *TEST_DEACTIVATE_REPAIR_SHOULD_FAIL.lock().unwrap() {
@@ -333,8 +331,7 @@ fn doctor_fix_reconciles_pending_plugin_deactivate_journal() {
     *TEST_DEACTIVATE_REPAIR_SHOULD_FAIL.lock().unwrap() = false;
 
     let args = DoctorArgs {
-        fix: true,
-        yes: true,
+        scan: false,
         json: false,
         nupm_home: None,
     };
@@ -370,8 +367,7 @@ fn doctor_fix_stale_plugin_deactivate_runs_refresh_then_deactivate() {
     *TEST_DEACTIVATE_REPAIR_SHOULD_FAIL.lock().unwrap() = false;
 
     let args = DoctorArgs {
-        fix: true,
-        yes: true,
+        scan: false,
         json: false,
         nupm_home: None,
     };
@@ -405,8 +401,7 @@ fn doctor_fix_reports_deactivate_repair_failure() {
     *TEST_DEACTIVATE_REPAIR_SHOULD_FAIL.lock().unwrap() = true;
 
     let args = DoctorArgs {
-        fix: true,
-        yes: true,
+        scan: false,
         json: true,
         nupm_home: None,
     };
@@ -432,11 +427,18 @@ fn probe_fixed_version(_path: &Path) -> anyhow::Result<String> {
     Ok("0.99.9".to_string())
 }
 
+fn confirm_repairs_always(_args: &DoctorArgs) -> bool {
+    true
+}
+
 /// Skip network and never exec a real `nu` during doctor integration tests.
+/// Force confirm-tier repairs on so non-TTY CI can exercise repair paths that
+/// production gates behind an interactive session.
 fn test_doctor_options() -> DoctorOptions {
     DoctorOptions {
         skip_network: true,
         nu_version_probe: Some(probe_fixed_version),
+        confirm_repairs: Some(confirm_repairs_always),
         ..DoctorOptions::default()
     }
 }
@@ -452,8 +454,7 @@ fn doctor_reports_path_nu_not_found_when_path_cleared() {
 
     let report = run_checks_with_options(
         &DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: true,
             nupm_home: None,
         },
@@ -496,8 +497,7 @@ fn doctor_reports_managed_and_trust_root_findings() {
 
     let report = run_checks_with_options(
         &DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: true,
             nupm_home: None,
         },
@@ -534,4 +534,96 @@ fn doctor_reports_managed_and_trust_root_findings() {
     assert!(json.contains("nu.path.version"));
     assert!(json.contains("nu.managed.version"));
     assert!(json.contains("registry.trust_root"));
+}
+
+/// Default `doctor --json` runs repairs; nested helpers may `println!`.
+/// Stdout must remain a single JSON object (repair chatter goes to stderr).
+#[test]
+fn doctor_json_default_stdout_is_valid_json() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root).unwrap();
+
+    // Uninitialized root so default repairs call `init`, which prints human
+    // text that must not land on stdout when `--json` is set.
+    // Null stdin makes the confirm-tier allow-gate deterministic (never inherit
+    // a developer TTY that would download managed Nu). Empty-root initial
+    // findings do not include `registry.index_missing`, so no network sync runs
+    // in this first repair pass.
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_numan"))
+        .args([
+            "--root",
+            root.to_str().expect("temp root is utf-8"),
+            "doctor",
+            "--json",
+        ])
+        .env("NUMAN_ALLOW_UNSIGNED", "1")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run numan doctor --json");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        matches!(output.status.code(), Some(0) | Some(1) | Some(2)),
+        "default doctor --json must exit with a doctor status code: status={}\nstdout={stdout}\nstderr={stderr}",
+        output.status
+    );
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!(
+            "default doctor --json stdout must be valid JSON: {e}\nstdout={stdout}\nstderr={stderr}"
+        )
+    });
+    assert!(
+        value.get("repairs").is_some_and(|r| r.is_array()),
+        "default doctor --json must include repairs: {value}"
+    );
+}
+
+/// `doctor --json --scan` must omit the `repairs` field (single JSON object).
+#[test]
+fn doctor_json_scan_omits_repairs_field() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root).unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_numan"))
+        .args([
+            "--root",
+            root.to_str().expect("temp root is utf-8"),
+            "doctor",
+            "--json",
+            "--scan",
+        ])
+        .env("NUMAN_ALLOW_UNSIGNED", "1")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run numan doctor --json --scan");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success()
+            || output.status.code() == Some(1)
+            || output.status.code() == Some(2),
+        "doctor --json --scan unexpected status: {}\nstdout={stdout}\nstderr={stderr}",
+        output.status
+    );
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!(
+            "doctor --json --scan stdout must be valid JSON: {e}\nstdout={stdout}\nstderr={stderr}"
+        )
+    });
+    assert!(
+        value.is_object(),
+        "doctor --json --scan must emit a single JSON object: {value}"
+    );
+    assert!(
+        value.get("repairs").is_none(),
+        "doctor --json --scan must omit repairs: {value}"
+    );
+    assert!(
+        value.get("findings").is_some_and(|f| f.is_array()),
+        "doctor --json --scan must include findings: {value}"
+    );
 }

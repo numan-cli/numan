@@ -541,7 +541,6 @@ fn t24_import_then_activate_nupm_module() {
 
     let args = ActivateArgs {
         packages: vec!["test/minimal".to_string()],
-        yes: true,
         verbose: false,
         list: false,
         check: false,

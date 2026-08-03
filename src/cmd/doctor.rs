@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Args;
 use console::style;
 use serde::Serialize;
@@ -29,25 +29,23 @@ use crate::state::lifecycle_journal::PendingLifecycle;
 use crate::state::lockfile::Lockfile;
 use crate::state::nupm_import::NupmImportsFile;
 use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
+use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::fs_safety::{acquire_mutation_lock, assert_managed_file_owned};
 use crate::util::hints::{
     self, active_plugin_mutation_gated_doctor_message, registry_none_fix, setup_nu_use_existing,
     ACTIVE_PLUGIN_MUTATION_GATED_FIX, CMD_ACTIVATE, CMD_DEACTIVATE, CMD_INIT, CMD_INIT_REFRESH,
     CMD_REGISTRY_SYNC, CMD_SETUP_NU,
 };
+use crate::util::stdio_redirect::StdoutToStderr;
 
 const SCHEMA_VERSION: u32 = 1;
 const LAYOUT_DIRS: &[&str] = &["nu_state", "state", "packages", "registries"];
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
-    /// Apply safe automated repairs after reporting
+    /// Scan only — report issues without applying fixes
     #[arg(long)]
-    pub fix: bool,
-
-    /// Skip confirmation prompts for confirm-tier repairs
-    #[arg(long)]
-    pub yes: bool,
+    pub scan: bool,
 
     /// Emit JSON report (no ANSI styling)
     #[arg(long)]
@@ -134,6 +132,10 @@ pub struct DoctorOptions {
     pub discover_off_path: Option<fn() -> Option<PathBuf>>,
     /// Override Nu `--version` probing (tests inject a fixed version string).
     pub nu_version_probe: Option<fn(&Path) -> Result<String>>,
+    /// Override confirm-tier allow-gate (tests inject `|_| true` to exercise
+    /// repairs under non-TTY CI; production uses [`confirm_repairs`], which is
+    /// TTY detection only and does not prompt).
+    pub confirm_repairs: Option<fn(&DoctorArgs) -> bool>,
 }
 
 pub fn execute(args: &DoctorArgs, root: &Path) -> Result<i32> {
@@ -142,7 +144,7 @@ pub fn execute(args: &DoctorArgs, root: &Path) -> Result<i32> {
 
 pub fn execute_with_options(args: &DoctorArgs, root: &Path, options: DoctorOptions) -> Result<i32> {
     let mut report = run_checks_with_options(args, root, &options)?;
-    if args.fix {
+    if !args.scan {
         let repairs = apply_repairs(args, root, &report.findings, &options)?;
         report = run_checks_with_options(args, root, &options)?;
         report.repairs = Some(repairs);
@@ -985,8 +987,11 @@ fn count_nupm_name_overlap(
     Ok(count)
 }
 
-fn confirm_repairs(args: &DoctorArgs) -> bool {
-    args.yes || !std::io::stdin().is_terminal()
+fn confirm_repairs(_args: &DoctorArgs) -> bool {
+    // Confirm-tier allow-gate: TTY detection only (no prompt here).
+    // Nested setup repairs may still prompt when allowed. Non-TTY sessions
+    // skip confirm-tier repairs as `not_confirmed`.
+    std::io::stdin().is_terminal()
 }
 
 fn apply_repairs(
@@ -998,14 +1003,40 @@ fn apply_repairs(
     let needs_lock = findings.iter().any(|f| {
         matches!(f.repair, RepairTier::Auto | RepairTier::Confirm) && f.severity != Severity::Ok
     });
+
+    // Nested repair handlers may println!; redirect only when those handlers
+    // are about to run so healthy --json scans avoid mutating process stdio.
+    let _stdout_guard = if args.json && needs_lock {
+        Some(
+            StdoutToStderr::redirect()
+                .context("Failed to redirect stdout while emitting doctor JSON")?,
+        )
+    } else {
+        None
+    };
+
     let mut lock = if needs_lock {
         Some(acquire_mutation_lock(root)?)
     } else {
         None
     };
 
+    if needs_lock {
+        create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Doctor,
+            None,
+            None,
+        )
+        .context("Failed to create doctor pre-mutation snapshot")?;
+    }
+
     let mut records = Vec::new();
-    let confirm = confirm_repairs(args);
+    let confirm = match options.confirm_repairs {
+        Some(gate) => gate(args),
+        None => confirm_repairs(args),
+    };
 
     for dir in LAYOUT_DIRS {
         let id = format!("layout.{dir}");
@@ -1077,7 +1108,9 @@ fn apply_repairs(
             });
         } else if let Some(off_path) = resolve_off_path(options) {
             let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
-            match setup_fn(&NuSetupArgs::use_existing(off_path, true), root) {
+            // Pass yes: false to let setup code handle TTY checking and confirmation.
+            // If there's a managed install, setup will prompt the user before removal.
+            match setup_fn(&NuSetupArgs::use_existing(off_path, false), root) {
                 Ok(()) => records.push(RepairRecord {
                     id,
                     status: RepairStatus::Applied,
@@ -1117,7 +1150,8 @@ fn apply_repairs(
             });
         } else {
             let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
-            match setup_fn(&NuSetupArgs::install(None, false, false, true), root) {
+            // Pass yes: false to let setup code handle TTY checking and confirmation.
+            match setup_fn(&NuSetupArgs::install(None, false, false, false), root) {
                 Ok(()) => records.push(RepairRecord {
                     id,
                     status: RepairStatus::Applied,
@@ -1236,7 +1270,6 @@ fn apply_repairs(
         } else {
             let activate_args = ActivateArgs {
                 packages: Vec::new(),
-                yes: true,
                 verbose: false,
                 list: false,
                 check: false,
@@ -1293,7 +1326,7 @@ fn apply_repairs(
             } else {
                 let deactivate_args = DeactivateArgs {
                     packages: journal_packages,
-                    yes: true,
+
                     verbose: false,
                 };
                 let deactivate_fn = options.deactivate_repair.unwrap_or(deactivate_execute);
@@ -1433,8 +1466,14 @@ fn print_report(args: &DoctorArgs, root: &Path, report: &DoctorReport) -> Result
         if !repairs.is_empty() {
             writeln!(out)?;
             writeln!(out, "Repairs: {applied} applied, {skipped} skipped")?;
-            if skipped > 0 && !args.yes {
-                writeln!(out, "(use --yes to apply confirm-tier fixes)")?;
+            let not_confirmed = repairs.iter().any(|r| {
+                r.status == RepairStatus::Skipped && r.reason.as_deref() == Some("not_confirmed")
+            });
+            if not_confirmed {
+                writeln!(
+                    out,
+                    "Confirm-tier repairs skipped: stdin is not a TTY. Re-run `numan doctor` interactively, or use `--scan` for report-only."
+                )?;
             }
         }
     }
@@ -1469,6 +1508,13 @@ mod tests {
 
     /// Serializes tests that mutate the process-wide `PATH` env var.
     static TEST_PATH_GUARD: Mutex<()> = Mutex::new(());
+
+    /// Off-PATH discovery seam for unit tests (`discover_off_path` is an fn pointer).
+    static TEST_OFF_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+    fn discover_off_path_test() -> Option<PathBuf> {
+        TEST_OFF_PATH.lock().ok()?.clone()
+    }
 
     /// RAII guard that restores the original PATH on drop, ensuring restoration
     /// during both normal return and panic unwinding.
@@ -1513,8 +1559,7 @@ mod tests {
         let root = dir.path();
         std::fs::create_dir_all(root).unwrap();
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: false,
             nupm_home: None,
         };
@@ -1531,8 +1576,7 @@ mod tests {
         let root = dir.path();
         std::fs::create_dir_all(root).unwrap();
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: false,
             nupm_home: None,
         };
@@ -1572,8 +1616,7 @@ mod tests {
         ensure_fake_managed_nu(root);
 
         let args = DoctorArgs {
-            fix: true,
-            yes: true,
+            scan: false, // Apply fixes (default behavior)
             json: false,
             nupm_home: None,
         };
@@ -1588,6 +1631,7 @@ mod tests {
                 nu_setup_repair: None,
                 discover_off_path: None,
                 nu_version_probe: Some(probe_fixed_version),
+                confirm_repairs: Some(confirm_repairs_always),
             },
         )
         .unwrap();
@@ -1607,15 +1651,13 @@ mod tests {
         crate::config::Config::default().save(root).unwrap();
 
         let args = DoctorArgs {
-            fix: true,
-            yes: true,
+            scan: false, // Apply fixes (default behavior)
             json: false,
             nupm_home: None,
         };
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true, // First check: report only to see findings
                 json: false,
                 nupm_home: None,
             },
@@ -1633,7 +1675,7 @@ mod tests {
             assert_eq!(none.repair, RepairTier::Manual);
             return;
         }
-        assert_eq!(none.fix.as_deref(), Some(hints::CMD_DOCTOR_FIX));
+        assert_eq!(none.fix.as_deref(), Some(hints::CMD_DOCTOR));
         assert_eq!(none.repair, RepairTier::Auto);
 
         execute_with_options(
@@ -1647,6 +1689,7 @@ mod tests {
                 nu_setup_repair: None,
                 discover_off_path: None,
                 nu_version_probe: Some(probe_fixed_version),
+                confirm_repairs: Some(confirm_repairs_always),
             },
         )
         .unwrap();
@@ -1664,8 +1707,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: false,
                 nupm_home: None,
             },
@@ -1694,8 +1736,7 @@ mod tests {
         fake_paths(root, &nu_exe).save(root).unwrap();
 
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: true,
             nupm_home: None,
         };
@@ -1759,8 +1800,7 @@ mod tests {
         std::fs::create_dir_all(root.join("packages/plugins/owner/plugin/1.0.0-abc")).unwrap();
 
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: false,
             nupm_home: None,
         };
@@ -1829,8 +1869,7 @@ mod tests {
         std::fs::create_dir_all(root.join("packages/plugins/owner/plugin/1.0.0-abc")).unwrap();
 
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: false,
             nupm_home: None,
         };
@@ -1915,8 +1954,7 @@ mod tests {
         lockfile.save(root).unwrap();
 
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: false,
             nupm_home: None,
         };
@@ -1941,11 +1979,21 @@ mod tests {
         anyhow::bail!("simulated version probe failure")
     }
 
+    fn confirm_repairs_always(_args: &DoctorArgs) -> bool {
+        true
+    }
+
+    fn confirm_repairs_never(_args: &DoctorArgs) -> bool {
+        false
+    }
+
     /// Skip network and never exec a real `nu` during doctor unit tests.
+    /// Force confirm-tier repairs so non-TTY unit tests can exercise them.
     fn test_doctor_options() -> DoctorOptions {
         DoctorOptions {
             skip_network: true,
             nu_version_probe: Some(probe_fixed_version),
+            confirm_repairs: Some(confirm_repairs_always),
             ..DoctorOptions::default()
         }
     }
@@ -1958,8 +2006,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },
@@ -2017,8 +2064,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },
@@ -2060,8 +2106,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },
@@ -2102,8 +2147,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },
@@ -2142,8 +2186,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },
@@ -2186,8 +2229,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },
@@ -2205,5 +2247,105 @@ mod tests {
         assert!(json.contains("nu.path.version"));
         assert!(json.contains("nu.managed.version"));
         assert!(json.contains("registry.trust_root"));
+    }
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static SETUP_REPAIR_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    fn counting_setup_repair(_args: &NuSetupArgs, _root: &Path) -> Result<()> {
+        SETUP_REPAIR_CALLS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    #[test]
+    fn doctor_found_off_path_repair_preserves_managed_install_when_not_confirmed() {
+        // Regression: when confirm-tier is closed, found_off_path must be Skipped
+        // without dispatching setup (which could wipe a managed Nu tree).
+        let _path_guard = TEST_PATH_GUARD.lock().unwrap();
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Clear PATH so managed/off-PATH discovery controls availability.
+        let _path_restore = PathRestoreGuard::new();
+        std::env::set_var("PATH", "");
+
+        let off_path_dir = root.join("external_nu");
+        std::fs::create_dir_all(&off_path_dir).unwrap();
+        let off_path_binary = off_path_dir.join("nu");
+        std::fs::write(&off_path_binary, b"external nu").unwrap();
+        *TEST_OFF_PATH.lock().unwrap() = Some(off_path_binary);
+
+        let args = DoctorArgs {
+            scan: false,
+            json: false,
+            nupm_home: None,
+        };
+        let options = DoctorOptions {
+            skip_network: true,
+            nu_version_probe: Some(probe_fixed_version),
+            discover_off_path: Some(discover_off_path_test),
+            nu_setup_repair: Some(counting_setup_repair),
+            confirm_repairs: Some(confirm_repairs_never),
+            // Avoid init creating a managed Nu mid-pass before we seed one.
+            init_repair: Some(|_, _| Ok(())),
+            ..DoctorOptions::default()
+        };
+
+        SETUP_REPAIR_CALLS.store(0, Ordering::SeqCst);
+        // No managed binary yet: otherwise nu_is_available suppresses found_off_path.
+        let report = run_checks_with_options(&args, root, &options).expect("doctor checks");
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "nu.binary.found_off_path" && f.severity == Severity::Warn),
+            "expected found_off_path finding before repair"
+        );
+
+        // Seed managed Nu after findings so a mistaken setup dispatch would wipe it.
+        let managed_binary = ensure_fake_managed_nu(root);
+        assert!(managed_binary.exists(), "managed binary should exist");
+
+        let repairs =
+            apply_repairs(&args, root, &report.findings, &options).expect("apply_repairs");
+        let off_path_repair = repairs
+            .iter()
+            .find(|r| r.id == "nu.binary.found_off_path")
+            .expect("nu.binary.found_off_path repair record");
+        assert_eq!(off_path_repair.status, RepairStatus::Skipped);
+        assert_eq!(
+            off_path_repair.reason.as_deref(),
+            Some("not_confirmed"),
+            "confirm gate closed must record not_confirmed"
+        );
+        assert_eq!(
+            SETUP_REPAIR_CALLS.load(Ordering::SeqCst),
+            0,
+            "setup repair must not be dispatched when confirm-tier is skipped"
+        );
+
+        let options = DoctorOptions {
+            skip_network: true,
+            nu_version_probe: Some(probe_fixed_version),
+            discover_off_path: Some(discover_off_path_test),
+            nu_setup_repair: Some(counting_setup_repair),
+            confirm_repairs: Some(confirm_repairs_never),
+            init_repair: Some(|_, _| Ok(())),
+            ..DoctorOptions::default()
+        };
+        execute_with_options(&args, root, options)
+            .expect("execute_with_options must succeed when confirm-tier is skipped");
+        assert_eq!(
+            SETUP_REPAIR_CALLS.load(Ordering::SeqCst),
+            0,
+            "execute_with_options must not dispatch setup when confirm-tier is skipped"
+        );
+
+        *TEST_OFF_PATH.lock().unwrap() = None;
+        assert!(
+            managed_binary.exists(),
+            "managed installation should be preserved when confirm-tier repair is skipped"
+        );
     }
 }
