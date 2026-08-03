@@ -20,7 +20,6 @@ use crate::util::hints::{self, CMD_REGISTRY_SYNC};
 /// a matching managed Nu version or searching for another package with `numan search`.
 #[derive(Parser, Debug)]
 pub struct TryArgs {
-
     /// Install only; do not activate
     #[arg(long)]
     pub no_activate: bool,
