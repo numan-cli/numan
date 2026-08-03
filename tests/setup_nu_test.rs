@@ -341,6 +341,7 @@ fn stage_fake_nu(src: &std::path::Path, dst: &std::path::Path) {
 // explicitly opts in with `--force`. The hint message names `--force`
 // and `setup nu remove`, so CLI users have two clean recovery paths.
 #[test]
+#[ignore = "requires real Nu binary on $PATH — run in platform acceptance job"]
 fn setup_nu_use_existing_refuses_when_managed_tree_present_without_force() {
     let Some(nu_source) = runnable_nu_on_path() else {
         return;
@@ -399,6 +400,7 @@ fn setup_nu_use_existing_refuses_when_managed_tree_present_without_force() {
 /// warn-and-confirm prompt shaped exactly like the existing destructive
 /// prompt on `execute_use_path`.
 #[test]
+#[ignore = "requires real Nu binary on $PATH — run in platform acceptance job"]
 fn setup_nu_use_existing_force_drops_managed_tree() {
     let Some(nu_source) = runnable_nu_on_path() else {
         return;

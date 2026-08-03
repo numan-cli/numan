@@ -22,8 +22,13 @@ pub struct UseArgs {
 }
 
 pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
-    // Listing is read-only: do not lock, snapshot, or migrate the install.
+    // Listing reconciles the legacy single-binary layout first so a flat
+    // `tools/nushell/nu` install is not invisible. Migration is a no-op when
+    // already versioned, and preserves any existing active selection.
     if args.version == "list" {
+        let _lock = acquire_mutation_lock(root)?;
+        crate::nu::migrate_legacy::migrate_legacy_install(root)
+            .with_context(|| "Failed to migrate legacy Nu installation before list")?;
         return execute_list(root);
     }
 
