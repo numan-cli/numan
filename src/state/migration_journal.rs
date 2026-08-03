@@ -149,7 +149,7 @@ impl PendingMigration {
         }
         if !is_safe_version_component(&journal.version) {
             anyhow::bail!(
-                "Migration journal at '{}' has unsafe version component '{}'. \\
+                "Migration journal at '{}' has unsafe version component '{}'. \
                  Delete the journal manually to recover.",
                 path.display(),
                 journal.version,
