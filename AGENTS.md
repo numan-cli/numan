@@ -65,7 +65,7 @@ src/
     completions.rs     — `numan completions <shell>`: bash/fish/zsh/powershell/nushell scripts (Phase 7.3)
     setup.rs           — `numan setup nu [VERSION]|remove|path|use <path>` + `setup loader`: Nushell bootstrap + nushell-loader install
     try_cmd.rs         — `numan try [--no-activate]`: curated starter install + activate for current Nu
-    use_cmd.rs         — `numan use <version>|latest|list`: activates a previously installed managed Nu version (no auto-download); writes the active-version marker after a PreMutation snapshot under the root mutation lock
+    use_cmd.rs         — `numan use <version>|latest|list`: activates a previously installed managed Nu version (no auto-download); mutating arms take the root mutation lock, PreMutation snapshot, journaled legacy migration, then write the active-version marker; `list` is read-only (no lock, snapshot, or migration)
     nu_pin_offer.rs    — Shared TTY offer to `setup nu <version>` + `init --refresh` on Nu mismatch
   install/
     download.rs        — HTTP download with progress
@@ -94,6 +94,9 @@ src/
     atomic.rs          — write_json_atomic helper (tempfile+persist)
     fs_safety.rs       — OWNERSHIP_MARKER, acquire_mutation_lock (advisory fd_lock mutex), assert_managed_file_owned (Phase 4)
     hints.rs           — Canonical `fix` hint strings aligned with docs/numan-doctor.md (Phase 7.3)
+    confirm.rs         — TTY/`--yes` consent helpers (`require_tty_or_yes`, `confirm_or_bail`)
+    stdio_redirect.rs  — StdoutToStderr guard so nested repair output cannot corrupt `--json` stdout
+    test_paths.rs      — PathRestoreGuard: serializes and restores `PATH` for PATH-sensitive tests
   nupm_compat/         — nupm discovery, import, drift (Phase 6.1–6.3); contract: docs/nupm-compatibility.md (compat-schema-v1)
     drift.rs           — compare_import, count_drifted_imports, DriftStatus (Phase 6.3)
     import.rs          — safe payload copy, lifecycle-journaled import transaction

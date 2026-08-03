@@ -86,6 +86,7 @@ Repair steps run in this **order** (each step re-validates only what it changed)
 | Tier | Prompt? | Finding IDs | Action |
 |------|---------|-------------|--------|
 | **auto** | Never | `layout.*` (missing dirs), `nu.active_version.invalid` | Independent of PreMutation success: `create_dir_all` for layout; clear invalid `nu_state/active-version.json` via `clear_active_version` |
+| **auto** | Never | `journal.migration_pending` | `migration_journal::reconcile` under the mutation lock after a PreMutation Doctor snapshot (skipped/Failed without aborting later repairs) |
 | **auto** | Never | `nu_paths.missing` | `numan init` (skipped with `snapshot_unavailable` when PreMutation fails) |
 | **auto** | Never | `registry.index_missing` | `numan registry sync` (skipped with `snapshot_unavailable` when PreMutation fails) |
 | **auto** | Never | `registry.none` (production trust root only) | Add official registry via same path as `numan init` (continues even when PreMutation fails) |
@@ -148,6 +149,8 @@ Checks run in order below. Implementation should call existing validators (`NuPa
 | `journal.autoload_stale` | `error` | Journal identity mismatch | **confirm:** `init --refresh` then `activate` |
 | `journal.lifecycle_pending` | `warn` | `state/pending-lifecycle.json` exists | **manual:** re-run or clear per op |
 | `journal.lifecycle_stale` | `error` | Stale lifecycle journal | **manual** |
+| `journal.migration_pending` | `warn` | `state/migration-journal.json` exists and parses (stage `Prepared` \| `Renamed` \| `Active`) | **auto:** `migration_journal::reconcile` under the mutation lock, after a PreMutation snapshot; hint `numan use` |
+| `journal.migration_invalid` | `error` | `state/migration-journal.json` is present but unreadable, unparseable, or carries an unsupported `schema_version` | **manual:** delete the journal file; `numan use` cannot reconcile an unreadable journal |
 
 ### 4. Lockfile and activation identity
 

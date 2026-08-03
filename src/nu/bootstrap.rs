@@ -787,7 +787,7 @@ where
                     "Nushell is already installed at '{}'. Configure shell integration?",
                     dest.display()
                 ),
-                true,
+                options.yes,
                 "Nushell setup cancelled.",
             )?;
         }

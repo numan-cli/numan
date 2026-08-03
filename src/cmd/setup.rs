@@ -186,7 +186,7 @@ pub fn execute(cmd: SetupCommands, root: &Path) -> Result<()> {
 }
 
 pub fn execute_nu(args: &NuSetupArgs, root: &Path) -> Result<()> {
-    // PR69 WCr: every destructive setup entry acquires the root mutation
+    // Every destructive setup entry acquires the root mutation
     // lock through `setup_subcommand_lock`. The helper audit-logs the
     // entry so safe-batch automation can grep one consistent `(audit)`
     // prefix across the destructive setup surface. Direct callers of

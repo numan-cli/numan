@@ -298,6 +298,7 @@ fn doctor_repairs_layout_when_lockfile_malformed() {
             "--json",
         ])
         .env("NUMAN_ALLOW_UNSIGNED", "1")
+        .stdin(std::process::Stdio::null())
         .output()
         .expect("run numan doctor --json with malformed lockfile");
 

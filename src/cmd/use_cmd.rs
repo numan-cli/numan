@@ -99,6 +99,17 @@ fn execute_list(root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Persist the active-version marker, preserving an off-tree binary path when
+/// the resolved binary lives outside `tools/nushell/<version>/`.
+fn select_version(root: &Path, version: &str, installed_binary: &Path) -> Result<()> {
+    if installed_binary == version_manager::version_binary(root, version) {
+        version_manager::write_active_version(root, version)
+    } else {
+        version_manager::write_active_version_with_binary(root, version, installed_binary)
+    }
+    .with_context(|| format!("Failed to switch to Nu {}", version))
+}
+
 /// Switch to the latest (newest) installed Nu version.
 fn execute_latest(root: &Path) -> Result<()> {
     let latest = version_manager::latest_installed_version(root)?;
@@ -106,16 +117,7 @@ fn execute_latest(root: &Path) -> Result<()> {
         Some(version) => {
             let installed_binary = version_manager::resolve_installed_version(root, &version)
                 .with_context(|| format!("Nu {} is no longer present", version))?;
-            let on_tree = version_manager::version_binary(root, &version);
-            if installed_binary == on_tree {
-                version_manager::write_active_version(root, &version)?;
-            } else {
-                version_manager::write_active_version_with_binary(
-                    root,
-                    &version,
-                    &installed_binary,
-                )?;
-            }
+            select_version(root, &version, &installed_binary)?;
             println!("Switched to Nu {} (latest installed).", version);
             Ok(())
         }
@@ -160,14 +162,7 @@ fn execute_switch(root: &Path, version: &str) -> Result<()> {
     };
 
     // Switch to the requested version, preserving an off-tree binary path.
-    let on_tree = version_manager::version_binary(root, &version);
-    if installed_binary == on_tree {
-        version_manager::write_active_version(root, &version)
-            .with_context(|| format!("Failed to switch to Nu {}", version))?;
-    } else {
-        version_manager::write_active_version_with_binary(root, &version, &installed_binary)
-            .with_context(|| format!("Failed to switch to Nu {}", version))?;
-    }
+    select_version(root, &version, &installed_binary)?;
     println!("Switched to Nu {}.", version);
     Ok(())
 }
@@ -286,6 +281,67 @@ mod tests {
         assert!(
             !root.join("state/snapshots").exists(),
             "`numan use list` must not create a snapshot"
+        );
+    }
+
+    #[test]
+    fn test_use_list_runs_no_migration() {
+        // Stage a legacy single-binary layout. A read-only `list` must leave it
+        // exactly as-is; only the mutating arms may migrate.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let legacy = version_manager::versioned_nu_dir(root).join(if cfg!(windows) {
+            "nu.exe"
+        } else {
+            "nu"
+        });
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, "fake legacy nu").unwrap();
+
+        execute(
+            &UseArgs {
+                version: "list".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        assert!(
+            legacy.is_file(),
+            "`numan use list` must not migrate the legacy binary"
+        );
+        assert!(
+            version_manager::read_active_version(root)
+                .unwrap()
+                .is_none(),
+            "`numan use list` must not write the active-version marker"
+        );
+    }
+
+    #[test]
+    fn test_use_switch_preserves_off_tree_binary_path() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // Off-tree Nu recorded by `numan setup nu use <path>`.
+        let external = tmp.path().join("external-nu");
+        std::fs::write(&external, "fake").unwrap();
+        version_manager::write_active_version_with_binary(root, "0.113.1", &external).unwrap();
+
+        execute(
+            &UseArgs {
+                version: "0.113.1".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.113.1");
+        assert_eq!(
+            active.binary_path.as_deref(),
+            Some(external.to_string_lossy().as_ref()),
+            "`numan use` must not downgrade an off-tree selection to an on-tree path"
         );
     }
 

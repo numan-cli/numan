@@ -237,7 +237,7 @@ impl PendingMigration {
             })?;
         let journal: Self = serde_json::from_str(&content)
             .map_err(|source| MigrationJournalError::Parse { source })?;
-        // copilot PR69 VwSra: hard-fail on unknown schema_version so a future
+        // Hard-fail on unknown schema_version so a future
         // variant cannot be silently misinterpreted as the current one.
         // The original "coerce to SCHEMA_VERSION" wording was aspirational
         // and never actually performed; treat it as an error so doctor finds
@@ -288,6 +288,32 @@ fn versioned_binary_present(root: &Path, version: &str) -> bool {
     version_install_dir(root, version).join(bin_name).is_file()
 }
 
+/// Finish a migration whose versioned binary is already in place: adopt the
+/// version as active when the user has made no other selection, then clear a
+/// stray legacy binary that would otherwise re-trigger migration.
+fn complete_migration(root: &Path, version: &str) -> Result<(), MigrationJournalError> {
+    if read_active_version(root)?.is_none() {
+        write_active_version(root, version).map_err(|source| {
+            MigrationJournalError::RecoveryWriteActive {
+                version: version.to_string(),
+                source,
+            }
+        })?;
+    }
+    let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
+    let legacy_binary = versioned_nu_dir(root).join(bin_name);
+    if legacy_binary.is_file() {
+        if let Err(source) = std::fs::remove_file(&legacy_binary) {
+            return Err(MigrationJournalError::LegacyBinaryRemoveFailed {
+                path: PendingMigration::journal_path(root),
+                legacy_binary,
+                source,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Reconcile any in-flight migration journal.
 ///
 /// Recovery actions:
@@ -329,27 +355,9 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>, MigrationJourn
             // The rename can complete before the journal advances to Renamed.
             // Trust the filesystem in that crash window and finish recovery.
             if versioned_binary_present(root, &journal.version) {
-                if read_active_version(root)?.is_none() {
-                    write_active_version(root, &journal.version).map_err(|source| {
-                        MigrationJournalError::RecoveryWriteActive {
-                            version: journal.version.clone(),
-                            source,
-                        }
-                    })?;
-                }
-                let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
-                let legacy_binary = versioned_nu_dir(root).join(bin_name);
-                if legacy_binary.is_file() {
-                    if let Err(source) = std::fs::remove_file(&legacy_binary) {
-                        return Err(MigrationJournalError::LegacyBinaryRemoveFailed {
-                            path: PendingMigration::journal_path(root),
-                            legacy_binary,
-                            source,
-                        });
-                    }
-                }
+                complete_migration(root, &journal.version)?;
             } else {
-                // PR69 WCq: surface remove_dir failures instead of ignoring
+                // Surface remove_dir failures instead of ignoring
                 // them. A half-migrated state whose empty version directory
                 // cannot be removed (permissions, foreign file inside) must
                 // retain the journal so a follow-up reconcile can succeed
@@ -382,28 +390,7 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>, MigrationJourn
             // Complete the transaction — write active-version if no selection
             // exists. (If a user has already chosen a different active
             // version, that user-controlled choice takes precedence.)
-            if read_active_version(root)?.is_none() {
-                write_active_version(root, &journal.version).map_err(|source| {
-                    MigrationJournalError::RecoveryWriteActive {
-                        version: journal.version.clone(),
-                        source,
-                    }
-                })?;
-            }
-            // Defensive cleanup: a stray legacy binary at `tools/nushell/<bin>`
-            // would otherwise confuse `list_installed_versions` into
-            // re-running migration. Remove it.
-            let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
-            let legacy_binary = versioned_nu_dir(root).join(bin_name);
-            if legacy_binary.is_file() {
-                if let Err(source) = std::fs::remove_file(&legacy_binary) {
-                    return Err(MigrationJournalError::LegacyBinaryRemoveFailed {
-                        path: PendingMigration::journal_path(root),
-                        legacy_binary,
-                        source,
-                    });
-                }
-            }
+            complete_migration(root, &journal.version)?;
             PendingMigration::delete(root)?;
             Ok(Some(journal))
         }
@@ -560,7 +547,7 @@ mod tests {
         assert!(PendingMigration::load(root).unwrap().is_none());
     }
 
-    /// PR69 WCq regression: a `Prepared`-stage journal whose orphan
+    /// Regression: a `Prepared`-stage journal whose orphan
     /// version directory cannot be removed (here: a stray file inside
     /// makes `remove_dir` fail with ENOTEMPTY) must NOT silently clear
     /// the journal. The Err path keeps the journal intact so a follow-up
@@ -754,5 +741,73 @@ mod tests {
 
         // Journal must still exist on disk so follow-up attempts can recover
         assert!(PendingMigration::load(root).unwrap().is_some());
+    }
+
+    #[test]
+    fn reconcile_prepared_completes_when_binary_already_moved() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // Crash window: rename landed, the journal never advanced to Renamed.
+        let version_dir = version_install_dir(root, "0.113.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::fs::write(version_dir.join(bin_name()), b"binary").unwrap();
+        write_journal(root, "0.113.1", MigrationStage::Prepared);
+
+        let recovered = reconcile(root).unwrap().unwrap();
+        assert_eq!(recovered.stage, MigrationStage::Prepared);
+        assert!(
+            version_dir.join(bin_name()).is_file(),
+            "the moved binary must survive Prepared recovery"
+        );
+        let active = read_active_version(root).unwrap().unwrap();
+        assert_eq!(
+            active.version, "0.113.1",
+            "Prepared recovery must complete the active-marker write"
+        );
+        assert!(PendingMigration::load(root).unwrap().is_none());
+    }
+
+    #[test]
+    fn reconcile_refuses_traversal_version() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        // Bypass `save`, which rejects unsafe versions, to simulate tampering.
+        let path = PendingMigration::journal_path(root);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"schema_version":{SCHEMA_VERSION},"version":"../etc","stage":"prepared"}}"#
+            ),
+        )
+        .unwrap();
+
+        let err = reconcile(root).unwrap_err();
+        assert!(matches!(
+            err,
+            MigrationJournalError::UnsafeVersionReconcile { .. }
+        ));
+        assert!(
+            PendingMigration::load(root).unwrap().is_some(),
+            "a tampered journal must be retained for doctor repair"
+        );
+    }
+
+    #[test]
+    fn save_refuses_unsafe_version_component() {
+        let tmp = TempDir::new().unwrap();
+        let err = PendingMigration {
+            schema_version: SCHEMA_VERSION,
+            version: "../escape".to_string(),
+            stage: MigrationStage::Prepared,
+        }
+        .save(tmp.path())
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            MigrationJournalError::UnsafeVersionWrite { .. }
+        ));
+        assert!(!PendingMigration::journal_path(tmp.path()).exists());
     }
 }

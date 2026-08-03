@@ -231,7 +231,7 @@ pub fn migrate_legacy_install_with_detector(
     detect: &LegacyVersionDetector,
     post_create: Option<&LegacyPostCreateHook>,
 ) -> Result<bool, MigrateLegacyError> {
-    // cubic PR69 UzG: refuse to scan or mutate under a symlinked managed
+    // Refuse to scan or mutate under a symlinked managed
     // directory. A symlink under `<root>/tools/nushell` could redirect the
     // rename or filesystem-truth cleanup outside `$NUMAN_ROOT` and silently
     // rewrite unrelated user-visible state.
@@ -413,7 +413,7 @@ fn parse_nu_version_from_output(output: &str) -> Result<String, MigrateLegacyErr
         .strip_prefix("Nushell ")
         .unwrap_or(trimmed)
         .trim_start_matches('v');
-    // cubic PR69 UzU: delegate to NuVersion::parse so build-hash
+    // Delegate to NuVersion::parse so build-hash
     // suffixes ("0.113.1 (abc123)") and bare semvers both work.
     if let Ok(parsed) = crate::core::nu_version::NuVersion::parse(body) {
         return Ok(parsed.version);

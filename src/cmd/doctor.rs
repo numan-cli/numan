@@ -656,11 +656,11 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
         ));
     }
 
-    // PR69 WCk: surface read/parse errors instead of silently dropping them.
+    // Surface read/parse errors instead of silently dropping them.
     // A malformed `migration-journal.json` previously produced no finding at
-    // all, so `doctor --fix` could report a clean result while the recovery
-    // state is unreadable. Each Err branch carries the journal path so the
-    // fix hint is unambiguous.
+    // all, so doctor could report a clean result while the recovery state is
+    // unreadable. Each Err branch carries the journal path so the fix hint is
+    // unambiguous.
     match PendingMigration::load(root) {
         Ok(Some(j)) => findings.push(finding(
             "journal.migration_pending",
@@ -1436,36 +1436,44 @@ fn apply_repairs(
         // Journal may already be gone (self-healed by an earlier `numan use`,
         // or a concurrent reconcile). Skip this repair only — do not return
         // early, or later Auto repairs (e.g. `nu.active_version.invalid`) are
-        // silently dropped.
-        if PendingMigration::load(root)?.is_some() {
-            let id = "journal.migration_repaired".to_string();
-            // Bind the lock guard so it lives through reconcile (a bare
-            // `acquire_mutation_lock(root)?` drops immediately). Snapshot first.
-            let _lock = acquire_mutation_lock(root)?;
-            if let Err(e) = create_snapshot(
-                root,
-                SnapshotReason::PreMutation,
-                SnapshotTrigger::Doctor,
-                None,
-                None,
-            ) {
-                records.push(RepairRecord {
-                    id,
-                    status: RepairStatus::Failed,
-                    reason: Some(format!("pre-mutation snapshot failed: {e:#}")),
-                });
-            } else {
-                match migration_journal::reconcile(root) {
-                    Ok(_) => records.push(RepairRecord {
-                        id,
-                        status: RepairStatus::Applied,
-                        reason: None,
-                    }),
-                    Err(e) => records.push(RepairRecord {
+        // silently dropped. Load errors are recorded as Failed for the same reason.
+        let id = "journal.migration_repaired".to_string();
+        match PendingMigration::load(root) {
+            Ok(None) => {}
+            Err(e) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Failed,
+                reason: Some(e.to_string()),
+            }),
+            Ok(Some(_)) => {
+                // Bind the lock guard so it lives through reconcile (a bare
+                // `acquire_mutation_lock(root)?` drops immediately). Snapshot first.
+                let _lock = acquire_mutation_lock(root)?;
+                if let Err(e) = create_snapshot(
+                    root,
+                    SnapshotReason::PreMutation,
+                    SnapshotTrigger::Doctor,
+                    None,
+                    None,
+                ) {
+                    records.push(RepairRecord {
                         id,
                         status: RepairStatus::Failed,
-                        reason: Some(e.to_string()),
-                    }),
+                        reason: Some(format!("pre-mutation snapshot failed: {e:#}")),
+                    });
+                } else {
+                    match migration_journal::reconcile(root) {
+                        Ok(_) => records.push(RepairRecord {
+                            id,
+                            status: RepairStatus::Applied,
+                            reason: None,
+                        }),
+                        Err(e) => records.push(RepairRecord {
+                            id,
+                            status: RepairStatus::Failed,
+                            reason: Some(e.to_string()),
+                        }),
+                    }
                 }
             }
         }
@@ -1643,35 +1651,9 @@ mod tests {
     use crate::core::integrity;
     use crate::nu::autoload::FakeCandidateRunner;
     use crate::state::lockfile::{LockfileEntry, PluginActivation};
+    use crate::util::test_paths::PathRestoreGuard;
     use std::collections::BTreeMap;
-    use std::sync::Mutex;
     use tempfile::TempDir;
-
-    /// Serializes tests that mutate the process-wide `PATH` env var.
-    static TEST_PATH_GUARD: Mutex<()> = Mutex::new(());
-
-    /// RAII guard that restores the original PATH on drop, ensuring restoration
-    /// during both normal return and panic unwinding.
-    struct PathRestoreGuard {
-        original: Option<std::ffi::OsString>,
-    }
-
-    impl PathRestoreGuard {
-        fn new() -> Self {
-            Self {
-                original: std::env::var_os("PATH"),
-            }
-        }
-    }
-
-    impl Drop for PathRestoreGuard {
-        fn drop(&mut self) {
-            match self.original.as_ref() {
-                Some(path) => std::env::set_var("PATH", path),
-                None => std::env::remove_var("PATH"),
-            }
-        }
-    }
 
     fn fake_paths(root: &Path, nu_exe: &Path) -> NuPaths {
         let bytes = std::fs::read(nu_exe).unwrap();
@@ -2154,8 +2136,6 @@ mod tests {
 
     #[test]
     fn doctor_reports_path_nu_version_probe_failure() {
-        let _path_guard = TEST_PATH_GUARD.lock().unwrap();
-
         let dir = TempDir::new().unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root).unwrap();
@@ -2449,10 +2429,10 @@ mod tests {
         );
     }
 
-    /// PR69 WCk regression: a malformed `migration-journal.json` must
+    /// Regression: a malformed `migration-journal.json` must
     /// surface a `journal.migration_invalid` finding at Error severity with
     /// a Manual repair tier. Previously the report silently dropped the
-    /// Err branch, so `doctor --fix` could report a clean result while
+    /// Err branch, so doctor could report a clean result while
     /// recovery state was unreadable.
     #[test]
     fn doctor_reports_malformed_migration_journal_as_invalid() {
@@ -2553,7 +2533,7 @@ mod tests {
 
     #[test]
     fn doctor_fix_continues_after_absent_migration_journal() {
-        // Greptile: when `journal.migration_pending` is still in findings but
+        // When `journal.migration_pending` is still in findings but
         // the journal file is already gone, apply_repairs must not `return`
         // early — later Auto repairs (here `nu.active_version.invalid`) must
         // still run.
@@ -2598,5 +2578,63 @@ mod tests {
             "later active-version repair must still run after skipped migration: {repairs:?}"
         );
         assert!(!marker.exists(), "malformed marker must be cleared");
+    }
+
+    #[test]
+    fn doctor_fix_records_failed_migration_repair_and_continues() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // `Prepared` journal over a version dir that `remove_dir` cannot clear.
+        let tools = root.join("tools").join("nushell");
+        let version_dir = tools.join("0.113.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::fs::write(version_dir.join("stray.dat"), b"foreign").unwrap();
+        PendingMigration {
+            schema_version: crate::state::migration_journal::SCHEMA_VERSION,
+            version: "0.113.1".to_string(),
+            stage: crate::state::migration_journal::MigrationStage::Prepared,
+        }
+        .save(root)
+        .unwrap();
+
+        // A second Auto repair that must still run after the migration fails.
+        let marker = root.join("nu_state").join("active-version.json");
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, b"{ not valid json").unwrap();
+
+        let args = DoctorArgs {
+            scan: false,
+            json: false,
+            nupm_home: None,
+        };
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+        let repairs = apply_repairs(&args, root, &report.findings, &test_doctor_options()).unwrap();
+
+        assert!(
+            repairs.iter().any(|r| {
+                r.id == "journal.migration_repaired" && r.status == RepairStatus::Failed
+            }),
+            "a failed reconcile must be recorded, not swallowed: {repairs:?}"
+        );
+        assert!(
+            PendingMigration::load(root).unwrap().is_some(),
+            "the journal must survive a failed repair so the user can retry"
+        );
+        assert!(
+            repairs.iter().any(|r| {
+                r.id == "nu.active_version.repaired" && r.status == RepairStatus::Applied
+            }),
+            "later repairs must still run after a failed migration repair: {repairs:?}"
+        );
     }
 }

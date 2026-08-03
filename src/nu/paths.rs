@@ -313,7 +313,7 @@ pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
         return Ok(managed.to_string_lossy().into_owned());
     }
 
-    // cubic PR69 UzM: don't swallow corrupt-marker errors. A present but
+    // Don't swallow corrupt-marker errors. A present but
     // malformed marker should fail loudly so `numan init` / loader setup
     // can't silently fall back to PATH Nu because the marker happens
     // to be unreadable.
