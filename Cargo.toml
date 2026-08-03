@@ -76,8 +76,11 @@ uuid = { version = "1", features = ["v7", "v4"] }
 # Git (for source builds and registry sync)
 git2 = "0.21"
 
+# stdio redirect for doctor --json repair passes (Unix only)
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 rand_core = { version = "0.6", features = ["getrandom"] }
-libc = "0.2"
 wait-timeout = "0.2"

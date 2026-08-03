@@ -20,12 +20,6 @@ use crate::util::hints::{self, CMD_REGISTRY_SYNC};
 /// a matching managed Nu version or searching for another package with `numan search`.
 #[derive(Parser, Debug)]
 pub struct TryArgs {
-    /// Skip confirmation prompts. Does NOT consent to a managed-Nu install or
-    /// version switch via `nu_pin_offer`; that path is hard-gated against
-    /// silent switching even with `--yes`.
-    #[arg(long)]
-    pub yes: bool,
-
     /// Install only; do not activate
     #[arg(long)]
     pub no_activate: bool,
@@ -95,8 +89,7 @@ pub fn execute(args: &TryArgs, root: &Path) -> Result<()> {
         StarterSelection::Compatible(id) => id,
         StarterSelection::NeedsPin { id, diagnosis } => {
             println!("Starter '{id}' needs a different Nu than {}.", nu.version);
-            let accepted =
-                nu_pin_offer::offer_managed_nu_pin(root, &nu.version, &diagnosis, args.yes)?;
+            let accepted = nu_pin_offer::offer_managed_nu_pin(root, &nu.version, &diagnosis)?;
             if !accepted {
                 bail!(
                     "{}",
@@ -152,16 +145,14 @@ pub fn execute(args: &TryArgs, root: &Path) -> Result<()> {
     }
 
     if args.no_activate {
-        println!(
-            "Installed '{package_id}' (not activated). Run `numan activate {package_id} --yes`."
-        );
+        println!("Installed '{package_id}' (not activated). Run `numan activate {package_id}`.");
         return Ok(());
     }
 
     activate::execute(
         &ActivateArgs {
             packages: vec![package_id.clone()],
-            yes: true,
+
             verbose: false,
             list: false,
             check: false,
@@ -299,9 +290,24 @@ fn detect_nu(root: &Path) -> Result<NuVersion> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::{Cli, Commands};
     use crate::core::package::*;
     use crate::core::resolve::{Incompatibility, PackageIncompatibility};
+    use clap::Parser;
     use std::collections::{BTreeMap, HashMap};
+
+    #[test]
+    fn try_cli_rejects_obsolete_yes_flag() {
+        assert!(
+            Cli::try_parse_from(["numan", "try", "--yes"]).is_err(),
+            "numan try --yes must be rejected"
+        );
+        let cli = Cli::try_parse_from(["numan", "try", "--no-activate"]).unwrap();
+        match cli.command {
+            Commands::Try(args) => assert!(args.no_activate),
+            _ => panic!("expected Try command"),
+        }
+    }
 
     fn pkg(id: &str, constraint: &str, plugin: bool) -> Package {
         let (owner, name) = id.split_once('/').unwrap();
@@ -442,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn offer_managed_nu_pin_yes_refuses_silent_switch() {
+    fn offer_managed_nu_pin_non_interactive_refuses_silent_switch() {
         let diagnosis = PackageIncompatibility {
             suggested_pin: Some("0.113.1".to_string()),
             issue: Incompatibility::NuTooNew {
@@ -451,11 +457,17 @@ mod tests {
             available_versions: vec!["1.0.0".to_string()],
         };
         let root = tempfile::tempdir().unwrap();
-        let accepted =
-            nu_pin_offer::offer_managed_nu_pin(root.path(), "0.114.1", &diagnosis, true).unwrap();
+        let accepted = nu_pin_offer::offer_managed_nu_pin_with_interaction(
+            root.path(),
+            "0.114.1",
+            &diagnosis,
+            false,
+            || panic!("non-interactive path must not read stdin"),
+        )
+        .unwrap();
         assert!(
             !accepted,
-            "--yes must not silent-switch / auto-install managed Nu"
+            "non-interactive mode must not auto-install managed Nu"
         );
     }
 

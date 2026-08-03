@@ -2,6 +2,7 @@
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use crate::core::integrity;
@@ -19,6 +20,19 @@ use crate::util::fs_safety::assert_not_symlink;
 const RELEASES_LATEST: &str = "https://api.github.com/repos/nushell/nushell/releases/latest";
 const RELEASES_TAGS_BASE: &str = "https://api.github.com/repos/nushell/nushell/releases/tags/";
 const USER_AGENT: &str = "numan-cli (https://github.com/tonythethompson/numan)";
+
+/// Snapshot established Numan state before a `setup nu` install/PATH mutation.
+fn snapshot_before_nu_setup(root: &Path, context: &'static str) -> Result<()> {
+    create_snapshot(
+        root,
+        SnapshotReason::PreMutation,
+        SnapshotTrigger::Install,
+        None,
+        None,
+    )
+    .context(context)?;
+    Ok(())
+}
 
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
@@ -444,6 +458,9 @@ fn path_parent_for_registration(input: &Path, resolved: &Path) -> Result<PathBuf
         .map(|parent| parent.to_path_buf())
 }
 
+/// Re-export for callers that historically imported this from bootstrap.
+pub use crate::util::confirm::hoisted_audit_message;
+
 /// Register an existing Nushell binary: prepend its directory to PATH and persist when allowed.
 pub fn register_existing_nu(binary: &Path, options: &NuSetupOptions) -> Result<PathBuf> {
     let input = binary.to_path_buf();
@@ -466,16 +483,22 @@ pub fn register_existing_nu(binary: &Path, options: &NuSetupOptions) -> Result<P
         // Audit trail for the hoisted consent: the caller (typically
         // `execute_use_path` / `execute_use_existing`) already collected
         // the destructive-step consent (managed-tree deletion + PATH add)
-        // via its own `confirm_or_bail(...)` before reaching this point.
-        // Direct callers (CLI subcommand and doctor --fix) leave the flag
+        // via `require_tty_or_yes` + `confirm_or_bail` before reaching here.
+        // Direct callers (CLI subcommand and doctor repair) leave the flag
         // `false` and the inner prompt continues to fire, preserving
         // backward-compatible UX.
-        eprintln!(
-            "(audit) prompt hoisted; skipping internal PATH-confirmation prompt \
-             for '{}' (caller has already gathered destructive-step consent).",
-            parent.display()
-        );
+        eprintln!("{}", crate::util::confirm::hoisted_audit_message(&parent));
     } else {
+        // Fail closed on non-TTY without `--yes`. `confirm_or_bail` alone
+        // would auto-confirm and mutate PATH / active-version state.
+        let is_tty = options
+            .is_tty
+            .unwrap_or_else(|| std::io::stdin().is_terminal());
+        crate::util::confirm::require_tty_or_yes_with_tty(
+            options.yes,
+            "off-path Nu PATH registration",
+            is_tty,
+        )?;
         println!(
             "This will add '{}' to your user PATH so Nushell can be found.",
             parent.display()
@@ -661,8 +684,11 @@ pub struct NuSetupOptions {
     /// suppressed and replaced with an audit log, so the user sees one prompt
     /// instead of two. Default `false` preserves the original two-prompt UX
     /// for direct callers (`numan setup nu use <path>`, hidden legacy flags,
-    /// `numan doctor --fix`'s off-PATH repair).
+    /// doctor off-PATH repair).
     pub caller_consented_destructive: bool,
+    /// Override stdin TTY detection for the non-interactive guard (tests).
+    /// `None` uses `stdin().is_terminal()`.
+    pub is_tty: Option<bool>,
 }
 
 pub fn execute_nu_setup(
@@ -736,6 +762,11 @@ where
                 .unwrap_or_else(|| dest.clone())
         };
         if options.yes {
+            // PATH persistence mutates user shell state; snapshot first.
+            snapshot_before_nu_setup(
+                root,
+                "Failed to create pre-mutation snapshot for existing `numan setup nu`",
+            )?;
             let tools_dir = match effective.parent() {
                 Some(parent) => parent.to_path_buf(),
                 None => managed_nu_dir(root),
@@ -777,22 +808,24 @@ where
         platform.triple
     );
     // Refuse to proceed without explicit consent in non-interactive sessions.
-    // `confirm_or_bail` auto-confirms on a pipe otherwise, which would silently
-    // trigger a download and subsequent PATH mutation.
-    crate::util::confirm::require_tty_or_yes(options.yes, "Nushell setup")?;
+    // Routes through `require_tty_or_yes` so the audit-grade eprintln output
+    // is identical across every destructive setup entry — `cmd::setup::*`
+    // (off-path registration, managed removal) and this download path share
+    // one helper, one audit pattern, one source of truth. The pipe fallback
+    // that `confirm_or_bail` would auto-promote is closed here instead.
+    let is_tty = options
+        .is_tty
+        .unwrap_or_else(|| std::io::stdin().is_terminal());
+    crate::util::confirm::require_tty_or_yes_with_tty(options.yes, "Nushell setup", is_tty)?;
     crate::util::confirm::confirm_or_bail("Proceed?", options.yes, "Nushell setup cancelled.")?;
 
     // Snapshot established state right before the download/install mutates the
     // filesystem. Same lifecycle boundary used by install/update/remove/activate
     // per AGENTS.md.
-    create_snapshot(
+    snapshot_before_nu_setup(
         root,
-        SnapshotReason::PreMutation,
-        SnapshotTrigger::Install,
-        None,
-        None,
-    )
-    .with_context(|| "Failed to create pre-install snapshot for `numan setup nu`")?;
+        "Failed to create pre-install snapshot for `numan setup nu`",
+    )?;
 
     let installed = install(root, platform)?;
 
@@ -1025,6 +1058,7 @@ mod tests {
             // Install path doesn't enter `register_existing_nu`, but the
             // initializer needs this field for the struct to compile.
             caller_consented_destructive: false,
+            is_tty: None,
         };
 
         // Fake installer: write a versioned-style binary at tools/nushell/<v>/
@@ -1083,6 +1117,7 @@ mod tests {
             skip_path: true,
             version: None,
             caller_consented_destructive: false,
+            is_tty: None,
         };
 
         let result = execute_nu_setup_with_installer(root, &platform, &options, |_r, _p| {
@@ -1091,5 +1126,87 @@ mod tests {
         .expect("dangling active must not block latest short-circuit");
 
         assert_eq!(result, good);
+    }
+
+    #[test]
+    fn execute_nu_setup_refuses_non_tty_without_yes_and_skips_installer() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let platform = Platform::detect();
+        let options = NuSetupOptions {
+            yes: false,
+            force: false,
+            skip_path: true,
+            version: Some("0.113.1".to_string()),
+            caller_consented_destructive: false,
+            is_tty: Some(false),
+        };
+
+        let err = execute_nu_setup_with_installer(root, &platform, &options, |_r, _p| {
+            panic!("installer must not run when non-TTY guard refuses");
+        })
+        .expect_err("non-TTY without --yes must refuse before install");
+
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("non-interactive") || msg.contains("Refusing destructive"),
+            "expected non-TTY refusal, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn register_existing_nu_refuses_non_tty_without_yes_before_path_mutation() {
+        let nu_name = nu_binary_name();
+        let Some(src) = std::env::var_os("PATH").and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join(nu_name))
+                .find(|p| p.is_file() && validate_nushell_binary(p).is_ok())
+        }) else {
+            // Unit CI without Nu on PATH cannot exercise the post-validate gate.
+            return;
+        };
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let existing_dir = dir.path().join("existing-nu");
+        std::fs::create_dir_all(&existing_dir).unwrap();
+        let existing = existing_dir.join(nu_name);
+        std::fs::copy(&src, &existing).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&existing).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&existing, perms).unwrap();
+        }
+
+        let before_path = std::env::var_os("PATH");
+        let options = NuSetupOptions {
+            yes: false,
+            force: false,
+            skip_path: true,
+            version: None,
+            caller_consented_destructive: false,
+            is_tty: Some(false),
+        };
+
+        let err = register_existing_nu(&existing, &options)
+            .expect_err("non-TTY without --yes must refuse before PATH/active mutation");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("non-interactive") || msg.contains("Refusing destructive"),
+            "expected non-TTY refusal, got: {msg}"
+        );
+        assert_eq!(
+            std::env::var_os("PATH"),
+            before_path,
+            "PATH must be unchanged after refusal"
+        );
+        assert!(
+            version_manager::read_active_version(root)
+                .unwrap()
+                .is_none(),
+            "active-version marker must not be written after refusal"
+        );
     }
 }

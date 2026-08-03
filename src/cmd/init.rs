@@ -8,6 +8,7 @@ use crate::nu::autoload::{validate_candidate, CandidateRunner, NuCandidateRunner
 use crate::nu::paths::NuPaths;
 use crate::state::autoload_state::AutoloadState;
 use crate::state::lockfile::Lockfile;
+use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::format_timestamp;
 use crate::util::fs_safety::acquire_mutation_lock;
 use crate::util::fs_safety::assert_managed_file_owned;
@@ -152,7 +153,7 @@ fn print_onboarding_next_steps(official_configured: bool) {
     }
     println!();
     println!(
-        "Run 'numan doctor' to verify setup (use 'numan doctor --fix --yes' for safe repairs)."
+        "Run 'numan doctor' to verify setup and apply safe repairs (use 'numan doctor --scan' for report-only output)."
     );
 }
 
@@ -164,24 +165,29 @@ fn execute_refresh<F>(
 where
     F: Fn() -> Result<NuPaths>,
 {
-    let old_paths = NuPaths::load(root)?;
+    // Probe live Nu outside the lock; reload mutable Numan state only after
+    // the mutation lock is held (same reload-after-lock pattern as activate).
     let new_paths = detect()?;
 
-    let lockfile = Lockfile::load(root)?;
-    let has_active_plugins = lockfile
-        .packages
-        .values()
-        .any(|entry| entry.activation.is_some());
+    // Always serialize refresh writes (lockfile, autoload-state, paths), even
+    // when no packages are active. Skipping the lock left a race window against
+    // concurrent mutators.
+    let _lock = acquire_mutation_lock(root)?;
+    create_snapshot(
+        root,
+        SnapshotReason::PreMutation,
+        SnapshotTrigger::Init,
+        None,
+        None,
+    )
+    .context("Failed to create pre-mutation snapshot for `numan init --refresh`")?;
+
+    let old_paths = NuPaths::load(root)?;
+    let mut lockfile = Lockfile::load(root)?;
     let has_active_modules = lockfile
         .packages
         .values()
         .any(|entry| entry.module_activation.is_some());
-
-    let _lock = if has_active_plugins || has_active_modules {
-        Some(acquire_mutation_lock(root)?)
-    } else {
-        None
-    };
 
     if has_active_modules {
         validate_refresh_for_active_modules(
@@ -192,8 +198,6 @@ where
             runner_factory,
         )?;
     }
-
-    let mut lockfile = lockfile;
     refresh_activation_records(&mut lockfile, &new_paths)?;
     lockfile.nu_version = new_paths.nu_version.clone();
     lockfile.platform = new_paths.platform.clone();
@@ -443,10 +447,14 @@ mod tests {
 
         let hash_v1 = paths_v1.nu_executable_hash.clone();
         let mut lockfile = Lockfile::empty();
+        let payload_rel = "packages/plugins/owner/plugin/1.0.0-abc";
+        let payload_dir = root.join(payload_rel);
+        std::fs::create_dir_all(&payload_dir).unwrap();
+        std::fs::write(payload_dir.join("nu_plugin_test"), b"bin").unwrap();
         lockfile.packages.insert(
             "owner/plugin".to_string(),
             plugin_entry(
-                "packages/plugins/owner/plugin/1.0.0-abc",
+                payload_rel,
                 Some(PluginActivation {
                     plugin_registry_path: paths_v1.plugin_registry_path.clone(),
                     nu_executable_sha256: hash_v1,
@@ -472,5 +480,97 @@ mod tests {
             activation.nu_executable_sha256,
             integrity::compute_sha256(b"v2")
         );
+    }
+
+    #[test]
+    fn refresh_without_active_packages_still_locks_and_snapshots() {
+        use crate::state::snapshot::{list_snapshots, SnapshotReason};
+        use crate::util::fs_safety::acquire_mutation_lock;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let nu_v1 = root.join("nu_v1");
+        let nu_v2 = root.join("nu_v2");
+        std::fs::write(&nu_v1, b"v1").unwrap();
+        std::fs::write(&nu_v2, b"v2").unwrap();
+
+        let paths_v1 = fake_paths(root, &nu_v1, None);
+        paths_v1.save(root).unwrap();
+        Lockfile::empty().save(root).unwrap();
+
+        let paths_v2 = fake_paths(root, &nu_v2, None);
+        execute_with_runner(
+            &InitArgs { refresh: true },
+            root,
+            make_detect(paths_v2.clone()),
+            fake_runner_factory,
+        )
+        .unwrap();
+
+        let loaded = NuPaths::load(root).unwrap();
+        assert_eq!(loaded.nu_executable_hash, paths_v2.nu_executable_hash);
+        let snapshots = list_snapshots(root).unwrap();
+        assert!(
+            snapshots.iter().any(|s| {
+                s.trigger == SnapshotTrigger::Init && s.reason == SnapshotReason::PreMutation
+            }),
+            "init --refresh must create a PreMutation Init snapshot even with no active packages"
+        );
+
+        // Holding the mutation lock must fail-closed a concurrent refresh.
+        let _held = acquire_mutation_lock(root).unwrap();
+        let err = execute_with_runner(
+            &InitArgs { refresh: true },
+            root,
+            make_detect(paths_v2),
+            fake_runner_factory,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("mutation is already in progress"),
+            "expected lock contention error, got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn refresh_snapshot_failure_does_not_write_paths() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let nu_v1 = root.join("nu_v1");
+        let nu_v2 = root.join("nu_v2");
+        std::fs::write(&nu_v1, b"v1").unwrap();
+        std::fs::write(&nu_v2, b"v2").unwrap();
+
+        let paths_v1 = fake_paths(root, &nu_v1, None);
+        paths_v1.save(root).unwrap();
+
+        // Lockfile references a missing payload so create_snapshot fails.
+        let mut lockfile = Lockfile::empty();
+        lockfile.packages.insert(
+            "owner/pkg".to_string(),
+            plugin_entry("packages/plugins/owner/pkg/1.0.0-deadbeef", None),
+        );
+        lockfile.save(root).unwrap();
+
+        let paths_v2 = fake_paths(root, &nu_v2, None);
+        let err = execute_with_runner(
+            &InitArgs { refresh: true },
+            root,
+            make_detect(paths_v2.clone()),
+            fake_runner_factory,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Failed to create pre-mutation snapshot"),
+            "expected snapshot failure, got: {err:#}"
+        );
+
+        let loaded = NuPaths::load(root).unwrap();
+        assert_eq!(
+            loaded.nu_executable_hash, paths_v1.nu_executable_hash,
+            "paths.json must stay unchanged when the PreMutation snapshot fails"
+        );
+        assert_ne!(loaded.nu_executable_hash, paths_v2.nu_executable_hash);
     }
 }

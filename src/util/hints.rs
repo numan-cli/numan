@@ -15,8 +15,8 @@ pub const CMD_ACTIVATE_CHECK: &str = "numan activate --check";
 /// `numan registry sync`
 pub const CMD_REGISTRY_SYNC: &str = "numan registry sync";
 
-/// `numan doctor --fix`
-pub const CMD_DOCTOR_FIX: &str = "numan doctor --fix";
+/// `numan doctor`
+pub const CMD_DOCTOR_FIX: &str = "numan doctor";
 
 /// `numan setup nu`
 pub const CMD_SETUP_NU: &str = "numan setup nu";
@@ -47,6 +47,7 @@ pub fn shell_quote(s: &str) -> String {
                     '\'' | '"'
                         | '`'
                         | '$'
+                        | '\\'
                         | '&'
                         | '|'
                         | ';'
@@ -228,6 +229,11 @@ mod tests {
     #[test]
     fn shell_quote_escapes_embedded_quotes() {
         assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn shell_quote_wraps_paths_with_backslashes() {
+        assert_eq!(shell_quote(r"/tmp/nu\bin"), r"'/tmp/nu\bin'");
     }
 
     #[test]
