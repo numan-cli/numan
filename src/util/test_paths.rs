@@ -21,9 +21,9 @@ static PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// let _path_guard = PathRestoreGuard::new();
-/// prepend_process_path_for_test("...");
+/// // mutate PATH for the test...
 /// // drop restores original PATH (or unsets it if it was unset)
 /// ```
 #[must_use = "PathRestoreGuard restores PATH on drop; bind it to a variable"]
