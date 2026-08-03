@@ -719,7 +719,9 @@ where
         let effective = if dest.is_file() {
             dest
         } else {
-            version_manager::active_nu_binary(root)?
+            version_manager::active_nu_binary(root)
+                .ok()
+                .flatten()
                 .or_else(|| {
                     version_manager::latest_installed_version(root)
                         .ok()
