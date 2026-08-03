@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Args;
 use console::style;
 use serde::Serialize;
@@ -35,6 +35,7 @@ use crate::util::hints::{
     ACTIVE_PLUGIN_MUTATION_GATED_FIX, CMD_ACTIVATE, CMD_DEACTIVATE, CMD_INIT, CMD_INIT_REFRESH,
     CMD_REGISTRY_SYNC, CMD_SETUP_NU,
 };
+use crate::util::stdio_redirect::StdoutToStderr;
 
 const SCHEMA_VERSION: u32 = 1;
 const LAYOUT_DIRS: &[&str] = &["nu_state", "state", "packages", "registries"];
@@ -1000,6 +1001,18 @@ fn apply_repairs(
     let needs_lock = findings.iter().any(|f| {
         matches!(f.repair, RepairTier::Auto | RepairTier::Confirm) && f.severity != Severity::Ok
     });
+
+    // Nested repair handlers may println!; redirect only when those handlers
+    // are about to run so healthy --json scans avoid mutating process stdio.
+    let _stdout_guard = if args.json && needs_lock {
+        Some(
+            StdoutToStderr::redirect()
+                .context("Failed to redirect stdout while emitting doctor JSON")?,
+        )
+    } else {
+        None
+    };
+
     let mut lock = if needs_lock {
         Some(acquire_mutation_lock(root)?)
     } else {
@@ -1640,7 +1653,7 @@ mod tests {
             assert_eq!(none.repair, RepairTier::Manual);
             return;
         }
-        assert_eq!(none.fix.as_deref(), Some(hints::CMD_DOCTOR_FIX));
+        assert_eq!(none.fix.as_deref(), Some(hints::CMD_DOCTOR));
         assert_eq!(none.repair, RepairTier::Auto);
 
         execute_with_options(

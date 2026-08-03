@@ -15,8 +15,11 @@ pub const CMD_ACTIVATE_CHECK: &str = "numan activate --check";
 /// `numan registry sync`
 pub const CMD_REGISTRY_SYNC: &str = "numan registry sync";
 
-/// `numan doctor`
-pub const CMD_DOCTOR_FIX: &str = "numan doctor";
+/// `numan doctor` (default mode applies safe repairs; use `--scan` for report-only)
+pub const CMD_DOCTOR: &str = "numan doctor";
+
+/// Historical alias for [`CMD_DOCTOR`] (named when doctor repairs required `--fix`).
+pub const CMD_DOCTOR_FIX: &str = CMD_DOCTOR;
 
 /// `numan setup nu`
 pub const CMD_SETUP_NU: &str = "numan setup nu";
@@ -121,7 +124,7 @@ pub fn registry_none_fix(root: &std::path::Path) -> &'static str {
     if OFFICIAL_REGISTRY.is_placeholder_key() {
         CMD_REGISTRY_ADD
     } else if root.join("nu_state/paths.json").exists() {
-        CMD_DOCTOR_FIX
+        CMD_DOCTOR
     } else {
         CMD_INIT
     }
@@ -299,6 +302,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("nu_state")).unwrap();
         std::fs::write(dir.path().join("nu_state/paths.json"), b"{}").unwrap();
-        assert_eq!(registry_none_fix(dir.path()), CMD_DOCTOR_FIX);
+        assert_eq!(registry_none_fix(dir.path()), CMD_DOCTOR);
     }
 }

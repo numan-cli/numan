@@ -535,3 +535,37 @@ fn doctor_reports_managed_and_trust_root_findings() {
     assert!(json.contains("nu.managed.version"));
     assert!(json.contains("registry.trust_root"));
 }
+
+/// Default `doctor --json` runs repairs; nested helpers may `println!`.
+/// Stdout must remain a single JSON object (repair chatter goes to stderr).
+#[test]
+fn doctor_json_default_stdout_is_valid_json() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root).unwrap();
+
+    // Uninitialized root so default repairs call `init`, which prints human
+    // text that must not land on stdout when `--json` is set.
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_numan"))
+        .args([
+            "--root",
+            root.to_str().expect("temp root is utf-8"),
+            "doctor",
+            "--json",
+        ])
+        .env("NUMAN_ALLOW_UNSIGNED", "1")
+        .output()
+        .expect("run numan doctor --json");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!(
+            "default doctor --json stdout must be valid JSON: {e}\nstdout={stdout}\nstderr={stderr}"
+        )
+    });
+    assert!(
+        value.get("repairs").is_some_and(|r| r.is_array()),
+        "default doctor --json must include repairs: {value}"
+    );
+}
