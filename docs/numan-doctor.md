@@ -34,6 +34,9 @@ numan doctor [--scan] [--json] [--nupm-home PATH]
 Global `--root` applies as for all commands.
 
 **Default (no flags):** diagnose and apply available repairs, then print findings.
+Confirm-tier repairs run only when stdin is a TTY (allow-gate, not a prompt);
+non-interactive sessions skip them as `not_confirmed`. Nested `setup nu`
+repairs may still prompt when allowed.
 **`--scan`:** diagnose and print findings without mutating state.
 
 ## Exit codes
@@ -52,7 +55,7 @@ Each finding has:
 - `severity` — `ok` \| `info` \| `warn` \| `error`
 - `message` — human-readable summary
 - `fix` — optional suggested command for manual issues (e.g. `numan init` or `numan registry add …`)
-- `repair` — `none` \| `auto` \| `confirm` \| `manual` (whether `--fix` can act; see below)
+- `repair` — `none` \| `auto` \| `confirm` \| `manual` (whether default repair mode can act; see below)
 
 **Rules:**
 
@@ -76,12 +79,12 @@ Repair steps run in this **order** (each step re-validates only what it changed)
 | **auto** | Never | `layout.*` (missing dirs), `nu_paths.missing` | `create_dir_all` for layout; `numan init` |
 | **auto** | Never | `registry.index_missing` | `numan registry sync` |
 | **auto** | Never | `registry.none` (production trust root only) | Add official registry via same path as `numan init` |
-| **confirm** | Always (non-TTY skips) | `nu.binary.missing_on_path` | `numan setup nu` (downloads managed Nushell) |
-| **confirm** | Always (non-TTY skips) | `nu.binary.found_off_path` | `numan setup nu use <path>` (adds existing install to PATH) |
-| **confirm** | Always (non-TTY skips) | `nu_paths.drift`, `nu_paths.vendor_drift` | `numan init --refresh` |
-| **confirm** | Always (non-TTY skips) | `journal.plugin_pending`, `journal.autoload_pending`, `journal.plugin_stale`, `journal.autoload_stale`, `activation.plugin_stale`, `activation.module_stale`, `autoload.projection`, `autoload.managed_missing` | `numan activate` (empty package list — reconciles journals and re-activates stale entries; same entry point as normal activate recovery) |
-| **confirm** | Always (non-TTY skips) | `journal.plugin_deactivate_pending` | `numan deactivate <journal package ids>` (reconciles pending-plugin-deactivate journal only; not a full-root deactivate) |
-| **confirm** | Always (non-TTY skips) | `journal.plugin_deactivate_stale` | `numan init --refresh` then `numan deactivate` |
+| **confirm** | TTY required (non-TTY → `not_confirmed`) | `nu.binary.missing_on_path` | `numan setup nu` (downloads managed Nushell) |
+| **confirm** | TTY required (non-TTY → `not_confirmed`) | `nu.binary.found_off_path` | `numan setup nu use <path>` (adds existing install to PATH) |
+| **confirm** | TTY required (non-TTY → `not_confirmed`) | `nu_paths.drift`, `nu_paths.vendor_drift` | `numan init --refresh` |
+| **confirm** | TTY required (non-TTY → `not_confirmed`) | `journal.plugin_pending`, `journal.autoload_pending`, `journal.plugin_stale`, `journal.autoload_stale`, `activation.plugin_stale`, `activation.module_stale`, `autoload.projection`, `autoload.managed_missing` | `numan activate` (empty package list — reconciles journals and re-activates stale entries; same entry point as normal activate recovery) |
+| **confirm** | TTY required (non-TTY → `not_confirmed`) | `journal.plugin_deactivate_pending` | `numan deactivate <journal package ids>` (reconciles pending-plugin-deactivate journal only; not a full-root deactivate) |
+| **confirm** | TTY required (non-TTY → `not_confirmed`) | `journal.plugin_deactivate_stale` | `numan init --refresh` then `numan deactivate` |
 | **manual** | Never auto | `autoload.managed_foreign`, `payload.missing`, `journal.lifecycle_pending`, `journal.lifecycle_stale`, `registry.none` (placeholder trust root), `nu_paths.vendor_missing`, `nupm.*` | Print fix hint only |
 | **none** | Never | `activation.plugin_mutation_gated` (`info`) | Informational only; see [docs/active-plugin-gate.md](active-plugin-gate.md) |
 
@@ -115,8 +118,8 @@ Checks run in order below. Implementation should call existing validators (`NuPa
 |----|----------|-----------|
 | `nu.binary.missing_on_path` | `error` | Nu not on PATH and not under `$NUMAN_ROOT/tools/nushell/` → fix: `numan setup nu` |
 | `nu.binary.found_off_path` | `warn` | Nu exists in a known install root (e.g. `~/.cargo/bin`, `%LOCALAPPDATA%\Programs\nushell`) but not on PATH → fix: `numan setup nu use <path>` |
-| `nu.path.version` | `info` | PATH-only Nu version (`PATH Nu: 0.114.1`), `PATH Nu: not found`, or `PATH Nu: found at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Does not treat managed Nu as PATH. Report-only (no `--fix`). |
-| `nu.managed.version` | `info` | Managed binary under `$NUMAN_ROOT/tools/nushell/` with version, `Managed Nu: not installed`, or `Managed Nu: present at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Report-only (no `--fix`). |
+| `nu.path.version` | `info` | PATH-only Nu version (`PATH Nu: 0.114.1`), `PATH Nu: not found`, or `PATH Nu: found at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Does not treat managed Nu as PATH. Report-only (no repair). |
+| `nu.managed.version` | `info` | Managed binary under `$NUMAN_ROOT/tools/nushell/` with version, `Managed Nu: not installed`, or `Managed Nu: present at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Report-only (no repair). |
 | `nu_paths.missing` | `error` | `paths.json` absent → fix: `numan init` |
 | `nu_paths.drift` | `error` | `NuPaths::validate_drift()` fails → fix: `numan init --refresh` |
 | `nu_paths.vendor_drift` | `error` | `validate_vendor_drift()` fails when `data_dir` cached → fix: `numan init --refresh` |
@@ -162,9 +165,9 @@ No re-hash or revision recompute in v1 (too expensive for doctor).
 
 | ID | Severity | Condition |
 |----|----------|-----------|
-| `registry.none` | `warn` | `config.toml` has no registries → fix: `numan init` before first init; `numan doctor --fix` after init (production trust root); `numan registry add …` for custom/placeholder builds |
+| `registry.none` | `warn` | `config.toml` has no registries → fix: `numan init` before first init; `numan doctor` after init (production trust root auto-repair); `numan registry add …` for custom/placeholder builds |
 | `registry.index_missing` | `info` | Enabled registry has no cached index under `registries/` → fix: `numan registry sync` |
-| `registry.trust_root` | `info` | Enabled `official` registry: reports built-in key id (e.g. `official-2026-07-01`). Placeholder builds note that the key is not production. Report-only (no `--fix`). |
+| `registry.trust_root` | `info` | Enabled `official` registry: reports built-in key id (e.g. `official-2026-07-01`). Placeholder builds note that the key is not production. Report-only (no repair). |
 
 ### 7. nupm coexistence (optional section)
 
@@ -202,10 +205,8 @@ nupm coexistence
 
 Summary: 1 error, 1 warning
 
-Repairs:
-  ✓ Created missing state/ directory
-  ✓ Ran registry sync
-  → numan init --refresh required (skipped; user confirmation needed)
+Repairs: 2 applied, 1 skipped
+Confirm-tier repairs skipped: stdin is not a TTY. Re-run `numan doctor` interactively, or use `--scan` for report-only.
 ```
 
 Use `console` styling consistent with `activate --check`.
@@ -251,11 +252,11 @@ pub fn execute_with_options(args: &DoctorArgs, root: &Path, options: DoctorOptio
 
 | Command | Role |
 |---------|------|
-| `numan init` / `init --refresh` | **Repair** Nu path drift (`--fix` delegates here) |
-| `numan setup nu` | **Repair** missing Nushell (`nu.binary.missing_on_path`; `--fix` downloads managed binary) |
-| `numan setup nu use <path>` | **Repair** off-PATH Nushell (`nu.binary.found_off_path`; `--fix` adds parent dir to user PATH) |
-| `numan activate` | **Repair** activation + journal reconciliation (`--fix` delegates here) |
-| `numan registry sync` | **Repair** missing index cache (`--fix` auto tier) |
+| `numan init` / `init --refresh` | **Repair** Nu path drift (default doctor delegates here) |
+| `numan setup nu` | **Repair** missing Nushell (`nu.binary.missing_on_path`; confirm-tier downloads managed binary) |
+| `numan setup nu use <path>` | **Repair** off-PATH Nushell (`nu.binary.found_off_path`; confirm-tier adds parent dir to user PATH) |
+| `numan activate` | **Repair** activation + journal reconciliation (default doctor delegates here) |
+| `numan registry sync` | **Repair** missing index cache (auto tier) |
 | `numan activate --check` | Deep **module** check only; no repair |
 | `numan nupm status` | nupm-only summary; doctor embeds optional subset |
 | `numan update` / `remove` / `gc` | Block on stale lifecycle journal; doctor reports, does not fix lifecycle |
@@ -276,3 +277,4 @@ pub fn execute_with_options(args: &DoctorArgs, root: &Path, options: DoctorOptio
 | 2026-06-30 | Initial spec (Phase 7.2) |
 | 2026-06-30 | Add repair policy (auto / confirm / manual tiers) |
 | 2026-08-02 | Update to reflect `--scan` flag (repairs by default; `--scan` for report-only) |
+| 2026-08-03 | Document confirm-tier TTY allow-gate and plain-text `not_confirmed` remediation |

@@ -546,6 +546,10 @@ fn doctor_json_default_stdout_is_valid_json() {
 
     // Uninitialized root so default repairs call `init`, which prints human
     // text that must not land on stdout when `--json` is set.
+    // Null stdin makes the confirm-tier allow-gate deterministic (never inherit
+    // a developer TTY that would download managed Nu). Empty-root initial
+    // findings do not include `registry.index_missing`, so no network sync runs
+    // in this first repair pass.
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_numan"))
         .args([
             "--root",
@@ -554,11 +558,17 @@ fn doctor_json_default_stdout_is_valid_json() {
             "--json",
         ])
         .env("NUMAN_ALLOW_UNSIGNED", "1")
+        .stdin(std::process::Stdio::null())
         .output()
         .expect("run numan doctor --json");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        matches!(output.status.code(), Some(0) | Some(1) | Some(2)),
+        "default doctor --json must exit with a doctor status code: status={}\nstdout={stdout}\nstderr={stderr}",
+        output.status
+    );
     let value: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
         panic!(
             "default doctor --json stdout must be valid JSON: {e}\nstdout={stdout}\nstderr={stderr}"
@@ -567,5 +577,53 @@ fn doctor_json_default_stdout_is_valid_json() {
     assert!(
         value.get("repairs").is_some_and(|r| r.is_array()),
         "default doctor --json must include repairs: {value}"
+    );
+}
+
+/// `doctor --json --scan` must omit the `repairs` field (single JSON object).
+#[test]
+fn doctor_json_scan_omits_repairs_field() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root).unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_numan"))
+        .args([
+            "--root",
+            root.to_str().expect("temp root is utf-8"),
+            "doctor",
+            "--json",
+            "--scan",
+        ])
+        .env("NUMAN_ALLOW_UNSIGNED", "1")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run numan doctor --json --scan");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success()
+            || output.status.code() == Some(1)
+            || output.status.code() == Some(2),
+        "doctor --json --scan unexpected status: {}\nstdout={stdout}\nstderr={stderr}",
+        output.status
+    );
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!(
+            "doctor --json --scan stdout must be valid JSON: {e}\nstdout={stdout}\nstderr={stderr}"
+        )
+    });
+    assert!(
+        value.is_object(),
+        "doctor --json --scan must emit a single JSON object: {value}"
+    );
+    assert!(
+        value.get("repairs").is_none(),
+        "doctor --json --scan must omit repairs: {value}"
+    );
+    assert!(
+        value.get("findings").is_some_and(|f| f.is_array()),
+        "doctor --json --scan must include findings: {value}"
     );
 }

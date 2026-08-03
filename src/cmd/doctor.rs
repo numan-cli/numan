@@ -131,8 +131,9 @@ pub struct DoctorOptions {
     pub discover_off_path: Option<fn() -> Option<PathBuf>>,
     /// Override Nu `--version` probing (tests inject a fixed version string).
     pub nu_version_probe: Option<fn(&Path) -> Result<String>>,
-    /// Override confirm-tier gating (tests inject `|_| true` to exercise repairs
-    /// under non-TTY CI; production uses [`confirm_repairs`]).
+    /// Override confirm-tier allow-gate (tests inject `|_| true` to exercise
+    /// repairs under non-TTY CI; production uses [`confirm_repairs`], which is
+    /// TTY detection only and does not prompt).
     pub confirm_repairs: Option<fn(&DoctorArgs) -> bool>,
 }
 
@@ -986,9 +987,9 @@ fn count_nupm_name_overlap(
 }
 
 fn confirm_repairs(_args: &DoctorArgs) -> bool {
-    // Confirm-tier repairs require TTY for destructive actions.
-    // Non-TTY sessions will skip confirm-tier repairs unless the user
-    // explicitly runs doctor in an interactive session.
+    // Confirm-tier allow-gate: TTY detection only (no prompt here).
+    // Nested setup repairs may still prompt when allowed. Non-TTY sessions
+    // skip confirm-tier repairs as `not_confirmed`.
     std::io::stdin().is_terminal()
 }
 
@@ -1453,6 +1454,15 @@ fn print_report(args: &DoctorArgs, root: &Path, report: &DoctorReport) -> Result
         if !repairs.is_empty() {
             writeln!(out)?;
             writeln!(out, "Repairs: {applied} applied, {skipped} skipped")?;
+            let not_confirmed = repairs.iter().any(|r| {
+                r.status == RepairStatus::Skipped && r.reason.as_deref() == Some("not_confirmed")
+            });
+            if not_confirmed {
+                writeln!(
+                    out,
+                    "Confirm-tier repairs skipped: stdin is not a TTY. Re-run `numan doctor` interactively, or use `--scan` for report-only."
+                )?;
+            }
         }
     }
 

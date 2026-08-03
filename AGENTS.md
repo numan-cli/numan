@@ -109,7 +109,7 @@ tests/
   fixtures/nupm/       — supported/rejected fixture corpus for parser/classifier tests
   init_test.rs          — `numan init` / `init --refresh` (vendor drift, managed-file revalidation)
   completions_test.rs  — shell completion script generation (Phase 7.3)
-  doctor_test.rs       — `numan doctor` report-only, --fix auto tier, journal checks (Phase 7.2)
+  doctor_test.rs       — `numan doctor` report-only (`--scan`), default auto/confirm tiers, journal checks (Phase 7.2)
   nupm_compat_test.rs  — Phase 6 integration tests (T13–T25, import/drift/manifest/activation/platform)
   nupm_real_nu_test.rs — Phase 6.4 real-Nu #[ignore] acceptance tests (run with `cargo test -- --ignored`)
   plugin_lifecycle_real_nu.rs — Issue #22 smoke marker (points at Stage 1 + active-update suite)
