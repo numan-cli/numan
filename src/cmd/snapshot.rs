@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Subcommand;
+use std::io::IsTerminal;
 use std::path::Path;
 
 use crate::nu::autoload::NuCandidateRunner;
@@ -201,10 +202,14 @@ fn inspect(root: &Path, id: &str) -> Result<()> {
 }
 
 fn delete(root: &Path, id: &str, yes: bool) -> Result<()> {
+    delete_with_tty(root, id, yes, std::io::stdin().is_terminal())
+}
+
+fn delete_with_tty(root: &Path, id: &str, yes: bool, is_tty: bool) -> Result<()> {
     // Destructive: permanently removes the rollback history for this snapshot.
     // Refuse unattended (non-TTY) sessions without explicit --yes; interactive
     // sessions keep the confirmation prompt below.
-    crate::util::confirm::require_tty_or_yes(yes, "snapshot deletion")?;
+    crate::util::confirm::require_tty_or_yes_with_seam(yes, "snapshot deletion", is_tty)?;
     let _lock = acquire_mutation_lock(root)?;
     crate::util::confirm::confirm_or_bail(
         &format!("Delete snapshot '{id}'? This cannot be undone."),
@@ -217,10 +222,14 @@ fn delete(root: &Path, id: &str, yes: bool) -> Result<()> {
 }
 
 fn rollback(root: &Path, id: &str, yes: bool) -> Result<()> {
+    rollback_with_tty(root, id, yes, std::io::stdin().is_terminal())
+}
+
+fn rollback_with_tty(root: &Path, id: &str, yes: bool, is_tty: bool) -> Result<()> {
     // Destructive: rewrites Numan-managed state to a past snapshot. Refuse
     // unattended sessions without explicit --yes; interactive sessions keep
     // the confirmation prompt (a pre-rollback snapshot is still taken first).
-    crate::util::confirm::require_tty_or_yes(yes, "snapshot rollback")?;
+    crate::util::confirm::require_tty_or_yes_with_seam(yes, "snapshot rollback", is_tty)?;
     let _lock = acquire_mutation_lock(root)?;
     crate::util::confirm::confirm_or_bail(
         &format!(
@@ -262,10 +271,10 @@ mod tests {
 
     #[test]
     fn delete_refuses_non_tty_without_yes() {
-        // Under `cargo test` stdin is not a terminal, so the destructive guard
-        // fires before any snapshot access — an empty temp root suffices.
+        // Force non-TTY via the injectable seam so the guard is deterministic
+        // regardless of process stdin terminal status.
         let dir = tempfile::tempdir().unwrap();
-        let err = delete(dir.path(), ID, false).unwrap_err();
+        let err = delete_with_tty(dir.path(), ID, false, false).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains(
@@ -280,7 +289,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // --yes must get past the destructive guard regardless of TTY; the
         // downstream error proves the guard was the only blocker.
-        let err = delete(dir.path(), ID, true).unwrap_err();
+        // Force non-TTY so this never depends on process stdin terminal status.
+        let err = delete_with_tty(dir.path(), ID, true, false).unwrap_err();
         let msg = err.to_string();
         assert!(
             !msg.contains("Refusing destructive"),
@@ -291,7 +301,7 @@ mod tests {
     #[test]
     fn rollback_refuses_non_tty_without_yes() {
         let dir = tempfile::tempdir().unwrap();
-        let err = rollback(dir.path(), ID, false).unwrap_err();
+        let err = rollback_with_tty(dir.path(), ID, false, false).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains(
@@ -306,7 +316,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // --yes gets past the guard; the downstream "not initialized" bail
         // (NuPaths::load on an empty root) proves the guard was the blocker.
-        let err = rollback(dir.path(), ID, true).unwrap_err();
+        // Force non-TTY so this never depends on process stdin terminal status.
+        let err = rollback_with_tty(dir.path(), ID, true, false).unwrap_err();
         let msg = err.to_string();
         assert!(
             !msg.contains("Refusing destructive"),

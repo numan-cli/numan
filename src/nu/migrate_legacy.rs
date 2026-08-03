@@ -166,7 +166,22 @@ pub fn migrate_legacy_install_with_detector(
                 // Empty version subdir — likely from an aborted previous
                 // migration. Remove it so the user is not permanently stuck
                 // with an empty <version>/ blocking every future attempt.
-                let _ = std::fs::remove_dir(entry.path());
+                // If the directory contains any other file, preserve it and
+                // refuse to migrate rather than clobbering foreign content.
+                if let Some(inner) = std::fs::read_dir(entry.path())?.next() {
+                    let _ = inner?;
+                    bail!(
+                        "Refusing to migrate: version directory '{}' exists and contains \
+                         files other than the Nu binary. Remove or rename it, then retry.",
+                        entry.path().display()
+                    );
+                }
+                std::fs::remove_dir(entry.path()).with_context(|| {
+                    format!(
+                        "Failed to remove empty version directory '{}'",
+                        entry.path().display()
+                    )
+                })?;
             }
         }
         if found_installed {
@@ -477,6 +492,54 @@ mod tests {
         );
         let active = read_active_version(root).unwrap().unwrap();
         assert_eq!(active.version, "0.113.1");
+    }
+
+    #[test]
+    fn migrate_legacy_refuses_nonempty_version_dir_without_binary() {
+        // A normalized version directory that contains a non-binary file (no
+        // `nu` / `nu.exe`) must be preserved; migration must stop rather than
+        // installing the legacy binary into that nonempty directory.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let bin_name = nu_binary_name();
+
+        let tools = root.join("tools/nushell");
+        std::fs::create_dir_all(&tools).unwrap();
+        let legacy = tools.join(bin_name);
+        std::fs::write(&legacy, b"fake legacy nu").unwrap();
+
+        let version_dir = tools.join("0.113.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        let foreign = version_dir.join("NOTES.txt");
+        std::fs::write(&foreign, b"do not clobber").unwrap();
+
+        let err = migrate_legacy_install_with_detector(
+            root,
+            &|_| Ok("0.113.1".to_string()),
+            None,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("contains files other than the Nu binary"),
+            "must refuse nonempty foreign version dir, got: {msg}"
+        );
+        assert!(
+            legacy.exists(),
+            "legacy binary must be left in place when migration is refused"
+        );
+        assert!(
+            foreign.exists(),
+            "foreign file in version dir must be preserved"
+        );
+        assert!(
+            !version_dir.join(bin_name).exists(),
+            "must not install the legacy binary into the nonempty version dir"
+        );
+        assert!(
+            read_active_version(root).unwrap().is_none(),
+            "active marker must not be written when migration is refused"
+        );
     }
 
     #[test]

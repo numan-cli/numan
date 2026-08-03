@@ -115,18 +115,18 @@ fn execute_switch(root: &Path, version: &str) -> Result<()> {
     let version = version_manager::normalize_version(version)?;
     // Resolve on-tree or off-tree so versions shown by `numan use list`
     // (including off-tree marker selections) remain switchable.
-    let Some(resolved) = version_manager::resolve_installed_version(root, &version) else {
+    let Some(resolved) = version_manager::resolve_installed_version(root, &version)? else {
         let installed = version_manager::list_installed_versions(root)?;
         let hint = if installed.is_empty() {
             format!(
-                "No Nu versions installed.
+                "No Nu versions installed.\n\
                  Run 'numan setup nu {}' to install.",
                 version
             )
         } else {
             format!(
-                "Nu {} is not installed.
-                 Installed versions: {}
+                "Nu {} is not installed.\n\
+                 Installed versions: {}\n\
                  Run 'numan setup nu {}' to install, or 'numan use list' to see available versions.",
                 version,
                 installed.join(", "),

@@ -325,31 +325,34 @@ pub fn list_installed_versions(root: &Path) -> Result<Vec<String>> {
 }
 
 /// Resolve a version to an existing binary, preferring on-tree installs.
-pub fn resolve_installed_version(root: &Path, version: &str) -> Option<PathBuf> {
-    let normalized = normalize_version(version).ok()?;
+///
+/// Propagates [`read_active_version`] errors rather than treating a malformed
+/// marker as "not installed".
+pub fn resolve_installed_version(root: &Path, version: &str) -> Result<Option<PathBuf>> {
+    let normalized = normalize_version(version)?;
 
     let on_tree = version_binary(root, &normalized);
     if on_tree.is_file() {
-        return Some(on_tree);
+        return Ok(Some(on_tree));
     }
 
-    if let Ok(Some(active)) = read_active_version(root) {
+    if let Some(active) = read_active_version(root)? {
         if active.version == normalized {
             if let Some(off_tree) = active.binary_path.as_ref() {
                 let off_tree_path = Path::new(off_tree);
                 if off_tree_path.is_file() {
-                    return Some(off_tree_path.to_path_buf());
+                    return Ok(Some(off_tree_path.to_path_buf()));
                 }
             }
         }
     }
 
-    None
+    Ok(None)
 }
 
 /// Check if a specific Nu version is installed.
-pub fn is_version_installed(root: &Path, version: &str) -> bool {
-    resolve_installed_version(root, version).is_some()
+pub fn is_version_installed(root: &Path, version: &str) -> Result<bool> {
+    Ok(resolve_installed_version(root, version)?.is_some())
 }
 
 /// Get the latest installed Nu version, or `None` if no versions are installed.
@@ -415,7 +418,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
-        assert!(!is_version_installed(root, "0.113.1"));
+        assert!(!is_version_installed(root, "0.113.1").unwrap());
 
         // Create the version directory with a binary.
         let binary_name = if cfg!(windows) { "nu.exe" } else { "nu" };
@@ -423,8 +426,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(binary_name), "fake").unwrap();
 
-        assert!(is_version_installed(root, "0.113.1"));
-        assert!(!is_version_installed(root, "0.114.0"));
+        assert!(is_version_installed(root, "0.113.1").unwrap());
+        assert!(!is_version_installed(root, "0.114.0").unwrap());
     }
 
     #[test]

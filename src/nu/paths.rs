@@ -8,6 +8,7 @@ use crate::core::platform::Platform;
 use crate::nu::bootstrap::managed_nu_binary;
 use crate::nu::version_manager;
 use crate::util::atomic::write_json_atomic;
+use crate::util::hints::setup_nu_use_existing;
 
 /// Nu environment state, cached to `<root>/nu_state/paths.json` at `numan init`.
 ///
@@ -368,12 +369,11 @@ pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
 
     // 3. Any on-tree/off-tree installed version (covers direct installs where
     //    no active marker has been written yet).
-    if let Ok(versions) = version_manager::list_installed_versions(root) {
-        for version in versions {
-            if let Some(binary) = version_manager::resolve_installed_version(root, &version) {
-                if binary.is_file() {
-                    return Ok(binary.to_string_lossy().into_owned());
-                }
+    let versions = version_manager::list_installed_versions(root)?;
+    for version in versions {
+        if let Some(binary) = version_manager::resolve_installed_version(root, &version)? {
+            if binary.is_file() {
+                return Ok(binary.to_string_lossy().into_owned());
             }
         }
     }
@@ -385,10 +385,10 @@ pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
     if let Some(off_path) = discover_nu_off_path() {
         bail!(
             "Nu not found on PATH or in '{}', but an install exists at '{}'. \
-             Add it to PATH with: numan setup nu use {}",
+             Add it to PATH with: {}",
             managed.display(),
             off_path.display(),
-            off_path.display()
+            setup_nu_use_existing(&off_path)
         );
     }
 
