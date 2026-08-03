@@ -641,7 +641,8 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
                 "journal.migration_invalid",
                 Severity::Error,
                 format!(
-                    "Migration journal at '{}' is unreadable: {e}.                      Delete the stale journal to recover, then re-run `numan doctor`.",
+                    "Migration journal at '{}' is unreadable: {e}.\n\
+                     Delete the stale journal to recover, then re-run `numan doctor`.",
                     journal_path.display()
                 ),
                 Some(&fix),
