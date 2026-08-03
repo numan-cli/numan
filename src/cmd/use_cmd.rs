@@ -83,23 +83,26 @@ fn execute_latest(root: &Path) -> Result<()> {
     let latest = version_manager::latest_installed_version(root)?;
     match latest {
         Some(version) => {
-            // cubic PR69 UzV: preserve off-tree `binary_path` when the existing
-            // marker already names this version with an off-tree entry.
-            // Without this, every successful `numan use latest` overwrites the
-            // marker with `None`, breaking resolution of `setup nu use <path>`
-            // choices.
+            // Preserve off-tree `binary_path` only when it still resolves to a
+            // real file. An empty or stale path must not be rewritten; fall
+            // through to a clean on-tree active marker instead.
             if let Some(existing) = version_manager::read_active_version(root)? {
-                if existing.version == version && existing.binary_path.is_some() {
-                    version_manager::write_active_version_with_binary(
-                        root,
-                        &version,
-                        &std::path::PathBuf::from(existing.binary_path.as_deref().unwrap_or("")),
-                    )?;
-                    println!(
-                        "Switched to Nu {} (latest installed; off-tree path preserved).",
-                        version
-                    );
-                    return Ok(());
+                if existing.version == version {
+                    if let Some(off_tree) = existing.binary_path.as_ref() {
+                        let off_tree_path = std::path::Path::new(off_tree);
+                        if !off_tree.is_empty() && off_tree_path.is_file() {
+                            version_manager::write_active_version_with_binary(
+                                root,
+                                &version,
+                                off_tree_path,
+                            )?;
+                            println!(
+                                "Switched to Nu {} (latest installed; off-tree path preserved).",
+                                version
+                            );
+                            return Ok(());
+                        }
+                    }
                 }
             }
             version_manager::write_active_version(root, &version)?;
@@ -251,6 +254,65 @@ mod tests {
 
         let active = version_manager::read_active_version(root).unwrap().unwrap();
         assert_eq!(active.version, "0.113.1");
+    }
+
+    #[test]
+    fn test_use_latest_drops_stale_offtree_binary_path() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.113.1");
+        // Marker names latest but points at a missing off-tree binary.
+        version_manager::write_active_version_with_binary(
+            root,
+            "0.113.1",
+            std::path::Path::new("/nonexistent/opt-nu"),
+        )
+        .unwrap();
+
+        execute(
+            &UseArgs {
+                version: "latest".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.113.1");
+        assert!(
+            active.binary_path.is_none(),
+            "stale/empty off-tree path must not be preserved: {:?}",
+            active.binary_path
+        );
+    }
+
+    #[test]
+    fn test_use_latest_preserves_live_offtree_binary_path() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.113.1");
+        let off_tree = tmp
+            .path()
+            .join("opt-nu")
+            .join(if cfg!(windows) { "nu.exe" } else { "nu" });
+        std::fs::create_dir_all(off_tree.parent().unwrap()).unwrap();
+        std::fs::write(&off_tree, b"off-tree latest").unwrap();
+        version_manager::write_active_version_with_binary(root, "0.113.1", &off_tree).unwrap();
+
+        execute(
+            &UseArgs {
+                version: "latest".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.113.1");
+        assert_eq!(
+            active.binary_path.as_deref(),
+            Some(off_tree.to_string_lossy().as_ref())
+        );
     }
 
     #[test]
