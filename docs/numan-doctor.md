@@ -34,6 +34,9 @@ numan doctor [--scan] [--json] [--nupm-home PATH]
 Global `--root` applies as for all commands.
 
 **Default (no flags):** diagnose and apply available repairs, then print findings.
+Confirm-tier repairs run only when stdin is a TTY (allow-gate, not a prompt);
+non-interactive sessions skip them as `not_confirmed`. Nested `setup nu`
+repairs may still prompt when allowed.
 **`--scan`:** diagnose and print findings without mutating state.
 
 ## Exit codes
@@ -90,8 +93,7 @@ Repair steps run in this **order** (each step re-validates only what it changed)
 | **confirm** | Never (applied in default mode) | `nu_paths.drift`, `nu_paths.vendor_drift` | `numan init --refresh` |
 | **confirm** | Never (applied in default mode) | `journal.plugin_pending`, `journal.autoload_pending`, `journal.plugin_stale`, `journal.autoload_stale`, `activation.plugin_stale`, `activation.module_stale`, `autoload.projection`, `autoload.managed_missing` | `numan activate` (empty package list — reconciles journals and re-activates stale entries; same entry point as normal activate recovery) |
 | **confirm** | Never (applied in default mode) | `journal.plugin_deactivate_pending` | `numan deactivate <journal package ids>` (reconciles pending-plugin-deactivate journal only; not a full-root deactivate) |
-| **confirm** | Never (applied in default mode) | `journal.plugin_deactivate_stale` | `numan init --refresh` then `numan deactivate` |
-| **manual** | Never auto | `autoload.managed_foreign`, `payload.missing`, `journal.lifecycle_pending`, `journal.lifecycle_stale`, `registry.none` (placeholder trust root), `nu_paths.vendor_missing`, `nupm.*` | Print fix hint only |
+| **confirm** | Never (applied in default mode) | `journal.plugin_deactivate_stale` | `numan init --refresh` then `numan deactivate` || **manual** | Never auto | `autoload.managed_foreign`, `payload.missing`, `journal.lifecycle_pending`, `journal.lifecycle_stale`, `registry.none` (placeholder trust root), `nu_paths.vendor_missing`, `nupm.*` | Print fix hint only |
 | **none** | Never | `activation.plugin_mutation_gated` (`info`) | Informational only; see [docs/active-plugin-gate.md](active-plugin-gate.md) |
 
 **Invariants during repair:**
@@ -126,8 +128,7 @@ Checks run in order below. Implementation should call existing validators (`NuPa
 | `nu.binary.found_off_path` | `warn` | Nu exists in a known install root (e.g. `~/.cargo/bin`, `%LOCALAPPDATA%\Programs\nushell`) but not on PATH → fix: `numan setup nu use <path>` |
 | `nu.path.version` | `info` | PATH-only Nu version (`PATH Nu: 0.114.1`), `PATH Nu: not found`, or `PATH Nu: found at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Does not treat managed Nu as PATH. Report-only (no automatic repair). |
 | `nu.managed.version` | `info` | Managed binary under `$NUMAN_ROOT/tools/nushell/` with version, `Managed Nu: not installed`, or `Managed Nu: present at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Report-only (no automatic repair). |
-| `nu.active_version.malformed` | `error` | `nu_state/active-version.json` is present but unreadable/invalid JSON. Lookup would otherwise soft-miss the marker and fall back to PATH. **auto:** clear the marker via `clear_active_version` so resolution recovers cleanly. |
-| `nu_paths.missing` | `error` | `paths.json` absent → fix: `numan init` |
+| `nu.active_version.malformed` | `error` | `nu_state/active-version.json` is present but unreadable/invalid JSON. Lookup would otherwise soft-miss the marker and fall back to PATH. **auto:** clear the marker via `clear_active_version` so resolution recovers cleanly. || `nu_paths.missing` | `error` | `paths.json` absent → fix: `numan init` |
 | `nu_paths.drift` | `error` | `NuPaths::validate_drift()` fails → fix: `numan init --refresh` |
 | `nu_paths.vendor_drift` | `error` | `validate_vendor_drift()` fails when `data_dir` cached → fix: `numan init --refresh` |
 | `nu_paths.vendor_missing` | `warn` | Active module in lockfile but `vendor_autoload_dir` is `None` → fix: fix Nu install/config, then `numan init --refresh` |
@@ -175,7 +176,6 @@ No re-hash or revision recompute in v1 (too expensive for doctor).
 | `registry.none` | `warn` | `config.toml` has no registries → fix: `numan init` before first init; `numan doctor` after init (production trust root); `numan registry add …` for custom/placeholder builds |
 | `registry.index_missing` | `info` | Enabled registry has no cached index under `registry/` → fix: `numan registry sync` |
 | `registry.trust_root` | `info` | Enabled `official` registry: reports built-in key id (e.g. `official-2026-07-01`). Placeholder builds note that the key is not production. Report-only (no automatic repair). |
-
 ### 7. nupm coexistence (optional section)
 
 Controlled by `config.toml` → `[nupm_compat] scan_on_doctor` (default `true`). When `false`, skip section entirely.
@@ -212,15 +212,6 @@ nupm coexistence
 
 Summary: 1 error, 1 warning
 
-Repairs:
-  ✓ Created missing state/ directory
-  ✓ Ran registry sync
-  ✓ Refreshed Nu paths
-```
-
-With repairs applied:
-
-```text
 Repairs: 3 applied, 0 skipped
 ```
 
@@ -274,8 +265,7 @@ pub fn execute_with_options(args: &DoctorArgs, root: &Path, options: DoctorOptio
 | `numan init` / `init --refresh` | **Repair** Nu path drift (default doctor delegates here) |
 | `numan setup nu` | **Manual fix** for missing Nushell (`nu.binary.missing_on_path`; doctor prints the hint and does not download) |
 | `numan setup nu use <path>` | **Repair** off-PATH Nushell (`nu.binary.found_off_path`; adds parent dir to user PATH; consented wipe of managed Nu requires `--yes` / TTY; doctor does not auto-approve) |
-| `numan activate` | **Repair** activation + journal reconciliation |
-| `numan registry sync` | **Repair** missing index cache (auto tier) |
+| `numan activate` | **Repair** activation + journal reconciliation || `numan registry sync` | **Repair** missing index cache (auto tier) |
 | `numan activate --check` | Deep **module** check only; no repair |
 | `numan nupm status` | nupm-only summary; doctor embeds optional subset |
 | `numan update` / `remove` / `gc` | Block on stale lifecycle journal; doctor reports, does not fix lifecycle |

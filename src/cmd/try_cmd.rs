@@ -448,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn offer_managed_nu_pin_yes_refuses_silent_switch() {
+    fn offer_managed_nu_pin_non_interactive_refuses_silent_switch() {
         let diagnosis = PackageIncompatibility {
             suggested_pin: Some("0.113.1".to_string()),
             issue: Incompatibility::NuTooNew {
