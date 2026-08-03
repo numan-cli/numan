@@ -22,9 +22,13 @@ static PATH_MUTEX: Mutex<()> = Mutex::new(());
 ///
 /// # Example
 ///
-/// ```ignore
+/// Prefer a non-doctest fence (`text`): Real-Nu acceptance runs
+/// `cargo test -- --ignored`, which also executes rustdoc examples marked
+/// `ignore`.
+///
+/// ```text
 /// let _path_guard = PathRestoreGuard::new();
-/// prepend_process_path_for_test("...");
+/// // mutate PATH...
 /// // drop restores original PATH (or unsets it if it was unset)
 /// ```
 pub struct PathRestoreGuard {
