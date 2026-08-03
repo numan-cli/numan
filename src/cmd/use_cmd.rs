@@ -84,7 +84,12 @@ fn execute_latest(root: &Path) -> Result<()> {
             // marker with `None`, breaking resolution of `setup nu use <path>`
             // choices.
             if let Some(existing) = version_manager::read_active_version(root)? {
-                if existing.version == version && existing.binary_path.is_some() {
+                if existing.version == version
+                    && existing
+                        .binary_path
+                        .as_deref()
+                        .is_some_and(|path| std::path::Path::new(path).is_file())
+                {
                     version_manager::write_active_version_with_binary(
                         root,
                         &version,
