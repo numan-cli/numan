@@ -1,8 +1,8 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Args;
 use console::style;
 use serde::Serialize;
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::cmd::activate::{execute as activate_execute, ActivateArgs};
@@ -18,6 +18,7 @@ use crate::nu::bootstrap::managed_nu_binary;
 use crate::nu::paths::{
     discover_nu_off_path, find_nu_executable_with_root, find_nu_on_path, NuPaths,
 };
+use crate::nu::version_manager;
 use crate::nupm_compat::NupmCompatibility;
 use crate::nupm_compat::{
     count_drifted_imports, resolve_nupm_home, scan_nupm_home, NupmHomeResolution,
@@ -30,25 +31,23 @@ use crate::state::lockfile::Lockfile;
 use crate::state::migration_journal::{self as migration_journal, PendingMigration};
 use crate::state::nupm_import::NupmImportsFile;
 use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
+use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::fs_safety::{acquire_mutation_lock, assert_managed_file_owned};
 use crate::util::hints::{
     self, active_plugin_mutation_gated_doctor_message, registry_none_fix, setup_nu_use_existing,
-    ACTIVE_PLUGIN_MUTATION_GATED_FIX, CMD_ACTIVATE, CMD_DEACTIVATE, CMD_INIT, CMD_INIT_REFRESH,
-    CMD_REGISTRY_SYNC, CMD_SETUP_NU, CMD_USE,
+    ACTIVE_PLUGIN_MUTATION_GATED_FIX, CMD_ACTIVATE, CMD_DEACTIVATE, CMD_DOCTOR_FIX, CMD_INIT,
+    CMD_INIT_REFRESH, CMD_REGISTRY_SYNC, CMD_SETUP_NU, CMD_USE,
 };
+use crate::util::stdio_redirect::StdoutToStderr;
 
 const SCHEMA_VERSION: u32 = 1;
 const LAYOUT_DIRS: &[&str] = &["nu_state", "state", "packages", "registries"];
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
-    /// Apply safe automated repairs after reporting
+    /// Scan only — report issues without applying fixes
     #[arg(long)]
-    pub fix: bool,
-
-    /// Skip confirmation prompts for confirm-tier repairs
-    #[arg(long)]
-    pub yes: bool,
+    pub scan: bool,
 
     /// Emit JSON report (no ANSI styling)
     #[arg(long)]
@@ -143,7 +142,7 @@ pub fn execute(args: &DoctorArgs, root: &Path) -> Result<i32> {
 
 pub fn execute_with_options(args: &DoctorArgs, root: &Path, options: DoctorOptions) -> Result<i32> {
     let mut report = run_checks_with_options(args, root, &options)?;
-    if args.fix {
+    if !args.scan {
         let repairs = apply_repairs(args, root, &report.findings, &options)?;
         report = run_checks_with_options(args, root, &options)?;
         report.repairs = Some(repairs);
@@ -196,6 +195,7 @@ pub fn run_checks_with_options(
     let mut findings = Vec::new();
 
     check_root_layout(root, &mut findings);
+    check_active_version_marker(root, &mut findings);
     let nu_paths = check_nu_paths(root, options, &mut findings);
     check_nu_environments(root, options, &mut findings);
     check_journals(root, nu_paths.as_ref(), &mut findings);
@@ -322,6 +322,37 @@ fn nu_is_available(root: &Path) -> bool {
     false
 }
 
+/// Detect a present-but-unreadable `nu_state/active-version.json`.
+///
+/// `find_nu_executable_with_root` treats marker read errors as soft misses and
+/// falls through to PATH. Doctor surfaces the broken marker so repair can clear
+/// it instead of leaving resolution silently degraded.
+fn check_active_version_marker(root: &Path, findings: &mut Vec<Finding>) {
+    match version_manager::read_active_version(root) {
+        Ok(None) => findings.push(finding(
+            "nu.active_version.malformed",
+            Severity::Ok,
+            "No active-version marker",
+            None,
+            RepairTier::None,
+        )),
+        Ok(Some(active)) => findings.push(finding(
+            "nu.active_version.malformed",
+            Severity::Ok,
+            format!("Active Nu version marker: {}", active.version),
+            None,
+            RepairTier::None,
+        )),
+        Err(e) => findings.push(finding(
+            "nu.active_version.malformed",
+            Severity::Error,
+            e.to_string(),
+            Some(CMD_DOCTOR_FIX),
+            RepairTier::Auto,
+        )),
+    }
+}
+
 fn check_nu_paths(
     root: &Path,
     options: &DoctorOptions,
@@ -351,7 +382,7 @@ fn check_nu_paths(
                 Severity::Error,
                 "Nu not found on PATH or in the Numan tools directory.",
                 Some(CMD_SETUP_NU),
-                RepairTier::Confirm,
+                RepairTier::Manual,
             ));
         }
     } else {
@@ -1020,10 +1051,6 @@ fn count_nupm_name_overlap(
     Ok(count)
 }
 
-fn confirm_repairs(args: &DoctorArgs) -> bool {
-    args.yes || !std::io::stdin().is_terminal()
-}
-
 fn apply_repairs(
     args: &DoctorArgs,
     root: &Path,
@@ -1033,6 +1060,18 @@ fn apply_repairs(
     let needs_lock = findings.iter().any(|f| {
         matches!(f.repair, RepairTier::Auto | RepairTier::Confirm) && f.severity != Severity::Ok
     });
+
+    // Nested repair handlers may println!; redirect only when those handlers
+    // are about to run so healthy --json scans avoid mutating process stdio.
+    let _stdout_guard = if args.json && needs_lock {
+        Some(
+            StdoutToStderr::redirect()
+                .context("Failed to redirect stdout while emitting doctor JSON")?,
+        )
+    } else {
+        None
+    };
+
     let mut lock = if needs_lock {
         Some(acquire_mutation_lock(root)?)
     } else {
@@ -1040,7 +1079,30 @@ fn apply_repairs(
     };
 
     let mut records = Vec::new();
-    let confirm = confirm_repairs(args);
+    // Snapshot failure must not block independent layout/config repairs.
+    // Nested mutations that rely on a PreMutation baseline are skipped instead.
+    let mut snapshot_ok = true;
+    if needs_lock {
+        if let Err(e) = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Doctor,
+            None,
+            None,
+        )
+        .context("Failed to create doctor pre-mutation snapshot")
+        {
+            snapshot_ok = false;
+            records.push(RepairRecord {
+                id: "snapshot.pre_mutation".to_string(),
+                status: RepairStatus::Failed,
+                reason: Some(format!("{e:#}")),
+            });
+            eprintln!(
+                "warning: doctor PreMutation snapshot failed; applying independent layout/config repairs only: {e:#}"
+            );
+        }
+    }
 
     for dir in LAYOUT_DIRS {
         let id = format!("layout.{dir}");
@@ -1060,6 +1122,30 @@ fn apply_repairs(
                     reason: Some(e.to_string()),
                 }),
             }
+        }
+    }
+
+    if findings
+        .iter()
+        .any(|f| f.id == "nu.active_version.malformed" && f.severity == Severity::Error)
+    {
+        let id = "nu.active_version.malformed".to_string();
+        match version_manager::clear_active_version(root) {
+            Ok(true) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Applied,
+                reason: None,
+            }),
+            Ok(false) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Skipped,
+                reason: Some("marker_already_absent".to_string()),
+            }),
+            Err(e) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Failed,
+                reason: Some(e.to_string()),
+            }),
         }
     }
 
@@ -1133,15 +1219,17 @@ fn apply_repairs(
         .any(|f| f.id == "nu.binary.found_off_path" && f.severity == Severity::Warn)
     {
         let id = "nu.binary.found_off_path".to_string();
-        if !confirm {
+        if !snapshot_ok {
             records.push(RepairRecord {
                 id,
                 status: RepairStatus::Skipped,
-                reason: Some("not_confirmed".to_string()),
+                reason: Some("snapshot_unavailable".to_string()),
             });
         } else if let Some(off_path) = resolve_off_path(options) {
             let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
-            match setup_fn(&NuSetupArgs::use_existing(off_path, true, false), root) {
+            // Never pass `--yes` here: `setup nu use` may wipe a managed install
+            // and that path is fail-closed without explicit consent / TTY.
+            match setup_fn(&NuSetupArgs::use_existing(off_path, false, false), root) {
                 Ok(()) => records.push(RepairRecord {
                     id,
                     status: RepairStatus::Applied,
@@ -1166,22 +1254,31 @@ fn apply_repairs(
         .iter()
         .any(|f| f.id == "nu.binary.missing_on_path" && f.severity == Severity::Error)
     {
+        // Never auto-download managed Nu from doctor. Print the existing fix
+        // hint; the user opts in explicitly via `numan setup nu`.
         let id = "nu.binary.missing_on_path".to_string();
-        if !confirm {
+        eprintln!("  → Fix: {CMD_SETUP_NU}");
+        records.push(RepairRecord {
+            id,
+            status: RepairStatus::Skipped,
+            reason: Some("requires_explicit_setup_nu".to_string()),
+        });
+    }
+
+    if findings
+        .iter()
+        .any(|f| f.id == "nu_paths.missing" && f.severity == Severity::Error)
+    {
+        let id = "nu_paths.missing".to_string();
+        if !snapshot_ok {
             records.push(RepairRecord {
                 id,
                 status: RepairStatus::Skipped,
-                reason: Some("not_confirmed".to_string()),
-            });
-        } else if options.skip_network {
-            records.push(RepairRecord {
-                id,
-                status: RepairStatus::Skipped,
-                reason: Some("skip_network".to_string()),
+                reason: Some("snapshot_unavailable".to_string()),
             });
         } else {
-            let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
-            match setup_fn(&NuSetupArgs::install(None, false, false, true), root) {
+            let init_fn = options.init_repair.unwrap_or(init_execute);
+            match init_fn(&InitArgs { refresh: false }, root) {
                 Ok(()) => records.push(RepairRecord {
                     id,
                     status: RepairStatus::Applied,
@@ -1196,41 +1293,29 @@ fn apply_repairs(
         }
     }
 
-    if findings
-        .iter()
-        .any(|f| f.id == "nu_paths.missing" && f.severity == Severity::Error)
-    {
-        let id = "nu_paths.missing".to_string();
-        let init_fn = options.init_repair.unwrap_or(init_execute);
-        match init_fn(&InitArgs { refresh: false }, root) {
-            Ok(()) => records.push(RepairRecord {
-                id,
-                status: RepairStatus::Applied,
-                reason: None,
-            }),
-            Err(e) => records.push(RepairRecord {
-                id,
-                status: RepairStatus::Failed,
-                reason: Some(e.to_string()),
-            }),
-        }
-    }
-
     if findings.iter().any(|f| {
         f.id == "registry.index_missing" && f.severity == Severity::Info && !options.skip_network
     }) {
         let id = "registry.index_missing".to_string();
-        match registry::execute(RegistryCommands::Sync, root) {
-            Ok(()) => records.push(RepairRecord {
+        if !snapshot_ok {
+            records.push(RepairRecord {
                 id,
-                status: RepairStatus::Applied,
-                reason: None,
-            }),
-            Err(e) => records.push(RepairRecord {
-                id,
-                status: RepairStatus::Failed,
-                reason: Some(e.to_string()),
-            }),
+                status: RepairStatus::Skipped,
+                reason: Some("snapshot_unavailable".to_string()),
+            });
+        } else {
+            match registry::execute(RegistryCommands::Sync, root) {
+                Ok(()) => records.push(RepairRecord {
+                    id,
+                    status: RepairStatus::Applied,
+                    reason: None,
+                }),
+                Err(e) => records.push(RepairRecord {
+                    id,
+                    status: RepairStatus::Failed,
+                    reason: Some(e.to_string()),
+                }),
+            }
         }
     } else if findings.iter().any(|f| f.id == "registry.index_missing") && options.skip_network {
         records.push(RepairRecord {
@@ -1252,11 +1337,11 @@ fn apply_repairs(
 
     if needs_refresh {
         let id = "nu_paths.refresh".to_string();
-        if !confirm {
+        if !snapshot_ok {
             records.push(RepairRecord {
                 id,
                 status: RepairStatus::Skipped,
-                reason: Some("not_confirmed".to_string()),
+                reason: Some("snapshot_unavailable".to_string()),
             });
         } else {
             let init_fn = options.init_repair.unwrap_or(init_execute);
@@ -1291,16 +1376,15 @@ fn apply_repairs(
 
     if needs_activate {
         let id = "activation.reconcile".to_string();
-        if !confirm {
+        if !snapshot_ok {
             records.push(RepairRecord {
                 id,
                 status: RepairStatus::Skipped,
-                reason: Some("not_confirmed".to_string()),
+                reason: Some("snapshot_unavailable".to_string()),
             });
         } else {
             let activate_args = ActivateArgs {
                 packages: Vec::new(),
-                yes: true,
                 verbose: false,
                 list: false,
                 check: false,
@@ -1332,48 +1416,91 @@ fn apply_repairs(
 
     if needs_deactivate {
         let id = "plugin_deactivate.reconcile".to_string();
-        if !confirm {
+        if !snapshot_ok {
             records.push(RepairRecord {
                 id,
                 status: RepairStatus::Skipped,
-                reason: Some("not_confirmed".to_string()),
+                reason: Some("snapshot_unavailable".to_string()),
             });
         } else {
-            let journal_packages = PendingPluginDeactivate::load(root)?
-                .map(|journal| {
-                    journal
-                        .entries
-                        .iter()
-                        .map(|entry| entry.package_id.clone())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            if journal_packages.is_empty() {
-                records.push(RepairRecord {
-                    id,
-                    status: RepairStatus::Skipped,
-                    reason: Some("no_pending_plugin_deactivate_journal".to_string()),
-                });
-            } else {
-                let deactivate_args = DeactivateArgs {
-                    packages: journal_packages,
-                    yes: true,
-                    verbose: false,
-                };
-                let deactivate_fn = options.deactivate_repair.unwrap_or(deactivate_execute);
-                match deactivate_fn(&deactivate_args, root) {
-                    Ok(()) => records.push(RepairRecord {
-                        id,
-                        status: RepairStatus::Applied,
-                        reason: None,
-                    }),
-                    Err(e) => records.push(RepairRecord {
+            match PendingPluginDeactivate::load(root) {
+                Err(e) => {
+                    records.push(RepairRecord {
                         id,
                         status: RepairStatus::Failed,
                         reason: Some(e.to_string()),
-                    }),
+                    });
+                }
+                Ok(journal) => {
+                    let journal_packages = journal
+                        .map(|journal| {
+                            journal
+                                .entries
+                                .iter()
+                                .map(|entry| entry.package_id.clone())
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    if journal_packages.is_empty() {
+                        records.push(RepairRecord {
+                            id,
+                            status: RepairStatus::Skipped,
+                            reason: Some("no_pending_plugin_deactivate_journal".to_string()),
+                        });
+                    } else {
+                        let deactivate_args = DeactivateArgs {
+                            packages: journal_packages,
+                            verbose: false,
+                        };
+                        let deactivate_fn = options.deactivate_repair.unwrap_or(deactivate_execute);
+                        match deactivate_fn(&deactivate_args, root) {
+                            Ok(()) => records.push(RepairRecord {
+                                id,
+                                status: RepairStatus::Applied,
+                                reason: None,
+                            }),
+                            Err(e) => records.push(RepairRecord {
+                                id,
+                                status: RepairStatus::Failed,
+                                reason: Some(e.to_string()),
+                            }),
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    // The migration journal path is self-healing in normal use (top of
+    // `migrate_legacy_install_with_detector`); the doctor repair is the
+    // catch-up for users who ran `numan doctor --fix` without ever calling
+    // `numan use`. Gating on `PendingMigration::load(...).is_some()` keeps
+    // the Applied record honest — re-runs of `doctor --fix` produce no
+    // second repair.
+    if findings
+        .iter()
+        .any(|f| f.id == "journal.migration_pending" && f.severity == Severity::Warn)
+    {
+        if PendingMigration::load(root)?.is_none() {
+            return Ok(records);
+        }
+        let id = "journal.migration_repaired".to_string();
+        // chatgpt PR69 S1A: reacquire the root mutation lock before the
+        // self-healing reconcile so concurrent `numan use` cannot race the
+        // journal stage advance + directory rename the same way AGENTS.md
+        // requires install/remove/activate/deactivate/numan-use to.
+        let _migration_repair_lock = acquire_mutation_lock(root)?;
+        match migration_journal::reconcile(root) {
+            Ok(_) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Applied,
+                reason: None,
+            }),
+            Err(e) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Failed,
+                reason: Some(e.to_string()),
+            }),
         }
     }
 
@@ -1409,6 +1536,7 @@ fn print_report(args: &DoctorArgs, root: &Path, report: &DoctorReport) -> Result
                 "nu.binary.found_off_path",
                 "nu.path.version",
                 "nu.managed.version",
+                "nu.active_version.malformed",
                 "nu_paths.missing",
                 "nu_paths.drift",
                 "nu_paths.vendor_drift",
@@ -1499,9 +1627,6 @@ fn print_report(args: &DoctorArgs, root: &Path, report: &DoctorReport) -> Result
         if !repairs.is_empty() {
             writeln!(out)?;
             writeln!(out, "Repairs: {applied} applied, {skipped} skipped")?;
-            if skipped > 0 && !args.yes {
-                writeln!(out, "(use --yes to apply confirm-tier fixes)")?;
-            }
         }
     }
 
@@ -1553,8 +1678,7 @@ mod tests {
         let root = dir.path();
         std::fs::create_dir_all(root).unwrap();
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: false,
             nupm_home: None,
         };
@@ -1571,8 +1695,7 @@ mod tests {
         let root = dir.path();
         std::fs::create_dir_all(root).unwrap();
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: false,
             nupm_home: None,
         };
@@ -1612,8 +1735,7 @@ mod tests {
         ensure_fake_managed_nu(root);
 
         let args = DoctorArgs {
-            fix: true,
-            yes: true,
+            scan: false, // Apply fixes (default behavior)
             json: false,
             nupm_home: None,
         };
@@ -1647,15 +1769,13 @@ mod tests {
         crate::config::Config::default().save(root).unwrap();
 
         let args = DoctorArgs {
-            fix: true,
-            yes: true,
+            scan: false, // Apply fixes (default behavior)
             json: false,
             nupm_home: None,
         };
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true, // First check: report only to see findings
                 json: false,
                 nupm_home: None,
             },
@@ -1704,8 +1824,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: false,
                 nupm_home: None,
             },
@@ -1734,8 +1853,7 @@ mod tests {
         fake_paths(root, &nu_exe).save(root).unwrap();
 
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: true,
             nupm_home: None,
         };
@@ -1799,8 +1917,7 @@ mod tests {
         std::fs::create_dir_all(root.join("packages/plugins/owner/plugin/1.0.0-abc")).unwrap();
 
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: false,
             nupm_home: None,
         };
@@ -1869,8 +1986,7 @@ mod tests {
         std::fs::create_dir_all(root.join("packages/plugins/owner/plugin/1.0.0-abc")).unwrap();
 
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: false,
             nupm_home: None,
         };
@@ -1955,8 +2071,7 @@ mod tests {
         lockfile.save(root).unwrap();
 
         let args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: false,
             nupm_home: None,
         };
@@ -1998,8 +2113,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },
@@ -2056,8 +2170,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },
@@ -2099,8 +2212,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },
@@ -2141,8 +2253,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },
@@ -2181,8 +2292,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },
@@ -2225,8 +2335,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: true,
                 nupm_home: None,
             },
@@ -2265,8 +2374,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: false,
                 nupm_home: None,
             },
@@ -2310,16 +2418,14 @@ mod tests {
         // Capture the findings first so we can call apply_repairs directly and
         // inspect the returned RepairRecord list.
         let scan_args = DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: false,
             nupm_home: None,
         };
         let report = run_checks_with_options(&scan_args, root, &test_doctor_options()).unwrap();
 
         let fix_args = DoctorArgs {
-            fix: true,
-            yes: true,
+            scan: false,
             json: false,
             nupm_home: None,
         };
@@ -2369,8 +2475,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: false,
                 nupm_home: None,
             },
@@ -2412,8 +2517,7 @@ mod tests {
 
         let report = run_checks_with_options(
             &DoctorArgs {
-                fix: false,
-                yes: false,
+                scan: true,
                 json: false,
                 nupm_home: None,
             },

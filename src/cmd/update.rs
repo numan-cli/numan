@@ -312,7 +312,7 @@ pub fn execute_with_hooks(
                             update.package_id, e
                         );
                         eprintln!(
-                            "Package was upgraded but is inactive. Run `numan activate {} --yes`.",
+                            "Package was upgraded but is inactive. Run `numan activate {}`.",
                             update.package_id
                         );
                         // Leave LockfileUpdated journal + activate journal for recovery.
@@ -345,7 +345,7 @@ pub fn execute_with_hooks(
                             update.package_id, restore_err
                         );
                         eprintln!(
-                            "Package may be inactive. Run `numan activate {} --yes` or `numan gc`.",
+                            "Package may be inactive. Run `numan activate {}` or `numan gc`.",
                             update.package_id
                         );
                         // Leave journals for recovery.
@@ -391,7 +391,7 @@ fn warn_stale_lifecycle_journal(root: &Path) -> Result<()> {
             journal.package_id
         );
         eprintln!(
-            "Run `numan update` to resume reactivation, or `numan activate {} --yes`.",
+            "Run `numan update` to resume reactivation, or `numan activate {}`.",
             journal.package_id
         );
         return Ok(());
@@ -454,7 +454,7 @@ fn resume_interrupted_reactivate(root: &Path, hooks: &UpdateHooks<'_>) -> Result
             format!(
                 "Failed to resume reactivation of '{}'. {}",
                 journal.package_id,
-                hints::run(&format!("numan activate {} --yes", journal.package_id))
+                hints::run(&format!("numan activate {}", journal.package_id))
             )
         })?;
     PendingLifecycle::clear(root)?;

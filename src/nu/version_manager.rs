@@ -66,7 +66,7 @@ pub enum VersionManagerError {
         "Active Nu version '{version}' is set but neither the on-tree binary at '{on_tree}' \
          nor the recorded off-tree path '{off_tree}' is present. \
          Run 'numan setup nu' to install the selected version or \
-         'numan use latest' to choose a different one."
+         'numan use <version>' / 'numan use latest' to choose a different one."
     )]
     DanglingActiveWithOffTree {
         version: String,
@@ -76,7 +76,7 @@ pub enum VersionManagerError {
     #[error(
         "Active Nu version '{version}' is set but the on-tree binary at '{on_tree}' is missing. \
          Run 'numan setup nu' to install the selected version or \
-         'numan use latest' to choose a different one."
+         'numan use <version>' / 'numan use latest' to choose a different one."
     )]
     DanglingActive { version: String, on_tree: String },
 }

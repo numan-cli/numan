@@ -68,6 +68,18 @@ pub fn require_tty_or_yes(yes: bool, what: &str) -> Result<()> {
     require_tty_or_yes_with_seam(yes, what, std::io::stdin().is_terminal())
 }
 
+/// Same as [`require_tty_or_yes`] but lets the caller inject the TTY
+/// decision so unit tests can cover all three branches (explicit `--yes`,
+/// TTY-yes, TTY-no) without spawning a real TTY.
+///
+/// This addresses PR #69's WDr (in `src/util/confirm.rs`): the non-TTY bail
+/// branch was previously unreachable from a unit test because
+/// `std::io::stdin().is_terminal()` was not injectable. CI now exercises
+/// every branch via this seam.
+pub fn require_tty_or_yes_with_tty(yes: bool, what: &str, is_tty: bool) -> Result<()> {
+    require_tty_or_yes_with_seam(yes, what, is_tty)
+}
+
 pub fn require_tty_or_yes_with_seam(yes: bool, what: &str, is_tty: bool) -> Result<()> {
     if yes {
         eprintln!(
@@ -80,6 +92,24 @@ pub fn require_tty_or_yes_with_seam(yes: bool, what: &str, is_tty: bool) -> Resu
         anyhow::bail!("Refusing destructive {what} in non-interactive session without --yes.");
     }
     Ok(())
+}
+
+/// Audit-trail text for hoisted destructive-step consent.
+///
+/// Used when a caller already collected managed-tree wipe + PATH-add consent
+/// and then invokes [`crate::nu::bootstrap::register_existing_nu`] with
+/// `caller_consented_destructive = true`, so the inner PATH prompt is skipped.
+/// Kept here (not in bootstrap) so doctor / remove / other hoist surfaces can
+/// share one formatter without depending on Nu install code.
+///
+/// The literal string is golden-tested in
+/// `tests/setup_nu_test.rs::register_existing_nu_audit_text_is_stable`.
+pub fn hoisted_audit_message(parent: &std::path::Path) -> String {
+    format!(
+        "(audit) prompt hoisted; skipping internal PATH-confirmation prompt \
+         for '{}' (caller has already gathered destructive-step consent).",
+        parent.display()
+    )
 }
 
 #[cfg(test)]
@@ -139,5 +169,16 @@ mod tests {
     fn confirm_or_auto_uses_yes_flag() {
         assert!(confirm_or_auto_with_tty("Proceed?", true, false).unwrap());
         assert!(confirm_or_auto_with_tty("Proceed?", true, true).unwrap());
+    }
+
+    #[test]
+    fn hoisted_audit_message_includes_parent_and_audit_prefix() {
+        let msg = hoisted_audit_message(std::path::Path::new("/usr/local/bin"));
+        assert!(msg.starts_with("(audit) "), "got: {msg}");
+        assert!(
+            msg.contains("/usr/local/bin") || msg.contains("usr"),
+            "got: {msg}"
+        );
+        assert!(msg.contains("prompt hoisted"), "got: {msg}");
     }
 }

@@ -10,9 +10,11 @@ use anyhow::{bail, Context, Result};
 use clap::Args;
 use std::path::Path;
 
+use crate::nu::paths::NuPaths;
 use crate::nu::version_manager;
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::fs_safety::acquire_mutation_lock;
+use crate::util::hints::CMD_INIT_REFRESH;
 
 #[derive(Args, Debug)]
 pub struct UseArgs {
@@ -100,6 +102,7 @@ fn execute_latest(root: &Path) -> Result<()> {
             }
             version_manager::write_active_version(root, &version)?;
             println!("Switched to Nu {} (latest installed).", version);
+            refresh_cached_nu_paths_after_switch(root)?;
             Ok(())
         }
         None => {
@@ -146,7 +149,48 @@ fn execute_switch(root: &Path, version: &str) -> Result<()> {
             .with_context(|| format!("Failed to switch to Nu {}", version))?;
     }
     println!("Switched to Nu {}.", version);
+    refresh_cached_nu_paths_after_switch(root)?;
     Ok(())
+}
+
+/// Keep `nu_state/paths.json` aligned with the newly selected active Nu.
+///
+/// `activate` loads the cached paths and only checks that the cached binary
+/// still hashes — side-by-side installs leave the previous binary intact, so
+/// a stale cache would silently keep activating against the old Nu. Re-probe
+/// when possible; if probing fails, delete the cache so callers fail closed
+/// with an `init --refresh` hint instead of using the wrong Nu.
+fn refresh_cached_nu_paths_after_switch(root: &Path) -> Result<()> {
+    let paths_file = root.join("nu_state").join("paths.json");
+    if !paths_file.is_file() {
+        return Ok(());
+    }
+
+    match NuPaths::detect_with_root(root) {
+        Ok(refreshed) => {
+            refreshed.save(root).with_context(|| {
+                format!(
+                    "Failed to write refreshed Nu paths to '{}'",
+                    paths_file.display()
+                )
+            })?;
+            println!("Refreshed cached Nu paths for the selected version.");
+            Ok(())
+        }
+        Err(e) => {
+            std::fs::remove_file(&paths_file).with_context(|| {
+                format!(
+                    "Failed to clear stale Nu paths at '{}' after version switch",
+                    paths_file.display()
+                )
+            })?;
+            eprintln!(
+                "warning: could not re-probe Nu after switch ({e:#}). \
+                 Cleared cached paths; run '{CMD_INIT_REFRESH}' before activating packages."
+            );
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -250,6 +294,52 @@ mod tests {
     }
 
     #[test]
+    fn test_use_switch_clears_stale_paths_cache_when_probe_fails() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.112.0");
+        create_fake_version(root, "0.113.1");
+        version_manager::write_active_version(root, "0.112.0").unwrap();
+
+        // Seed a paths.json that still points at the previous Nu. Fake binaries
+        // cannot be probed, so the refresh path must fail closed and delete it.
+        let stale = NuPaths {
+            nu_executable: version_manager::version_binary(root, "0.112.0")
+                .to_string_lossy()
+                .into_owned(),
+            nu_version: "0.112.0".to_string(),
+            plugin_registry_path: root.join("plugins.msgpackz").to_string_lossy().into_owned(),
+            nu_executable_hash: "deadbeef".to_string(),
+            platform: "test".to_string(),
+            data_dir: None,
+            vendor_autoload_dirs: vec![],
+            vendor_autoload_dir: None,
+        };
+        stale.save(root).unwrap();
+        assert!(root.join("nu_state/paths.json").is_file());
+
+        execute(
+            &UseArgs {
+                version: "0.113.1".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        assert_eq!(
+            version_manager::read_active_version(root)
+                .unwrap()
+                .unwrap()
+                .version,
+            "0.113.1"
+        );
+        assert!(
+            !root.join("nu_state/paths.json").exists(),
+            "stale paths.json must be cleared so activate cannot keep using old Nu"
+        );
+    }
+
+    #[test]
     fn test_use_latest_self_heals_dangling_off_tree_binary_path() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
@@ -276,6 +366,35 @@ mod tests {
             active.binary_path.is_none(),
             "dangling off-tree path must be cleared; got {:?}",
             active.binary_path
+        );
+    }
+
+    #[test]
+    fn test_use_latest_preserves_live_offtree_binary_path() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.113.1");
+        let off_tree = tmp
+            .path()
+            .join("opt-nu")
+            .join(if cfg!(windows) { "nu.exe" } else { "nu" });
+        std::fs::create_dir_all(off_tree.parent().unwrap()).unwrap();
+        std::fs::write(&off_tree, b"off-tree latest").unwrap();
+        version_manager::write_active_version_with_binary(root, "0.113.1", &off_tree).unwrap();
+
+        execute(
+            &UseArgs {
+                version: "latest".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.113.1");
+        assert_eq!(
+            active.binary_path.as_deref(),
+            Some(off_tree.to_string_lossy().as_ref())
         );
     }
 
@@ -358,7 +477,9 @@ mod tests {
     fn execute_fails_while_mutation_lock_held() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
+        create_fake_version(root, "0.112.0");
         create_fake_version(root, "0.113.1");
+        version_manager::write_active_version(root, "0.112.0").unwrap();
 
         // Hold the root mutation lock — concurrent `numan use` must refuse.
         let _lock = acquire_mutation_lock(root).unwrap();

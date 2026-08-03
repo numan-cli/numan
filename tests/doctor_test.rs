@@ -5,6 +5,7 @@ use numan_cli::cmd::doctor::{
     execute_with_options, run_checks_with_options, DoctorArgs, DoctorOptions, Severity,
 };
 use numan_cli::cmd::init::{execute_with_runner, InitArgs};
+use numan_cli::cmd::setup::{self, NuAction};
 use numan_cli::core::integrity;
 use numan_cli::nu::autoload::FakeCandidateRunner;
 use numan_cli::nu::bootstrap::managed_nu_binary;
@@ -13,6 +14,7 @@ use numan_cli::state::journal::{PendingActivation, PendingActivationEntry, Pendi
 use numan_cli::state::plugin_deactivate_journal::{
     PendingPluginDeactivate, PendingPluginDeactivateEntry, PluginDeactivateStatus,
 };
+use numan_cli::state::snapshot::{list_snapshots, SnapshotTrigger};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tempfile::TempDir;
@@ -30,9 +32,9 @@ fn discover_off_path_test() -> Option<PathBuf> {
 
 fn nu_setup_repair_test(
     args: &numan_cli::cmd::setup::NuSetupArgs,
-    _root: &Path,
+    root: &Path,
 ) -> anyhow::Result<()> {
-    let expected = TEST_OFF_PATH.lock().unwrap();
+    let expected = TEST_OFF_PATH.lock().unwrap().clone();
     // The doctor passes the off-path binary via NuSetupArgs::use_existing(),
     // which sets action = Some(NuAction::Use { path, force }) and leaves use_existing unset.
     let Some(numan_cli::cmd::setup::NuAction::Use { path, force }) = &args.action else {
@@ -44,9 +46,74 @@ fn nu_setup_repair_test(
         args.use_existing.is_none(),
         "doctor must not use the deprecated flag"
     );
-    assert!(args.yes);
+    // Doctor must not auto-approve consented wipe of a managed install.
+    assert!(
+        !args.yes,
+        "doctor found_off_path repair must not pass --yes"
+    );
     *TEST_NU_SETUP_CALLED.lock().unwrap() = true;
-    Ok(())
+
+    // Seed a managed install just before the production use path. Seeding earlier
+    // would make Nu "available" and suppress `nu.binary.found_off_path`.
+    let managed = managed_nu_binary(root);
+    std::fs::create_dir_all(managed.parent().unwrap())?;
+    std::fs::write(&managed, b"managed-nu")?;
+    // Use a missing binary so execute_nu fails before PATH persistence or wipe.
+    let missing = root.join("missing-off-path-nu");
+    let err = setup::execute_nu(
+        &setup::NuSetupArgs::use_existing(missing, args.yes, false),
+        root,
+    )
+    .expect_err("expected resolve failure for missing off-PATH binary");
+    assert!(
+        managed.exists(),
+        "doctor off-PATH repair must not delete managed tools/nushell without consent: {err}"
+    );
+    Err(err)
+}
+
+/// Valid fake Nu for consent-gate tests (Unix). Must look runnable to
+/// `validate_nushell_binary` so the failure is the wipe/PATH consent gate.
+#[cfg(unix)]
+fn write_valid_off_path_nu(tmp: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = tmp.join("valid-off-path-nu");
+    let script: &[u8] = b"#!/bin/sh\n\
+case $1 in\n\
+  -c|--version) printf '{ \"version\":\"0.113.1\", \"plugin_path\":\"/tmp\", \"data_dir\":\"/tmp\", \"vendor_autoload_dirs\":[\"/tmp/vendor/autoload\"] }\n' ;;\n\
+esac\n";
+    std::fs::write(&bin, script).expect("write valid off-path nu");
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod valid off-path nu");
+    bin
+}
+
+#[cfg(unix)]
+#[test]
+fn execute_nu_use_existing_refuses_without_consent_and_keeps_managed() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root).unwrap();
+
+    let managed = managed_nu_binary(root);
+    std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+    std::fs::write(&managed, b"managed-nu").unwrap();
+
+    let off_path = write_valid_off_path_nu(dir.path());
+    let err = setup::execute_nu(
+        &setup::NuSetupArgs::use_existing(off_path, false, false),
+        root,
+    )
+    .expect_err("expected consent-gate refusal with yes=false");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("non-interactive") || msg.contains("--yes"),
+        "expected require_tty_or_yes consent refusal, got: {msg}"
+    );
+    assert!(
+        managed.exists(),
+        "managed install must remain when consent gate refuses off-PATH registration"
+    );
 }
 
 struct ClearedPath {
@@ -99,8 +166,7 @@ fn doctor_report_only_leaves_root_unchanged() {
     std::fs::create_dir_all(root).unwrap();
 
     let args = DoctorArgs {
-        fix: false,
-        yes: false,
+        scan: true,
         json: false,
         nupm_home: None,
     };
@@ -119,8 +185,7 @@ fn doctor_fix_auto_creates_layout_without_network() {
     std::fs::write(&nu_exe, b"nu").unwrap();
 
     let args = DoctorArgs {
-        fix: true,
-        yes: true,
+        scan: false,
         json: false,
         nupm_home: None,
     };
@@ -136,6 +201,174 @@ fn doctor_fix_auto_creates_layout_without_network() {
     assert_eq!(code, 0);
     assert!(root.join("state").is_dir());
     assert!(root.join("nu_state/paths.json").is_file());
+    let snapshots = list_snapshots(root).unwrap();
+    assert!(
+        snapshots
+            .iter()
+            .any(|s| s.trigger == SnapshotTrigger::Doctor),
+        "default doctor repairs must create a PreMutation Doctor snapshot"
+    );
+}
+
+#[test]
+fn doctor_repairs_malformed_active_version_marker() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("nu_state")).unwrap();
+    std::fs::write(root.join("nu_state/active-version.json"), b"{not-json").unwrap();
+    let nu_exe = managed_nu_binary(root);
+    std::fs::create_dir_all(nu_exe.parent().unwrap()).unwrap();
+    std::fs::write(&nu_exe, b"nu").unwrap();
+
+    let scan = run_checks_with_options(
+        &DoctorArgs {
+            scan: true,
+            json: true,
+            nupm_home: None,
+        },
+        root,
+        &test_doctor_options(),
+    )
+    .unwrap();
+    let finding = scan
+        .findings
+        .iter()
+        .find(|f| f.id == "nu.active_version.malformed")
+        .expect("expected nu.active_version.malformed");
+    assert_eq!(finding.severity, Severity::Error);
+
+    let code = execute_with_options(
+        &DoctorArgs {
+            scan: false,
+            json: true,
+            nupm_home: None,
+        },
+        root,
+        DoctorOptions {
+            init_repair: Some(fake_init),
+            ..test_doctor_options()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        code, 0,
+        "clearing the marker should leave no remaining errors"
+    );
+    assert!(
+        !root.join("nu_state/active-version.json").exists(),
+        "doctor must clear the malformed active-version marker"
+    );
+    let after = run_checks_with_options(
+        &DoctorArgs {
+            scan: true,
+            json: true,
+            nupm_home: None,
+        },
+        root,
+        &test_doctor_options(),
+    )
+    .unwrap();
+    let repaired = after
+        .findings
+        .iter()
+        .find(|f| f.id == "nu.active_version.malformed")
+        .expect("finding remains as ok after repair");
+    assert_eq!(repaired.severity, Severity::Ok);
+}
+
+#[test]
+fn doctor_repairs_layout_when_lockfile_malformed() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root).unwrap();
+    std::fs::write(root.join("lockfile"), b"{not-valid-json").unwrap();
+    let nu_exe = managed_nu_binary(root);
+    std::fs::create_dir_all(nu_exe.parent().unwrap()).unwrap();
+    std::fs::write(&nu_exe, b"nu").unwrap();
+    // Seed a cached index so default repair mode does not attempt registry sync.
+    let index_path = root.join("registry/official/index.json");
+    std::fs::create_dir_all(index_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &index_path,
+        r#"{"schema_version":1,"packages":[],"generated_at":"test"}"#,
+    )
+    .unwrap();
+
+    // Capture the JSON repair report via subprocess stdout (same pattern as
+    // doctor_json_default_stdout_is_valid_json). execute_with_options returns
+    // only an exit code, so the repairs contract must be asserted from --json.
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_numan"))
+        .args([
+            "--root",
+            root.to_str().expect("temp root is utf-8"),
+            "doctor",
+            "--json",
+        ])
+        .env("NUMAN_ALLOW_UNSIGNED", "1")
+        .output()
+        .expect("run numan doctor --json with malformed lockfile");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "malformed lockfile leaves error-severity findings; expected exit 1\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!(
+            "doctor --json stdout must be valid JSON after malformed lockfile: {e}\nstdout={stdout}\nstderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    let repairs = value
+        .get("repairs")
+        .and_then(|r| r.as_array())
+        .unwrap_or_else(|| panic!("doctor --json must include repairs array: {value}"));
+
+    let snapshot = repairs
+        .iter()
+        .find(|r| r.get("id").and_then(|id| id.as_str()) == Some("snapshot.pre_mutation"))
+        .unwrap_or_else(|| panic!("expected snapshot.pre_mutation repair record: {repairs:?}"));
+    assert_eq!(
+        snapshot.get("status").and_then(|s| s.as_str()),
+        Some("failed"),
+        "snapshot.pre_mutation must be failed: {snapshot}"
+    );
+
+    let skipped_snapshot_deps: Vec<_> = repairs
+        .iter()
+        .filter(|r| {
+            r.get("status").and_then(|s| s.as_str()) == Some("skipped")
+                && r.get("reason").and_then(|s| s.as_str()) == Some("snapshot_unavailable")
+        })
+        .collect();
+    assert!(
+        !skipped_snapshot_deps.is_empty(),
+        "snapshot-dependent repairs must be skipped with snapshot_unavailable: {repairs:?}"
+    );
+
+    assert!(
+        root.join("state").is_dir(),
+        "layout.state must still be created when PreMutation snapshot fails"
+    );
+    assert!(
+        root.join("packages").is_dir(),
+        "layout.packages must still be created when PreMutation snapshot fails"
+    );
+    assert!(
+        root.join("registries").is_dir(),
+        "layout.registries must still be created when PreMutation snapshot fails"
+    );
+    assert!(
+        list_snapshots(root)
+            .unwrap()
+            .iter()
+            .all(|s| s.trigger != SnapshotTrigger::Doctor),
+        "malformed lockfile must not publish a Doctor PreMutation snapshot"
+    );
 }
 
 #[test]
@@ -165,8 +398,7 @@ fn doctor_reports_pending_plugin_journal() {
     journal.save(root).unwrap();
 
     let args = DoctorArgs {
-        fix: false,
-        yes: false,
+        scan: true,
         json: false,
         nupm_home: None,
     };
@@ -196,8 +428,7 @@ fn doctor_detects_nu_path_drift() {
     paths.save(root).unwrap();
 
     let args = DoctorArgs {
-        fix: false,
-        yes: false,
+        scan: true,
         json: false,
         nupm_home: None,
     };
@@ -222,8 +453,7 @@ fn doctor_reports_off_path_nu_without_download() {
     let _path_guard = TEST_PATH_GUARD.lock().unwrap();
     let _cleared_path = ClearedPath::new();
     let args = DoctorArgs {
-        fix: false,
-        yes: false,
+        scan: true,
         json: false,
         nupm_home: None,
     };
@@ -253,6 +483,47 @@ fn doctor_reports_off_path_nu_without_download() {
     assert_eq!(missing.severity, Severity::Ok);
 }
 
+fn nu_setup_must_not_be_called(
+    _args: &numan_cli::cmd::setup::NuSetupArgs,
+    _root: &Path,
+) -> anyhow::Result<()> {
+    *TEST_NU_SETUP_CALLED.lock().unwrap() = true;
+    panic!("doctor must not invoke setup::execute_nu_repair for missing Nu");
+}
+
+#[test]
+fn doctor_default_does_not_auto_install_managed_nu() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root).unwrap();
+
+    *TEST_NU_SETUP_CALLED.lock().unwrap() = false;
+    let _path_guard = TEST_PATH_GUARD.lock().unwrap();
+    let _cleared_path = ClearedPath::new();
+    let args = DoctorArgs {
+        scan: false,
+        json: false,
+        nupm_home: None,
+    };
+    let _code = execute_with_options(
+        &args,
+        root,
+        DoctorOptions {
+            // Network allowed: previously this would have downloaded managed Nu.
+            skip_network: false,
+            nu_setup_repair: Some(nu_setup_must_not_be_called),
+            discover_off_path: Some(|| None),
+            ..test_doctor_options()
+        },
+    )
+    .unwrap();
+
+    assert!(
+        !*TEST_NU_SETUP_CALLED.lock().unwrap(),
+        "default doctor must not call setup Nu install without explicit consent"
+    );
+}
+
 #[test]
 fn doctor_fix_registers_off_path_nu_without_network() {
     let dir = tempfile::tempdir().unwrap();
@@ -268,8 +539,7 @@ fn doctor_fix_registers_off_path_nu_without_network() {
     let _path_guard = TEST_PATH_GUARD.lock().unwrap();
     let _cleared_path = ClearedPath::new();
     let args = DoctorArgs {
-        fix: true,
-        yes: true,
+        scan: false,
         json: false,
         nupm_home: None,
     };
@@ -286,11 +556,15 @@ fn doctor_fix_registers_off_path_nu_without_network() {
     .unwrap();
 
     assert!(*TEST_NU_SETUP_CALLED.lock().unwrap());
+    assert!(
+        managed_nu_binary(root).exists(),
+        "off-PATH registration must not delete managed tools/nushell"
+    );
     assert_eq!(code, 1);
 }
 
 fn fake_deactivate_repair(args: &DeactivateArgs, root: &Path) -> anyhow::Result<()> {
-    assert!(args.yes);
+    assert!(!args.verbose);
     assert_eq!(args.packages, vec!["owner/plugin".to_string()]);
     *TEST_DEACTIVATE_REPAIR_CALLED.lock().unwrap() = true;
     if *TEST_DEACTIVATE_REPAIR_SHOULD_FAIL.lock().unwrap() {
@@ -334,8 +608,7 @@ fn doctor_fix_reconciles_pending_plugin_deactivate_journal() {
     *TEST_DEACTIVATE_REPAIR_SHOULD_FAIL.lock().unwrap() = false;
 
     let args = DoctorArgs {
-        fix: true,
-        yes: true,
+        scan: false,
         json: false,
         nupm_home: None,
     };
@@ -371,8 +644,7 @@ fn doctor_fix_stale_plugin_deactivate_runs_refresh_then_deactivate() {
     *TEST_DEACTIVATE_REPAIR_SHOULD_FAIL.lock().unwrap() = false;
 
     let args = DoctorArgs {
-        fix: true,
-        yes: true,
+        scan: false,
         json: false,
         nupm_home: None,
     };
@@ -406,8 +678,7 @@ fn doctor_fix_reports_deactivate_repair_failure() {
     *TEST_DEACTIVATE_REPAIR_SHOULD_FAIL.lock().unwrap() = true;
 
     let args = DoctorArgs {
-        fix: true,
-        yes: true,
+        scan: false,
         json: true,
         nupm_home: None,
     };
@@ -453,8 +724,7 @@ fn doctor_reports_path_nu_not_found_when_path_cleared() {
 
     let report = run_checks_with_options(
         &DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: true,
             nupm_home: None,
         },
@@ -497,8 +767,7 @@ fn doctor_reports_managed_and_trust_root_findings() {
 
     let report = run_checks_with_options(
         &DoctorArgs {
-            fix: false,
-            yes: false,
+            scan: true,
             json: true,
             nupm_home: None,
         },
@@ -535,4 +804,99 @@ fn doctor_reports_managed_and_trust_root_findings() {
     assert!(json.contains("nu.path.version"));
     assert!(json.contains("nu.managed.version"));
     assert!(json.contains("registry.trust_root"));
+}
+
+#[test]
+fn doctor_json_default_stdout_is_valid_json() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root).unwrap();
+    fake_init(&InitArgs { refresh: false }, root).unwrap();
+    // Seed a cached index so default repair mode does not attempt registry sync.
+    let index_path = root.join("registry/official/index.json");
+    std::fs::create_dir_all(index_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &index_path,
+        r#"{"schema_version":1,"packages":[],"generated_at":"test"}"#,
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_numan"))
+        .args([
+            "--root",
+            root.to_str().expect("temp root is utf-8"),
+            "doctor",
+            "--json",
+        ])
+        .env("NUMAN_ALLOW_UNSIGNED", "1")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run numan doctor --json");
+
+    assert!(
+        output.status.success(),
+        "doctor --json must exit 0\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!(
+            "default doctor --json stdout must be valid JSON: {e}\nstdout={stdout}\nstderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    assert!(
+        value.get("repairs").is_some_and(|r| r.is_array()),
+        "default doctor --json must include repairs: {value}"
+    );
+}
+
+/// `doctor --json --scan` must omit the `repairs` field (single JSON object).
+#[test]
+fn doctor_json_scan_omits_repairs_field() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root).unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_numan"))
+        .args([
+            "--root",
+            root.to_str().expect("temp root is utf-8"),
+            "doctor",
+            "--json",
+            "--scan",
+        ])
+        .env("NUMAN_ALLOW_UNSIGNED", "1")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run numan doctor --json --scan");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success()
+            || output.status.code() == Some(1)
+            || output.status.code() == Some(2),
+        "doctor --json --scan unexpected status: {}\nstdout={stdout}\nstderr={stderr}",
+        output.status
+    );
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!(
+            "doctor --json --scan stdout must be valid JSON: {e}\nstdout={stdout}\nstderr={stderr}"
+        )
+    });
+    assert!(
+        value.is_object(),
+        "doctor --json --scan must emit a single JSON object: {value}"
+    );
+    assert!(
+        value.get("repairs").is_none(),
+        "doctor --json --scan must omit repairs: {value}"
+    );
+    assert!(
+        value.get("findings").is_some_and(|f| f.is_array()),
+        "doctor --json --scan must include findings: {value}"
+    );
 }
