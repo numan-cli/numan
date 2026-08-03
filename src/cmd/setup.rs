@@ -254,6 +254,7 @@ pub(crate) fn execute_nu_impl(args: &NuSetupArgs, root: &Path) -> Result<()> {
                 skip_path: args.skip_path,
                 version: args.version.clone(),
                 caller_consented_destructive: false,
+                is_tty: None,
             };
             let platform = Platform::detect();
             bootstrap::execute_nu_setup(root, &platform, &options)?;
@@ -374,6 +375,7 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
         // suppressed -- only valid because the merged prompt above
         // collected consent for both the delete AND the PATH add.
         caller_consented_destructive: managed_dir_was_present,
+        is_tty: None,
     };
     bootstrap::register_existing_nu(Path::new(&path_nu), root, &options)?;
     Ok(())
@@ -436,6 +438,7 @@ fn execute_use_existing(
         // suppressed -- only valid because the merged prompt above
         // collected consent for both the delete AND the PATH add.
         caller_consented_destructive: managed_dir_was_present,
+        is_tty: None,
     };
     bootstrap::register_existing_nu(path, root, &options)?;
     Ok(())
@@ -452,6 +455,10 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
         return Ok(());
     }
 
+    // Fail closed in non-interactive sessions without `--yes`. Removal wipes
+    // the managed tree; `confirm_or_bail`'s non-TTY auto-confirm must not
+    // silently proceed.
+    require_tty_or_yes(yes, "managed Nushell removal")?;
     confirm_or_bail(
         &format!(
             "Remove managed Nushell at '{}'? Numan will fall back to PATH Nu.",
