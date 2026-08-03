@@ -550,16 +550,20 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
         "Managed Nushell removal cancelled.",
     )?;
 
-    // Clear the marker only after the managed tree is deleted successfully so a
-    // deletion failure leaves the active-version selection unchanged. A declined
-    // prompt above leaves both the tree and selection intact.
+    // Clear after confirmation so decline leaves selection intact. Fail loud if
+    // the marker cannot be cleared; do not proceed to delete with a stale marker.
+    version_manager::clear_active_version(root).with_context(|| {
+        format!(
+            "Failed to clear active-version marker before removing managed Nu at '{}'",
+            managed_dir.display()
+        )
+    })?;
     std::fs::remove_dir_all(&managed_dir).with_context(|| {
         format!(
             "Failed to remove managed Nushell directory '{}'",
             managed_dir.display()
         )
     })?;
-    version_manager::clear_active_version(root)?;
     println!(
         "Removed managed Nushell at '{}'. Run 'numan init --refresh' to re-detect Nu.",
         managed_dir.display()
@@ -570,18 +574,23 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
 /// Silently remove the managed Nu directory if it exists (used by --use-existing).
 fn remove_managed_nu_if_present(root: &Path) -> Result<()> {
     let managed_dir = bootstrap::managed_nu_dir(root);
-    // Clear the active-version marker only after the managed tree is deleted
-    // successfully (confirm was already handled by the caller). Skip the clear
-    // when there is nothing to remove so a no-op path cannot wipe a still-valid
-    // off-tree selection, and so a deletion failure leaves the marker intact.
+    // Clear the marker immediately before deleting the managed tree (confirm was
+    // already handled by the caller). Skip when there is nothing to remove so a
+    // no-op path cannot wipe a still-valid off-tree selection. Propagate clear
+    // failures so deletion does not proceed with a stale marker.
     if managed_dir.is_dir() {
+        version_manager::clear_active_version(root).with_context(|| {
+            format!(
+                "Failed to clear active-version marker before removing managed Nu at '{}'",
+                managed_dir.display()
+            )
+        })?;
         std::fs::remove_dir_all(&managed_dir).with_context(|| {
             format!(
                 "Failed to remove managed Nushell directory '{}'",
                 managed_dir.display()
             )
         })?;
-        version_manager::clear_active_version(root)?;
         println!(
             "Removed managed Nushell at '{}' (replaced by --use-existing).",
             managed_dir.display()
