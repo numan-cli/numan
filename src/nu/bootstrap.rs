@@ -489,6 +489,16 @@ pub fn register_existing_nu(
         // backward-compatible UX.
         eprintln!("{}", crate::util::confirm::hoisted_audit_message(&parent));
     } else {
+        // Fail closed on non-TTY without `--yes`. `confirm_or_bail` alone
+        // would auto-confirm and mutate PATH / active-version state.
+        let is_tty = options
+            .is_tty
+            .unwrap_or_else(|| std::io::stdin().is_terminal());
+        crate::util::confirm::require_tty_or_yes_with_tty(
+            options.yes,
+            "off-path Nu PATH registration",
+            is_tty,
+        )?;
         println!(
             "This will add '{}' to your user PATH so Nushell can be found.",
             parent.display()
@@ -1079,6 +1089,62 @@ mod tests {
         assert!(
             msg.contains("non-interactive") || msg.contains("Refusing destructive"),
             "expected non-TTY refusal, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn register_existing_nu_refuses_non_tty_without_yes_before_path_mutation() {
+        let nu_name = nu_binary_name();
+        let Some(src) = std::env::var_os("PATH").and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join(nu_name))
+                .find(|p| p.is_file() && validate_nushell_binary(p).is_ok())
+        }) else {
+            // Unit CI without Nu on PATH cannot exercise the post-validate gate.
+            return;
+        };
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let existing_dir = dir.path().join("existing-nu");
+        std::fs::create_dir_all(&existing_dir).unwrap();
+        let existing = existing_dir.join(nu_name);
+        std::fs::copy(&src, &existing).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&existing).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&existing, perms).unwrap();
+        }
+
+        let before_path = std::env::var_os("PATH");
+        let options = NuSetupOptions {
+            yes: false,
+            force: false,
+            skip_path: true,
+            version: None,
+            caller_consented_destructive: false,
+            is_tty: Some(false),
+        };
+
+        let err = register_existing_nu(&existing, root, &options)
+            .expect_err("non-TTY without --yes must refuse before PATH/active mutation");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("non-interactive") || msg.contains("Refusing destructive"),
+            "expected non-TTY refusal, got: {msg}"
+        );
+        assert_eq!(
+            std::env::var_os("PATH"),
+            before_path,
+            "PATH must be unchanged after refusal"
+        );
+        assert!(
+            version_manager::read_active_version(root)
+                .unwrap()
+                .is_none(),
+            "active-version marker must not be written after refusal"
         );
     }
 }
