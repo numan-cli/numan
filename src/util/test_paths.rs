@@ -2,15 +2,22 @@
 //!
 //! `#[cfg(test)]`-gated at the module declaration in `src/util/mod.rs`, so
 //! this module is never compiled into release builds. It is reachable only
-//! from inline `cfg(test)` unit tests, not from integration tests under
-//! `tests/`.
+//! from inline `cfg(test)` unit tests in this crate, not from integration
+//! tests under `tests/` or from external crates.
 
 use std::ffi::OsString;
+use std::sync::{Mutex, MutexGuard};
+
+/// Serializes every PATH snapshot/restore so concurrent unit tests cannot
+/// race through the process-global environment.
+static PATH_MUTEX: Mutex<()> = Mutex::new(());
 
 /// RAII guard that snapshots the process PATH on construction and
-/// restores it on drop. Use this around any test that mutates PATH so
-/// real-Nu runs from a developer terminal are not poisoned by the test
-/// process.
+/// restores it on drop. Acquires a shared process-wide mutex so callers
+/// never need a separate `Mutex` for PATH serialization.
+///
+/// Use this around any test that mutates PATH so real-Nu runs from a
+/// developer terminal are not poisoned by the test process.
 ///
 /// # Example
 ///
@@ -21,12 +28,17 @@ use std::ffi::OsString;
 /// ```
 pub struct PathRestoreGuard {
     original: Option<OsString>,
+    _lock: MutexGuard<'static, ()>,
 }
 
 impl PathRestoreGuard {
     pub fn new() -> Self {
+        let lock = PATH_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         Self {
             original: std::env::var_os("PATH"),
+            _lock: lock,
         }
     }
 }

@@ -836,7 +836,10 @@ where
     println!("Next steps:");
     println!("  {}", crate::util::hints::CMD_INIT_REFRESH);
     println!("  numan doctor");
-    println!("  Re-activate packages you still want: numan activate");
+    println!(
+        "  Re-activate packages you still want: {}",
+        crate::util::hints::CMD_ACTIVATE
+    );
     Ok(installed)
 }
 

@@ -641,7 +641,8 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
                 "journal.migration_invalid",
                 Severity::Error,
                 format!(
-                    "Migration journal at '{}' is unreadable: {e}.                      Delete the stale journal to recover, then re-run `numan doctor`.",
+                    "Migration journal at '{}' is unreadable: {e}. \
+                     Delete the stale journal to recover.",
                     journal_path.display()
                 ),
                 Some(&fix),
@@ -1532,35 +1533,9 @@ mod tests {
     use crate::core::integrity;
     use crate::nu::autoload::FakeCandidateRunner;
     use crate::state::lockfile::{LockfileEntry, PluginActivation};
+    use crate::util::test_paths::PathRestoreGuard;
     use std::collections::BTreeMap;
-    use std::sync::Mutex;
     use tempfile::TempDir;
-
-    /// Serializes tests that mutate the process-wide `PATH` env var.
-    static TEST_PATH_GUARD: Mutex<()> = Mutex::new(());
-
-    /// RAII guard that restores the original PATH on drop, ensuring restoration
-    /// during both normal return and panic unwinding.
-    struct PathRestoreGuard {
-        original: Option<std::ffi::OsString>,
-    }
-
-    impl PathRestoreGuard {
-        fn new() -> Self {
-            Self {
-                original: std::env::var_os("PATH"),
-            }
-        }
-    }
-
-    impl Drop for PathRestoreGuard {
-        fn drop(&mut self) {
-            match self.original.as_ref() {
-                Some(path) => std::env::set_var("PATH", path),
-                None => std::env::remove_var("PATH"),
-            }
-        }
-    }
 
     fn fake_paths(root: &Path, nu_exe: &Path) -> NuPaths {
         let bytes = std::fs::read(nu_exe).unwrap();
@@ -2054,7 +2029,7 @@ mod tests {
 
     #[test]
     fn doctor_reports_path_nu_version_probe_failure() {
-        let _path_guard = TEST_PATH_GUARD.lock().unwrap();
+        let _path_restore = PathRestoreGuard::new();
 
         let dir = TempDir::new().unwrap();
         let root = dir.path();
@@ -2074,7 +2049,6 @@ mod tests {
             std::fs::set_permissions(&fake_nu, perms).unwrap();
         }
 
-        let _path_restore = PathRestoreGuard::new();
         // Prepend the fake-nu dir; do not replace PATH. `find_nu_on_path` shells
         // out to `which`/`where.exe`, which must remain resolvable.
         let mut path_entries = vec![path_dir];

@@ -140,7 +140,8 @@ impl PendingMigration {
         // it instead of silently downgrading.
         if journal.schema_version != SCHEMA_VERSION {
             anyhow::bail!(
-                "Migration journal at '{}' uses schema_version {} but this build expects {}.                  Upgrade Numan or remove the stale journal.",
+                "Migration journal at '{}' uses schema_version {} but this build expects {}. \
+                 Upgrade Numan or remove the stale journal.",
                 path.display(),
                 journal.schema_version,
                 SCHEMA_VERSION,

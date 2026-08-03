@@ -40,12 +40,18 @@ pub type LegacyVersionDetector = dyn Fn(&Path) -> Result<String>;
 /// `migrate_legacy_recovers_from_post_create_hook_failure` proves that.
 pub type LegacyPostCreateHook = dyn Fn(&Path) -> Result<()>;
 
+/// Upper bound on how long a hung legacy Nu binary may hold the probe.
+/// Migration (and doctor repair) run under the root mutation lock, so an
+/// unbounded `Command::output` would stall all other Numan mutations.
+const LEGACY_VERSION_DETECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Production detector: prefer the VERSION metadata file written by
 /// `install_from_archive`. Fall back to probing `nu --version` when no
 /// metadata is present (e.g. a manually placed legacy binary).
 ///
-/// We avoid an unbounded `Command::output` probe when metadata exists; the
-/// probe is best-effort and depends on the Nu process terminating quickly.
+/// The probe is bounded: a hung user-supplied binary is killed after
+/// [`LEGACY_VERSION_DETECT_TIMEOUT`] so the mutation lock cannot be held
+/// indefinitely.
 pub fn detect_legacy_version(binary: &Path) -> Result<String> {
     if let Some(parent) = binary.parent() {
         let version_file = parent.join("VERSION");
@@ -66,16 +72,47 @@ pub fn detect_legacy_version(binary: &Path) -> Result<String> {
         }
     }
 
-    let output = std::process::Command::new(binary)
+    let mut child = std::process::Command::new(binary)
         .arg("--version")
         .stdin(std::process::Stdio::null())
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .with_context(|| {
             format!(
                 "Failed to execute legacy Nu binary at '{}'",
                 binary.display()
             )
         })?;
+
+    let deadline = std::time::Instant::now() + LEGACY_VERSION_DETECT_TIMEOUT;
+    loop {
+        match child
+            .try_wait()
+            .with_context(|| format!("Failed to poll legacy Nu binary at '{}'", binary.display()))?
+        {
+            Some(_) => break,
+            None => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    bail!(
+                        "Legacy Nu binary at '{}' timed out after {}s while detecting version",
+                        binary.display(),
+                        LEGACY_VERSION_DETECT_TIMEOUT.as_secs()
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
+
+    let output = child.wait_with_output().with_context(|| {
+        format!(
+            "Failed to collect output from legacy Nu binary at '{}'",
+            binary.display()
+        )
+    })?;
 
     if !output.status.success() {
         bail!(
