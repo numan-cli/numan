@@ -32,7 +32,7 @@ fn discover_off_path_test() -> Option<PathBuf> {
 
 fn nu_setup_repair_test(
     args: &numan_cli::cmd::setup::NuSetupArgs,
-    root: &Path,
+    _root: &Path,
 ) -> anyhow::Result<()> {
     let expected = TEST_OFF_PATH.lock().unwrap().clone();
     // The doctor passes the off-path binary via NuSetupArgs::use_existing(),
@@ -51,21 +51,7 @@ fn nu_setup_repair_test(
         "doctor found_off_path repair must not pass --yes"
     );
     *TEST_NU_SETUP_CALLED.lock().unwrap() = true;
-
-    // Seed a managed install just before the production use path. Seeding earlier
-    // would make Nu "available" and suppress `nu.binary.found_off_path`.
-    let managed = managed_nu_binary(root);
-    std::fs::create_dir_all(managed.parent().unwrap())?;
-    std::fs::write(&managed, b"managed-nu")?;
-    // Use a missing binary so execute_nu fails before PATH persistence or wipe.
-    let missing = root.join("missing-off-path-nu");
-    let err = setup::execute_nu(&setup::NuSetupArgs::use_existing(missing, args.yes), root)
-        .expect_err("expected resolve failure for missing off-PATH binary");
-    assert!(
-        managed.exists(),
-        "doctor off-PATH repair must not delete managed tools/nushell without consent: {err}"
-    );
-    Err(err)
+    Ok(())
 }
 
 /// Valid fake Nu for consent-gate tests (Unix). Must look runnable to
@@ -106,6 +92,25 @@ fn execute_nu_use_existing_refuses_without_consent_and_keeps_managed() {
     assert!(
         managed.exists(),
         "managed install must remain when consent gate refuses off-PATH registration"
+    );
+}
+
+#[test]
+fn execute_nu_use_existing_missing_path_keeps_managed() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root).unwrap();
+
+    let managed = managed_nu_binary(root);
+    std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+    std::fs::write(&managed, b"managed-nu").unwrap();
+
+    let missing = root.join("missing-off-path-nu");
+    let err = setup::execute_nu(&setup::NuSetupArgs::use_existing(missing, false), root)
+        .expect_err("expected resolve failure for missing off-PATH binary");
+    assert!(
+        managed.exists(),
+        "managed install must remain when off-PATH resolve fails before wipe: {err}"
     );
 }
 
@@ -544,17 +549,17 @@ fn doctor_fix_registers_off_path_nu_without_network() {
             skip_network: true,
             nu_setup_repair: Some(nu_setup_repair_test),
             discover_off_path: Some(discover_off_path_test),
+            init_repair: Some(fake_init),
             ..test_doctor_options()
         },
     )
     .unwrap();
 
     assert!(*TEST_NU_SETUP_CALLED.lock().unwrap());
-    assert!(
-        managed_nu_binary(root).exists(),
-        "off-PATH registration must not delete managed tools/nushell"
+    assert_eq!(
+        code, 0,
+        "successful off-PATH registration must leave doctor with a clean exit"
     );
-    assert_eq!(code, 1);
 }
 
 fn fake_deactivate_repair(args: &DeactivateArgs, root: &Path) -> anyhow::Result<()> {

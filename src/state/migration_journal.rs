@@ -110,8 +110,10 @@ pub enum MigrationJournalError {
     },
 
     #[error(
-        "Migration journal at '{}' is staged 'Renamed' but the versioned binary is missing.\n\
-         Run `numan setup nu {version}` to repair.",
+        "Migration journal at '{}' is staged 'Renamed' but the versioned binary \
+         for '{version}' is missing. Automatic recovery cannot continue. \
+         Discard the journal file to unblock, or reinstall with \
+         `numan setup nu {version}` and re-run `numan use` / `numan doctor`.",
         path.display()
     )]
     RenamedBinaryMissing { path: PathBuf, version: String },
@@ -675,6 +677,15 @@ mod tests {
             "err must name the journal stage: {err}"
         );
         assert!(err.contains("0.113.1"), "err must name the version: {err}");
+        assert!(
+            err.contains("Discard the journal") || err.contains("discard"),
+            "err must guide manual discard: {err}"
+        );
+        assert!(err.contains("setup nu"), "err must offer reinstall: {err}");
+        assert!(
+            PendingMigration::load(root).unwrap().is_some(),
+            "journal must be retained for manual recovery"
+        );
     }
 
     #[test]

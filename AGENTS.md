@@ -65,7 +65,7 @@ src/
     completions.rs     — `numan completions <shell>`: bash/fish/zsh/powershell/nushell scripts (Phase 7.3)
     setup.rs           — `numan setup nu [VERSION]|remove|path|use <path>` + `setup loader`: Nushell bootstrap + nushell-loader install
     try_cmd.rs         — `numan try [--no-activate]`: curated starter install + activate for current Nu
-    use_cmd.rs         — `numan use <version>|latest|list`: activates a previously installed managed Nu version (no auto-download); mutating arms take the root mutation lock, PreMutation snapshot, journaled legacy migration, then write the active-version marker; `list` is read-only (no lock, snapshot, or migration)
+    use_cmd.rs         — `numan use <version>|latest|list`: activates a previously installed managed Nu version (no auto-download); mutating arms acquire the root mutation lock, run the PreMutation snapshot, perform legacy migration, and write the active-version marker; `numan use list` is exempt from all four operations
     nu_pin_offer.rs    — Shared TTY offer to `setup nu <version>` + `init --refresh` on Nu mismatch
   install/
     download.rs        — HTTP download with progress

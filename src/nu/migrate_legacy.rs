@@ -40,6 +40,17 @@ pub enum MigrateLegacyError {
     #[error(transparent)]
     Journal(#[from] MigrationJournalError),
 
+    /// Renamed-stage journal whose versioned binary is gone: manual recovery only.
+    #[error(
+        "Legacy Nu migration is stuck at Renamed for version '{version}' \
+         (journal: '{}'). The versioned binary is missing, so automatic \
+         recovery cannot continue. Discard the journal file to unblock, or \
+         reinstall with `numan setup nu {version}` and re-run `numan use` / \
+         `numan doctor`.",
+        path.display()
+    )]
+    RenamedBinaryManualRecovery { path: PathBuf, version: String },
+
     #[error(transparent)]
     VersionManager(#[from] VersionManagerError),
 
@@ -253,7 +264,18 @@ pub fn migrate_legacy_install_with_detector(
     // The `Prepared` path removes any orphan `<version>/` subdir; the
     // `Renamed` path completes the active-version write. This is what makes
     // the migration a journaled transaction: every stage is recoverable.
-    migration_journal::reconcile(root)?;
+    //
+    // `RenamedBinaryMissing` is not auto-healable: classify it as manual
+    // recovery with the journal path and discard/reinstall guidance instead
+    // of propagating the journal error as a blocking opaque failure. Other
+    // reconcile outcomes keep their existing recovery behavior.
+    match migration_journal::reconcile(root) {
+        Ok(_) => {}
+        Err(MigrationJournalError::RenamedBinaryMissing { path, version }) => {
+            return Err(MigrateLegacyError::RenamedBinaryManualRecovery { path, version });
+        }
+        Err(e) => return Err(MigrateLegacyError::Journal(e)),
+    }
 
     let legacy_binary = legacy_managed_binary_with_bin(root, nu_binary_name());
 
@@ -707,6 +729,48 @@ mod tests {
         let binary = create_legacy_binary(root, Some("0.113.1\n"));
         let detected = detect_legacy_version(&binary).unwrap();
         assert_eq!(detected, "0.113.1");
+    }
+
+    #[test]
+    fn migrate_legacy_classifies_renamed_binary_missing_as_manual_recovery() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        // Renamed journal without a versioned binary: reconcile cannot auto-heal.
+        std::fs::create_dir_all(version_install_dir(root, "0.113.1")).unwrap();
+        PendingMigration {
+            schema_version: SCHEMA_VERSION,
+            version: "0.113.1".to_string(),
+            stage: MigrationStage::Renamed,
+        }
+        .save(root)
+        .unwrap();
+
+        let err = migrate_legacy_install_with_detector(
+            root,
+            &|_| panic!("detector must not run when Renamed recovery is manual"),
+            None,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        match err {
+            MigrateLegacyError::RenamedBinaryManualRecovery { path, version } => {
+                assert_eq!(version, "0.113.1");
+                assert_eq!(path, PendingMigration::journal_path(root));
+            }
+            other => panic!("expected RenamedBinaryManualRecovery, got {other}"),
+        }
+        assert!(
+            msg.contains("Discard the journal") || msg.contains("journal"),
+            "diagnostic must mention the journal: {msg}"
+        );
+        assert!(
+            msg.contains("setup nu"),
+            "diagnostic must offer reinstall: {msg}"
+        );
+        assert!(
+            PendingMigration::load(root).unwrap().is_some(),
+            "manual-recovery path must retain the journal"
+        );
     }
 
     #[test]

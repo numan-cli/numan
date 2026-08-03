@@ -85,7 +85,7 @@ Repair steps run in this **order** (each step re-validates only what it changed)
 
 | Tier | Prompt? | Finding IDs | Action |
 |------|---------|-------------|--------|
-| **auto** | Never | `layout.*` (missing dirs), `nu.active_version.invalid` | Independent of PreMutation success: `create_dir_all` for layout; clear invalid `nu_state/active-version.json` via `clear_active_version` |
+| **auto** | Never | `layout.*` (missing dirs), `nu.active_version.invalid` | Independent of PreMutation success: `create_dir_all` for layout; preserve raw `active-version.json` bytes to `active-version.json.corrupt`, then clear via `clear_active_version` |
 | **auto** | Never | `journal.migration_pending` | `migration_journal::reconcile` under the mutation lock after a PreMutation Doctor snapshot (skipped/Failed without aborting later repairs) |
 | **auto** | Never | `nu_paths.missing` | `numan init` (skipped with `snapshot_unavailable` when PreMutation fails) |
 | **auto** | Never | `registry.index_missing` | `numan registry sync` (skipped with `snapshot_unavailable` when PreMutation fails) |
@@ -131,7 +131,7 @@ Checks run in order below. Implementation should call existing validators (`NuPa
 | `nu.binary.found_off_path` | `warn` | Nu exists in a known install root (e.g. `~/.cargo/bin`, `%LOCALAPPDATA%\Programs\nushell`) but not on PATH → fix: `numan setup nu use <path>` |
 | `nu.path.version` | `info` | PATH-only Nu version (`PATH Nu: 0.114.1`), `PATH Nu: not found`, or `PATH Nu: found at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Does not treat managed Nu as PATH. Report-only (no automatic repair). |
 | `nu.managed.version` | `info` | Managed binary under `$NUMAN_ROOT/tools/nushell/` with version, `Managed Nu: not installed`, or `Managed Nu: present at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Report-only (no automatic repair). |
-| `nu.active_version.invalid` | `error` | `nu_state/active-version.json` is present but unreadable/invalid JSON. Lookup would otherwise soft-miss the marker and fall back to PATH. **auto:** clear the marker via `clear_active_version` so resolution recovers cleanly. |
+| `nu.active_version.invalid` | `error` | `nu_state/active-version.json` is present but unreadable/invalid JSON. Lookup would otherwise soft-miss the marker and fall back to PATH. **auto:** copy raw bytes to `active-version.json.corrupt` (best-effort, recoverable `binary_path`), then clear via `clear_active_version` so resolution recovers cleanly. |
 | `nu_paths.missing` | `error` | `paths.json` absent → fix: `numan init` |
 | `nu_paths.drift` | `error` | `NuPaths::validate_drift()` fails → fix: `numan init --refresh` |
 | `nu_paths.vendor_drift` | `error` | `validate_vendor_drift()` fails when `data_dir` cached → fix: `numan init --refresh` |

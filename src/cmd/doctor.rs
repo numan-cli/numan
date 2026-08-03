@@ -1481,12 +1481,24 @@ fn apply_repairs(
 
     // Clear a torn / malformed active-version marker so subsequent Nu
     // resolution can fall through cleanly instead of failing loud forever.
+    //
+    // Snapshot-before-mutation: this Auto repair is intentionally independent
+    // of PreMutation success (see docs/numan-doctor.md). Instead of gating on
+    // `snapshot_ok`, preserve the raw marker bytes beside the live path so a
+    // recoverable off-tree `binary_path` is retained for manual reconstruction
+    // before unconditional clearing.
     if findings
         .iter()
         .any(|f| f.id == "nu.active_version.invalid" && f.repair == RepairTier::Auto)
     {
         let id = "nu.active_version.repaired".to_string();
         let _lock = acquire_mutation_lock(root)?;
+        let marker = root.join("nu_state").join("active-version.json");
+        let backup = root.join("nu_state").join("active-version.json.corrupt");
+        if marker.is_file() {
+            // Best-effort preserve; failure to back up must not block clear.
+            let _ = std::fs::copy(&marker, &backup);
+        }
         match version_manager::clear_active_version(root) {
             Ok(_) => records.push(RepairRecord {
                 id,
@@ -2529,6 +2541,16 @@ mod tests {
             "marker must be absent after repair"
         );
         assert!(!marker.exists(), "marker file must be removed");
+        let backup = root.join("nu_state").join("active-version.json.corrupt");
+        assert!(
+            backup.exists(),
+            "raw marker bytes must be preserved beside the live path for recovery"
+        );
+        assert_eq!(
+            std::fs::read(&backup).unwrap(),
+            b"{ not json",
+            "corrupt backup must retain the original marker bytes"
+        );
     }
 
     #[test]
