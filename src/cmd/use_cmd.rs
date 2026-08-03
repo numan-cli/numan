@@ -71,9 +71,12 @@ where
     )
     .with_context(|| "Failed to create pre-mutation snapshot for `numan use`")?;
 
-    migrate(root)
+    let migrated = migrate(root)
         .map_err(Into::into)
         .with_context(|| "Failed to migrate legacy Nu installation")?;
+    if migrated {
+        println!("Migrated legacy Nushell install to the versioned layout.");
+    }
 
     op(root)
 }

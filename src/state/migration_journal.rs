@@ -94,7 +94,7 @@ pub enum MigrationJournalError {
 
     #[error(
         "Migration journal at '{}' has '{version}' as Prepared-but-orphan, \
-         but the empty version directory '{}' could not be removed: {source}. \
+         but the empty version directory '{}' could not be removed. \
          Journal retained so a follow-up `numan use` (or \
          `numan doctor --fix`) can recover once permissions or \
          the directory contents are resolved.",
@@ -126,7 +126,7 @@ pub enum MigrationJournalError {
     },
 
     #[error(
-        "Migration journal at '{}' could not remove stray legacy binary at '{}': {source}. \
+        "Migration journal at '{}' could not remove stray legacy binary at '{}'. \
          Journal retained so a follow-up recovery can complete once file permissions or locks are resolved.",
         path.display(),
         legacy_binary.display()

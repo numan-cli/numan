@@ -3,8 +3,7 @@ pub mod confirm;
 pub mod fs_safety;
 pub mod hints;
 pub mod stdio_redirect;
-
-#[cfg(test)]
+/// PATH restore helpers for unit and integration tests.
 pub mod test_paths;
 
 pub fn format_timestamp() -> String {

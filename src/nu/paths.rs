@@ -601,17 +601,13 @@ mod tests {
 
     #[test]
     fn find_nu_executable_with_root_errors_when_nu_absent() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("numan-root");
         std::fs::create_dir_all(&root).unwrap();
 
-        let saved_path = std::env::var("PATH").ok();
         std::env::set_var("PATH", "");
         let result = find_nu_executable_with_root(&root);
-        match saved_path {
-            Some(path) => std::env::set_var("PATH", path),
-            None => std::env::remove_var("PATH"),
-        }
 
         let err = result.unwrap_err();
         assert!(err.to_string().contains("numan setup nu"));
@@ -619,6 +615,7 @@ mod tests {
 
     #[test]
     fn find_nu_executable_with_root_prefers_managed_over_path() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("numan-root");
         let managed = crate::nu::bootstrap::managed_nu_binary(&root);
@@ -630,14 +627,9 @@ mod tests {
         let path_nu = path_dir.join(if cfg!(windows) { "nu.exe" } else { "nu" });
         std::fs::write(&path_nu, b"path nu").unwrap();
 
-        let saved_path = std::env::var("PATH").ok();
         std::env::set_var("PATH", &path_dir);
 
         let resolved = find_nu_executable_with_root(&root).unwrap();
-        match saved_path {
-            Some(path) => std::env::set_var("PATH", path),
-            None => std::env::remove_var("PATH"),
-        }
 
         assert_eq!(
             std::fs::canonicalize(resolved).unwrap(),
@@ -846,6 +838,7 @@ mod tests {
 
     #[test]
     fn find_nu_executable_with_root_prefers_marker_ontree_hint() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("numan-root");
         std::fs::create_dir_all(&root).unwrap();
@@ -860,14 +853,8 @@ mod tests {
 
         crate::nu::version_manager::write_active_version(&root, "0.113.1").unwrap();
 
-        let saved = std::env::var("PATH").ok();
         std::env::set_var("PATH", "");
         let resolved = find_nu_executable_with_root(&root).unwrap();
-        if let Some(p) = saved {
-            std::env::set_var("PATH", p)
-        } else {
-            std::env::remove_var("PATH");
-        }
 
         assert_eq!(
             std::fs::canonicalize(resolved).unwrap(),
@@ -877,6 +864,7 @@ mod tests {
 
     #[test]
     fn find_nu_executable_with_root_uses_marker_offtree_when_ontree_missing() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("numan-root");
         std::fs::create_dir_all(&root).unwrap();
@@ -888,14 +876,8 @@ mod tests {
         crate::nu::version_manager::write_active_version_with_binary(&root, "0.113.1", &off_tree)
             .unwrap();
 
-        let saved = std::env::var("PATH").ok();
         std::env::set_var("PATH", "");
         let resolved = find_nu_executable_with_root(&root).unwrap();
-        if let Some(p) = saved {
-            std::env::set_var("PATH", p)
-        } else {
-            std::env::remove_var("PATH");
-        }
 
         assert_eq!(
             std::fs::canonicalize(resolved).unwrap(),
@@ -905,6 +887,7 @@ mod tests {
 
     #[test]
     fn find_nu_executable_with_root_falls_through_when_marker_paths_stale() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("numan-root");
         std::fs::create_dir_all(&root).unwrap();
@@ -919,14 +902,8 @@ mod tests {
         )
         .unwrap();
 
-        let saved = std::env::var("PATH").ok();
         std::env::set_var("PATH", "");
         let result = find_nu_executable_with_root(&root);
-        if let Some(p) = saved {
-            std::env::set_var("PATH", p)
-        } else {
-            std::env::remove_var("PATH");
-        }
 
         let err = result.unwrap_err();
         assert!(err.to_string().contains("numan setup nu"));

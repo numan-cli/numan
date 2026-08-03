@@ -362,14 +362,22 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
     // Nu must not leave us without a managed install.
     validate_user_supplied_nu(Path::new(&path_nu), opts.validate)?;
 
+    let managed_dir = bootstrap::managed_nu_dir(root);
+    let managed_dir_was_present = managed_dir.is_dir();
+
     // Fail closed for non-TTY without `--yes` before PATH mutation or wipe,
     // including the managed-dir-absent path that only updates PATH.
     if opts.confirm.is_none() {
-        require_tty_or_yes(yes, "PATH Nu registration")?;
+        require_tty_or_yes(
+            yes,
+            if managed_dir_was_present {
+                "managed Nushell wipe + PATH update"
+            } else {
+                "PATH Nu registration"
+            },
+        )?;
     }
 
-    let managed_dir = bootstrap::managed_nu_dir(root);
-    let managed_dir_was_present = managed_dir.is_dir();
     if managed_dir_was_present {
         let resolved_path_nu = Path::new(&path_nu)
             .canonicalize()
@@ -413,19 +421,6 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
         }
     }
 
-    // PATH registration mutates user state even when no managed tree exists.
-    // Fail closed without `--yes` / TTY unless a confirm seam is injected.
-    if opts.confirm.is_none() {
-        require_tty_or_yes(
-            yes,
-            if managed_dir_was_present {
-                "managed Nushell wipe + PATH update"
-            } else {
-                "Nu PATH registration"
-            },
-        )?;
-    }
-
     snapshot_setup_mutation(root, SnapshotTrigger::Install)?;
     let options = NuSetupOptions {
         yes,
@@ -455,16 +450,24 @@ fn execute_use_existing(
     // not leave us without a managed install.
     validate_user_supplied_nu(path, opts.validate)?;
 
-    // Fail closed for non-TTY without `--yes` before PATH mutation or wipe.
-    if opts.confirm.is_none() {
-        require_tty_or_yes(yes, "off-path Nu registration")?;
-    }
-
     // Consolidate the destructive-removal confirm + the
     // register_existing_nu PATH-add prompt into one (mirrors
     // `execute_use_path`'s gate).
     let managed_dir = bootstrap::managed_nu_dir(root);
     let managed_dir_was_present = managed_dir.is_dir();
+
+    // Fail closed for non-TTY without `--yes` before PATH mutation or wipe.
+    if opts.confirm.is_none() {
+        require_tty_or_yes(
+            yes,
+            if managed_dir_was_present {
+                "managed Nushell wipe + PATH update"
+            } else {
+                "PATH Nu registration"
+            },
+        )?;
+    }
+
     let resolved_path = std::fs::canonicalize(path)
         .with_context(|| format!("Failed to resolve Nushell binary '{}'", path.display()))?;
     if managed_dir_was_present {
@@ -502,19 +505,6 @@ fn execute_use_existing(
                 None => confirm_or_bail(&prompt, false, cancel_msg)?,
             }
         }
-    }
-
-    // PATH registration mutates user state even when no managed tree exists.
-    // Fail closed without `--yes` / TTY unless a confirm seam is injected.
-    if opts.confirm.is_none() {
-        require_tty_or_yes(
-            yes,
-            if managed_dir_was_present {
-                "managed Nushell wipe + PATH update"
-            } else {
-                "Nu PATH registration"
-            },
-        )?;
     }
 
     snapshot_setup_mutation(root, SnapshotTrigger::Install)?;

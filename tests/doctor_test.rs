@@ -15,6 +15,7 @@ use numan_cli::state::plugin_deactivate_journal::{
     PendingPluginDeactivate, PendingPluginDeactivateEntry, PluginDeactivateStatus,
 };
 use numan_cli::state::snapshot::{list_snapshots, SnapshotTrigger};
+use numan_cli::util::test_paths::PathRestoreGuard;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tempfile::TempDir;
@@ -24,7 +25,6 @@ static TEST_NU_SETUP_CALLED: Mutex<bool> = Mutex::new(false);
 static TEST_DEACTIVATE_REPAIR_CALLED: Mutex<bool> = Mutex::new(false);
 static TEST_DEACTIVATE_REPAIR_SHOULD_FAIL: Mutex<bool> = Mutex::new(false);
 static TEST_DEACTIVATE_REPAIR_GUARD: Mutex<()> = Mutex::new(());
-static TEST_PATH_GUARD: Mutex<()> = Mutex::new(());
 
 fn discover_off_path_test() -> Option<PathBuf> {
     TEST_OFF_PATH.lock().ok()?.clone()
@@ -112,27 +112,6 @@ fn execute_nu_use_existing_missing_path_keeps_managed() {
         managed.exists(),
         "managed install must remain when off-PATH resolve fails before wipe: {err}"
     );
-}
-
-struct ClearedPath {
-    saved: Option<String>,
-}
-
-impl ClearedPath {
-    fn new() -> Self {
-        let saved = std::env::var("PATH").ok();
-        std::env::set_var("PATH", "");
-        Self { saved }
-    }
-}
-
-impl Drop for ClearedPath {
-    fn drop(&mut self) {
-        match &self.saved {
-            Some(path) => std::env::set_var("PATH", path),
-            None => std::env::remove_var("PATH"),
-        }
-    }
 }
 
 fn fake_runner(_exe: &str) -> Box<dyn numan_cli::nu::autoload::CandidateRunner> {
@@ -449,8 +428,8 @@ fn doctor_reports_off_path_nu_without_download() {
 
     *TEST_OFF_PATH.lock().unwrap() = Some(off_path.clone());
 
-    let _path_guard = TEST_PATH_GUARD.lock().unwrap();
-    let _cleared_path = ClearedPath::new();
+    let _path_guard = PathRestoreGuard::new();
+    std::env::set_var("PATH", "");
     let args = DoctorArgs {
         scan: true,
         json: false,
@@ -497,8 +476,8 @@ fn doctor_default_does_not_auto_install_managed_nu() {
     std::fs::create_dir_all(root).unwrap();
 
     *TEST_NU_SETUP_CALLED.lock().unwrap() = false;
-    let _path_guard = TEST_PATH_GUARD.lock().unwrap();
-    let _cleared_path = ClearedPath::new();
+    let _path_guard = PathRestoreGuard::new();
+    std::env::set_var("PATH", "");
     let args = DoctorArgs {
         scan: false,
         json: false,
@@ -535,8 +514,8 @@ fn doctor_fix_registers_off_path_nu_without_network() {
     *TEST_OFF_PATH.lock().unwrap() = Some(off_path.clone());
     *TEST_NU_SETUP_CALLED.lock().unwrap() = false;
 
-    let _path_guard = TEST_PATH_GUARD.lock().unwrap();
-    let _cleared_path = ClearedPath::new();
+    let _path_guard = PathRestoreGuard::new();
+    std::env::set_var("PATH", "");
     let args = DoctorArgs {
         scan: false,
         json: false,
@@ -714,8 +693,8 @@ fn test_doctor_options() -> DoctorOptions {
 
 #[test]
 fn doctor_reports_path_nu_not_found_when_path_cleared() {
-    let _path_guard = TEST_PATH_GUARD.lock().unwrap();
-    let _cleared_path = ClearedPath::new();
+    let _path_guard = PathRestoreGuard::new();
+    std::env::set_var("PATH", "");
 
     let dir = TempDir::new().unwrap();
     let root = dir.path();

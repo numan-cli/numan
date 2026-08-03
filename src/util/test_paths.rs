@@ -1,9 +1,8 @@
-//! Test-only helpers for restoring process-wide state after a test.
+//! Helpers for restoring process-wide PATH after a test.
 //!
-//! `#[cfg(test)]`-gated so this module is never compiled into release
-//! builds; the only ways to reach it are via dev-dependency test crates
-//! or `cfg(test)` lib tests.
-#![cfg(test)]
+//! Compiled into the library so integration tests under `tests/` can share
+//! the same guard as `cfg(test)` unit tests. Production code must not mutate
+//! PATH through this module.
 
 use std::ffi::OsString;
 use std::sync::{Mutex, MutexGuard};

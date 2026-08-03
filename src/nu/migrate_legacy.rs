@@ -9,8 +9,8 @@
 //! `numan doctor --fix` reconciles pending journals without invoking
 //! `numan use`.
 //!
-//! Extracted from `nu::version_manager` for the
-//! `pr-migrate-legacy-installs` PR.
+//! Extracted from `nu::version_manager` so the journaled transition stays
+//! separate from active-version selection.
 
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -57,8 +57,12 @@ pub enum MigrateLegacyError {
     #[error("{message}")]
     Detector { message: String },
 
-    #[error("Failed to determine version of legacy Nu binary at '{}': {message}", path.display())]
-    DetectFailed { path: PathBuf, message: String },
+    #[error("Failed to determine version of legacy Nu binary at '{}'", path.display())]
+    DetectFailed {
+        path: PathBuf,
+        #[source]
+        source: Box<MigrateLegacyError>,
+    },
 
     #[error("Failed to read VERSION metadata at '{}'", path.display())]
     ReadVersionFile {
@@ -114,8 +118,12 @@ pub enum MigrateLegacyError {
         source: std::io::Error,
     },
 
-    #[error("Post-create hook blocked migration for '{}': {message}", path.display())]
-    PostCreateHook { path: PathBuf, message: String },
+    #[error("Post-create hook blocked migration for '{}'", path.display())]
+    PostCreateHook {
+        path: PathBuf,
+        #[source]
+        source: Box<MigrateLegacyError>,
+    },
 
     #[error(
         "Failed to move '{}' to '{}' (migration journal at Prepared: a future reconcile will clean up '<{version}>/')",
@@ -329,7 +337,7 @@ pub fn migrate_legacy_install_with_detector(
 
     let version = detect(&legacy_binary).map_err(|e| MigrateLegacyError::DetectFailed {
         path: legacy_binary.clone(),
-        message: e.to_string(),
+        source: Box::new(e),
     })?;
     let version = normalize_version(&version)?;
 
@@ -363,7 +371,7 @@ pub fn migrate_legacy_install_with_detector(
     if let Some(hook) = post_create {
         hook(&version_dir).map_err(|e| MigrateLegacyError::PostCreateHook {
             path: version_dir.clone(),
-            message: e.to_string(),
+            source: Box::new(e),
         })?;
     }
 

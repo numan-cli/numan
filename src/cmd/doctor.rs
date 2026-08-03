@@ -2414,7 +2414,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
         // Pre-stage a half-applied migration: an empty `<version>/`
-        // subdir (the reviewer's original bug state) plus a journal at
+        // subdir left behind by a failed create/rename, plus a journal at
         // `Prepared` recorded by an interrupted `migrate_legacy_install`.
         let tools = root.join("tools").join("nushell");
         std::fs::create_dir_all(&tools).unwrap();
@@ -2645,6 +2645,58 @@ mod tests {
                 r.id == "nu.active_version.repaired" && r.status == RepairStatus::Applied
             }),
             "later active-version repair must still run after skipped migration: {repairs:?}"
+        );
+        assert!(!marker.exists(), "malformed marker must be cleared");
+    }
+
+    #[test]
+    fn doctor_fix_continues_after_unreadable_migration_journal() {
+        // Stale `journal.migration_pending` finding while load returns Err
+        // (parse failure): record Failed and continue to later Auto repairs.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let journal_path = PendingMigration::journal_path(root);
+        std::fs::create_dir_all(journal_path.parent().unwrap()).unwrap();
+        std::fs::write(&journal_path, b"{ not valid json").unwrap();
+        assert!(PendingMigration::load(root).is_err());
+
+        let marker = root.join("nu_state").join("active-version.json");
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, b"{ not valid json").unwrap();
+
+        let findings = vec![
+            Finding {
+                id: "journal.migration_pending".to_string(),
+                severity: Severity::Warn,
+                message: "stale finding while journal is unreadable".to_string(),
+                fix: Some(crate::util::hints::CMD_USE.to_string()),
+                repair: RepairTier::Auto,
+            },
+            Finding {
+                id: "nu.active_version.invalid".to_string(),
+                severity: Severity::Error,
+                message: "malformed marker".to_string(),
+                fix: None,
+                repair: RepairTier::Auto,
+            },
+        ];
+        let args = DoctorArgs {
+            scan: false,
+            json: false,
+            nupm_home: None,
+        };
+        let repairs = apply_repairs(&args, root, &findings, &test_doctor_options()).unwrap();
+        assert!(
+            repairs.iter().any(|r| {
+                r.id == "journal.migration_repaired" && r.status == RepairStatus::Failed
+            }),
+            "unreadable journal must record a Failed migration repair: {repairs:?}"
+        );
+        assert!(
+            repairs.iter().any(|r| {
+                r.id == "nu.active_version.repaired" && r.status == RepairStatus::Applied
+            }),
+            "later active-version repair must still run after Failed migration load: {repairs:?}"
         );
         assert!(!marker.exists(), "malformed marker must be cleared");
     }

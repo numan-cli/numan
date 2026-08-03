@@ -32,12 +32,11 @@ pub const CMD_TRY: &str = "numan try";
 /// `numan setup loader`
 pub const CMD_SETUP_LOADER: &str = "numan setup loader";
 
-/// Quote `s` for a POSIX-ish shell hint.
+/// Quote `s` for a shell hint targeted by [`setup_nu_use_existing`].
 ///
 /// Wraps in single quotes when the value contains whitespace, quotes, or any
-/// shell metacharacter; otherwise returns the string as-is. Keeps Numan fix
-/// hints copy-pasteable when the path they're pointing at contains a space
-/// or is otherwise shell-sensitive.
+/// shell metacharacter; otherwise returns the string as-is. On Windows, uses
+/// PowerShell single-quote escaping (`''`); elsewhere uses POSIX `'\''`.
 pub fn shell_quote(s: &str) -> String {
     let needs_quoting = s.is_empty()
         || s.chars().any(|c| {
@@ -73,7 +72,12 @@ pub fn shell_quote(s: &str) -> String {
     out.push('\'');
     for ch in s.chars() {
         if ch == '\'' {
-            out.push_str("'\\''");
+            if cfg!(windows) {
+                // PowerShell single-quoted string: escape ' as ''.
+                out.push_str("''");
+            } else {
+                out.push_str("'\\''");
+            }
         } else {
             out.push(ch);
         }
@@ -228,6 +232,9 @@ mod tests {
 
     #[test]
     fn shell_quote_escapes_embedded_quotes() {
+        #[cfg(windows)]
+        assert_eq!(shell_quote("it's"), "'it''s'");
+        #[cfg(not(windows))]
         assert_eq!(shell_quote("it's"), "'it'\\''s'");
     }
 
