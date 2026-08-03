@@ -789,20 +789,19 @@ where
 
     let installed = install(root, platform)?;
 
-    // Persist the freshly installed (pinned) version as the active version so
-    // `numan use list` and downstream activation see it as the selected Nu.
-    // `latest` is left to `numan use latest` — the user explicitly resolves the
-    // release tag there.
-    if let Some(version) = &options.version {
-        let pinned = version_manager::normalize_version(version)
-            .with_context(|| format!("Failed to normalize requested version '{}'", version))?;
-        version_manager::write_active_version(root, &pinned).with_context(|| {
-            format!(
-                "Failed to persist installed Nu version '{}' as active",
-                pinned
-            )
-        })?;
-    }
+    // Always mark the version that was actually installed.  For a `latest`
+    // request this avoids leaving a stale marker pointing at an older binary.
+    let installed_version = installed
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow::anyhow!("Installed Nu path has no version directory"))?;
+    version_manager::write_active_version(root, installed_version).with_context(|| {
+        format!(
+            "Failed to persist installed Nu version '{}' as active",
+            installed_version
+        )
+    })?;
 
     // PR69 Srm: with the versioned layout, the binary lives at
     // `<root>/tools/nushell/<version>/<bin>`; prepend its parent directory
