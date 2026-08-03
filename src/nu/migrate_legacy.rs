@@ -513,12 +513,8 @@ mod tests {
         let foreign = version_dir.join("NOTES.txt");
         std::fs::write(&foreign, b"do not clobber").unwrap();
 
-        let err = migrate_legacy_install_with_detector(
-            root,
-            &|_| Ok("0.113.1".to_string()),
-            None,
-        )
-        .unwrap_err();
+        let err = migrate_legacy_install_with_detector(root, &|_| Ok("0.113.1".to_string()), None)
+            .unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("contains files other than the Nu binary"),
