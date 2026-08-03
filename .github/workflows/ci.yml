@@ -69,18 +69,27 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify pinned SHA still resolves to tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tagged_sha=$(curl --fail-with-body --silent --show-error \
-            https://api.github.com/repos/tonythethompson/numan/git/refs/tags/$CONTRACT_TAG \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "User-Agent: numan-ci" \
+            "https://api.github.com/repos/tonythethompson/numan/git/refs/tags/${CONTRACT_TAG}" \
             | python -c "
-import json, sys, urllib.request
+import json, os, sys, urllib.request
 ref = json.load(sys.stdin)
 sha = ref['object']['sha']
 if ref['object']['type'] == 'tag':
-    req = urllib.request.Request(
-        ref['object']['url'],
-        headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'numan-ci'},
-    )
+    headers = {
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'numan-ci',
+    }
+    token = os.environ.get('GITHUB_TOKEN', '')
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+    req = urllib.request.Request(ref['object']['url'], headers=headers)
     tag = json.load(urllib.request.urlopen(req))
     sha = tag['object']['sha']
 print(sha)
