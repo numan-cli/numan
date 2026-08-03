@@ -485,6 +485,21 @@ pub fn register_existing_nu(
         );
     }
 
+    // Fail closed on non-TTY without `--yes` before spawning Nu for version
+    // probing (and before PATH / active-marker mutation). When the caller has
+    // already collected destructive consent, skip this gate — they already
+    // ran `require_tty_or_yes` upstream.
+    if !options.caller_consented_destructive {
+        let is_tty = options
+            .is_tty
+            .unwrap_or_else(|| std::io::stdin().is_terminal());
+        crate::util::confirm::require_tty_or_yes_with_tty(
+            options.yes,
+            "off-path Nu PATH registration",
+            is_tty,
+        )?;
+    }
+
     let probed = validate_nushell_binary(&resolved)
         .with_context(|| format!("'{}' is not a runnable Nushell binary", binary.display()))?;
     // Prefer the probed Nu version; if it is not semver-safe for the marker,
@@ -512,16 +527,6 @@ pub fn register_existing_nu(
         // backward-compatible UX.
         eprintln!("{}", crate::util::confirm::hoisted_audit_message(&parent));
     } else {
-        // Fail closed on non-TTY without `--yes`. `confirm_or_bail` alone
-        // would auto-confirm and mutate PATH / active-version state.
-        let is_tty = options
-            .is_tty
-            .unwrap_or_else(|| std::io::stdin().is_terminal());
-        crate::util::confirm::require_tty_or_yes_with_tty(
-            options.yes,
-            "off-path Nu PATH registration",
-            is_tty,
-        )?;
         println!(
             "This will add '{}' to your user PATH so Nushell can be found.",
             parent.display()
@@ -1179,6 +1184,7 @@ mod tests {
 
     #[test]
     fn execute_nu_setup_already_installed_non_tty_requires_yes() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
         let dir = TempDir::new().unwrap();
         let root = dir.path();
         let platform = Platform::detect();
@@ -1251,29 +1257,15 @@ mod tests {
 
     #[test]
     fn register_existing_nu_refuses_non_tty_without_yes_before_path_mutation() {
-        let nu_name = nu_binary_name();
-        let Some(src) = std::env::var_os("PATH").and_then(|path| {
-            std::env::split_paths(&path)
-                .map(|dir| dir.join(nu_name))
-                .find(|p| p.is_file() && validate_nushell_binary(p).is_ok())
-        }) else {
-            // Unit CI without Nu on PATH cannot exercise the post-validate gate.
-            return;
-        };
-
+        // Use a placeholder file (not a real Nu binary). The non-TTY gate runs
+        // before `validate_nushell_binary`, so this unit test must not spawn Nu.
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
         let dir = TempDir::new().unwrap();
         let root = dir.path();
         let existing_dir = dir.path().join("existing-nu");
         std::fs::create_dir_all(&existing_dir).unwrap();
-        let existing = existing_dir.join(nu_name);
-        std::fs::copy(&src, &existing).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&existing).unwrap().permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&existing, perms).unwrap();
-        }
+        let existing = existing_dir.join(nu_binary_name());
+        std::fs::write(&existing, b"not a real nu binary").unwrap();
 
         let before_path = std::env::var_os("PATH");
         let options = NuSetupOptions {

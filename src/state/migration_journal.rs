@@ -34,8 +34,8 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::nu::version_manager::{
-    read_active_version, version_install_dir, versioned_nu_dir, write_active_version,
-    VersionManagerError,
+    nu_binary_name, read_active_version, version_install_dir, versioned_nu_dir,
+    write_active_version, VersionManagerError,
 };
 use crate::util::atomic::write_json_atomic;
 
@@ -286,8 +286,9 @@ impl PendingMigration {
 /// Takes precedence over the journal stage when there is disagreement —
 /// recovery actions are gated by what's actually on disk.
 fn versioned_binary_present(root: &Path, version: &str) -> bool {
-    let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
-    version_install_dir(root, version).join(bin_name).is_file()
+    version_install_dir(root, version)
+        .join(nu_binary_name())
+        .is_file()
 }
 
 /// Finish a migration whose versioned binary is already in place: adopt the
@@ -302,8 +303,7 @@ fn complete_migration(root: &Path, version: &str) -> Result<(), MigrationJournal
             }
         })?;
     }
-    let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
-    let legacy_binary = versioned_nu_dir(root).join(bin_name);
+    let legacy_binary = versioned_nu_dir(root).join(nu_binary_name());
     if legacy_binary.is_file() {
         if let Err(source) = std::fs::remove_file(&legacy_binary) {
             return Err(MigrationJournalError::LegacyBinaryRemoveFailed {
@@ -416,11 +416,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn bin_name() -> &'static str {
-        if cfg!(windows) {
-            "nu.exe"
-        } else {
-            "nu"
-        }
+        nu_binary_name()
     }
 
     fn write_journal(root: &Path, version: &str, stage: MigrationStage) {
@@ -678,7 +674,7 @@ mod tests {
         );
         assert!(err.contains("0.113.1"), "err must name the version: {err}");
         assert!(
-            err.contains("Discard the journal") || err.contains("discard"),
+            err.contains("Discard the journal file to unblock"),
             "err must guide manual discard: {err}"
         );
         assert!(err.contains("setup nu"), "err must offer reinstall: {err}");

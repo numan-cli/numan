@@ -931,4 +931,29 @@ mod tests {
         let err = result.unwrap_err();
         assert!(err.to_string().contains("numan setup nu"));
     }
+
+    #[test]
+    fn find_nu_executable_with_root_errors_on_malformed_active_marker() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("numan-root");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let marker = crate::nu::version_manager::active_version_path(&root);
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, b"{ not json").unwrap();
+
+        // Even with Nu on PATH, a malformed marker must fail loud — no soft
+        // fallthrough that would hide the torn selection state.
+        let err = find_nu_executable_with_root(&root).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("doctor --fix"),
+            "malformed marker must point at doctor --fix, got: {msg}"
+        );
+        assert!(
+            msg.contains("parse") || msg.contains("malformed") || msg.contains("Malformed"),
+            "malformed marker must describe parse failure, got: {msg}"
+        );
+    }
 }

@@ -85,7 +85,7 @@ pub enum VersionManagerError {
 }
 
 /// Active version marker file location.
-fn active_version_path(root: &Path) -> PathBuf {
+pub(crate) fn active_version_path(root: &Path) -> PathBuf {
     root.join("nu_state").join("active-version.json")
 }
 

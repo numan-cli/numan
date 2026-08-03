@@ -353,7 +353,7 @@ fn check_active_version_marker(root: &Path, findings: &mut Vec<Finding>) {
                 "Active-version marker at '{}' is unreadable: {e}. \
                  Run `{CMD_DOCTOR_FIX}` to clear the stale marker so Nu \
                  resolution can recover without silently falling back to PATH.",
-                root.join("nu_state").join("active-version.json").display()
+                version_manager::active_version_path(root).display()
             ),
             Some(CMD_DOCTOR_FIX),
             RepairTier::Auto,
@@ -1078,7 +1078,19 @@ fn apply_repairs(
     };
 
     let mut lock = if needs_lock {
-        Some(acquire_mutation_lock(root)?)
+        match acquire_mutation_lock(root) {
+            Ok(guard) => Some(guard),
+            // Soft-fail so Auto repairs that re-acquire (migration / active
+            // marker) can still record Failed and continue instead of aborting
+            // the whole repair pass via `?`.
+            Err(e) => {
+                eprintln!(
+                    "warning: doctor could not acquire mutation lock at start; \
+                     continuing with best-effort repairs: {e:#}"
+                );
+                None
+            }
+        }
     } else {
         None
     };
@@ -1448,37 +1460,60 @@ fn apply_repairs(
             Ok(Some(_)) => {
                 // Bind the lock guard so it lives through reconcile (a bare
                 // `acquire_mutation_lock(root)?` drops immediately). Snapshot first.
-                let _lock = acquire_mutation_lock(root)?;
-                if let Err(e) = create_snapshot(
-                    root,
-                    SnapshotReason::PreMutation,
-                    SnapshotTrigger::Doctor,
-                    None,
-                    None,
-                ) {
-                    records.push(RepairRecord {
-                        id,
-                        status: RepairStatus::Failed,
-                        reason: Some(format!("pre-mutation snapshot failed: {e:#}")),
-                    });
-                } else {
-                    match migration_journal::reconcile(root) {
-                        Ok(_) => records.push(RepairRecord {
-                            id,
-                            status: RepairStatus::Applied,
-                            reason: None,
-                        }),
-                        Err(e) => records.push(RepairRecord {
+                // Soft-fail lock contention so later Auto repairs still run.
+                match acquire_mutation_lock(root) {
+                    Err(e) => {
+                        records.push(RepairRecord {
                             id,
                             status: RepairStatus::Failed,
                             reason: Some(e.to_string()),
-                        }),
+                        });
+                    }
+                    Ok(_lock) => {
+                        if let Err(e) = create_snapshot(
+                            root,
+                            SnapshotReason::PreMutation,
+                            SnapshotTrigger::Doctor,
+                            None,
+                            None,
+                        ) {
+                            records.push(RepairRecord {
+                                id,
+                                status: RepairStatus::Failed,
+                                reason: Some(format!("pre-mutation snapshot failed: {e:#}")),
+                            });
+                        } else {
+                            match migration_journal::reconcile(root) {
+                                Ok(_) => records.push(RepairRecord {
+                                    id,
+                                    status: RepairStatus::Applied,
+                                    reason: None,
+                                }),
+                                Err(e) => records.push(RepairRecord {
+                                    id,
+                                    status: RepairStatus::Failed,
+                                    reason: Some(e.to_string()),
+                                }),
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
+    finish_active_version_repair(root, findings, records)
+}
+
+/// Clear a torn / malformed active-version marker (Auto-tier repair).
+///
+/// Extracted so migration lock-contention can soft-fail and still reach this
+/// step without duplicating the clear logic.
+fn finish_active_version_repair(
+    root: &Path,
+    findings: &[Finding],
+    mut records: Vec<RepairRecord>,
+) -> Result<Vec<RepairRecord>> {
     // Clear a torn / malformed active-version marker so subsequent Nu
     // resolution can fall through cleanly instead of failing loud forever.
     //
@@ -1492,24 +1527,36 @@ fn apply_repairs(
         .any(|f| f.id == "nu.active_version.invalid" && f.repair == RepairTier::Auto)
     {
         let id = "nu.active_version.repaired".to_string();
-        let _lock = acquire_mutation_lock(root)?;
-        let marker = root.join("nu_state").join("active-version.json");
-        let backup = root.join("nu_state").join("active-version.json.corrupt");
-        if marker.is_file() {
-            // Best-effort preserve; failure to back up must not block clear.
-            let _ = std::fs::copy(&marker, &backup);
-        }
-        match version_manager::clear_active_version(root) {
-            Ok(_) => records.push(RepairRecord {
-                id,
-                status: RepairStatus::Applied,
-                reason: None,
-            }),
-            Err(e) => records.push(RepairRecord {
-                id,
-                status: RepairStatus::Failed,
-                reason: Some(e.to_string()),
-            }),
+        let _lock = match acquire_mutation_lock(root) {
+            Ok(guard) => Some(guard),
+            Err(e) => {
+                records.push(RepairRecord {
+                    id: id.clone(),
+                    status: RepairStatus::Failed,
+                    reason: Some(e.to_string()),
+                });
+                None
+            }
+        };
+        if _lock.is_some() {
+            let marker = version_manager::active_version_path(root);
+            let backup = marker.with_extension("json.corrupt");
+            if marker.is_file() {
+                // Best-effort preserve; failure to back up must not block clear.
+                let _ = std::fs::copy(&marker, &backup);
+            }
+            match version_manager::clear_active_version(root) {
+                Ok(_) => records.push(RepairRecord {
+                    id,
+                    status: RepairStatus::Applied,
+                    reason: None,
+                }),
+                Err(e) => records.push(RepairRecord {
+                    id,
+                    status: RepairStatus::Failed,
+                    reason: Some(e.to_string()),
+                }),
+            }
         }
     }
 
@@ -2600,6 +2647,68 @@ mod tests {
             "later active-version repair must still run after skipped migration: {repairs:?}"
         );
         assert!(!marker.exists(), "malformed marker must be cleared");
+    }
+
+    #[test]
+    fn apply_repairs_records_lock_failures_without_aborting() {
+        // Hold the mutation lock for the whole apply_repairs call so both the
+        // migration and active-version re-acquires fail. Soft-fail must leave
+        // Failed records for both and still return Ok.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        PendingMigration {
+            schema_version: crate::state::migration_journal::SCHEMA_VERSION,
+            version: "0.113.1".to_string(),
+            stage: crate::state::migration_journal::MigrationStage::Prepared,
+        }
+        .save(root)
+        .unwrap();
+        let marker = version_manager::active_version_path(root);
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, b"{ not valid json").unwrap();
+
+        let findings = vec![
+            Finding {
+                id: "journal.migration_pending".to_string(),
+                severity: Severity::Warn,
+                message: "pending migration".to_string(),
+                fix: Some(crate::util::hints::CMD_USE.to_string()),
+                repair: RepairTier::Auto,
+            },
+            Finding {
+                id: "nu.active_version.invalid".to_string(),
+                severity: Severity::Error,
+                message: "malformed marker".to_string(),
+                fix: None,
+                repair: RepairTier::Auto,
+            },
+        ];
+        let args = DoctorArgs {
+            scan: false,
+            json: false,
+            nupm_home: None,
+        };
+
+        let _held = acquire_mutation_lock(root).unwrap();
+        let repairs = apply_repairs(&args, root, &findings, &test_doctor_options())
+            .expect("lock contention must not abort apply_repairs via ?");
+
+        let migration = repairs
+            .iter()
+            .find(|r| r.id == "journal.migration_repaired")
+            .expect("migration repair record");
+        assert_eq!(migration.status, RepairStatus::Failed, "{migration:?}");
+
+        let active = repairs
+            .iter()
+            .find(|r| r.id == "nu.active_version.repaired")
+            .expect("active-version repair record");
+        assert_eq!(active.status, RepairStatus::Failed, "{active:?}");
+
+        // Marker untouched because clear never ran under a held lock.
+        assert!(marker.is_file());
+        assert!(PendingMigration::load(root).unwrap().is_some());
     }
 
     #[test]

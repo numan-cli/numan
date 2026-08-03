@@ -732,6 +732,43 @@ mod tests {
     }
 
     #[test]
+    fn migrate_legacy_auto_heals_renamed_journal_with_binary_present() {
+        // Renamed journal + versioned binary already on disk: reconcile completes
+        // the active-version write and clears the journal. migrate returns
+        // Ok(false) because no legacy binary remains to migrate.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let bin_name = nu_binary_name();
+        let version_dir = version_install_dir(root, "0.113.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::fs::write(version_dir.join(bin_name), b"fake versioned nu").unwrap();
+        PendingMigration {
+            schema_version: SCHEMA_VERSION,
+            version: "0.113.1".to_string(),
+            stage: MigrationStage::Renamed,
+        }
+        .save(root)
+        .unwrap();
+
+        let migrated = migrate_legacy_install_with_detector(
+            root,
+            &|_| panic!("detector must not run when Renamed reconcile auto-heals"),
+            None,
+        )
+        .unwrap();
+        assert!(
+            !migrated,
+            "auto-heal must not report a fresh migration when only reconcile ran"
+        );
+        let active = read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.113.1");
+        assert!(
+            PendingMigration::load(root).unwrap().is_none(),
+            "auto-heal must clear the Renamed journal"
+        );
+    }
+
+    #[test]
     fn migrate_legacy_classifies_renamed_binary_missing_as_manual_recovery() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
@@ -760,8 +797,8 @@ mod tests {
             other => panic!("expected RenamedBinaryManualRecovery, got {other}"),
         }
         assert!(
-            msg.contains("Discard the journal") || msg.contains("journal"),
-            "diagnostic must mention the journal: {msg}"
+            msg.contains("Discard the journal file to unblock"),
+            "diagnostic must include full discard guidance: {msg}"
         );
         assert!(
             msg.contains("setup nu"),
