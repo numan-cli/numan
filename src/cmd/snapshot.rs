@@ -210,12 +210,12 @@ fn delete_with_tty(root: &Path, id: &str, yes: bool, is_tty: bool) -> Result<()>
     // Refuse unattended (non-TTY) sessions without explicit --yes; interactive
     // sessions keep the confirmation prompt below.
     crate::util::confirm::require_tty_or_yes_with_seam(yes, "snapshot deletion", is_tty)?;
-    let _lock = acquire_mutation_lock(root)?;
     crate::util::confirm::confirm_or_bail(
         &format!("Delete snapshot '{id}'? This cannot be undone."),
         yes,
         "Cancelled.",
     )?;
+    let _lock = acquire_mutation_lock(root)?;
     delete_snapshot(root, id)?;
     println!("{} Deleted snapshot {}", console::style("✓").green(), id);
     Ok(())
@@ -230,7 +230,6 @@ fn rollback_with_tty(root: &Path, id: &str, yes: bool, is_tty: bool) -> Result<(
     // unattended sessions without explicit --yes; interactive sessions keep
     // the confirmation prompt (a pre-rollback snapshot is still taken first).
     crate::util::confirm::require_tty_or_yes_with_seam(yes, "snapshot rollback", is_tty)?;
-    let _lock = acquire_mutation_lock(root)?;
     crate::util::confirm::confirm_or_bail(
         &format!(
             "Roll back Numan-managed state to snapshot '{id}'? \
@@ -239,6 +238,7 @@ fn rollback_with_tty(root: &Path, id: &str, yes: bool, is_tty: bool) -> Result<(
         yes,
         "Cancelled.",
     )?;
+    let _lock = acquire_mutation_lock(root)?;
 
     let nu_paths = NuPaths::load(root)?;
     let runner = NuCandidateRunner::new(&nu_paths.nu_executable);

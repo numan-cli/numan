@@ -37,10 +37,14 @@ fn nu_setup_repair_test(
     let expected = TEST_OFF_PATH.lock().unwrap().clone();
     // The doctor passes the off-path binary via NuSetupArgs::use_existing(),
     // which sets action = Some(NuAction::Use { path, force }) and leaves use_existing unset.
-    let Some(NuAction::Use { path, .. }) = &args.action else {
+    let Some(NuAction::Use { path, force }) = &args.action else {
         panic!("expected NuAction::Use, got {:?}", args.action);
     };
     assert_eq!(Some(path.as_path()), expected.as_ref().map(|p| p.as_path()));
+    assert!(
+        !*force,
+        "doctor found_off_path repair must not pass --force"
+    );
     assert!(
         args.use_existing.is_none(),
         "doctor must not use the deprecated flag"

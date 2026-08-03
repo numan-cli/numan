@@ -1197,20 +1197,31 @@ fn apply_repairs(
                 reason: Some("snapshot_unavailable".to_string()),
             });
         } else if let Some(off_path) = resolve_off_path(options) {
-            let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
-            // Never pass `--yes` here: `setup nu use` may wipe a managed install
-            // and that path is fail-closed without explicit consent / TTY.
-            match setup_fn(&NuSetupArgs::use_existing(off_path, false, false), root) {
-                Ok(()) => records.push(RepairRecord {
+            // Doctor never auto-passes `--force`: wiping a managed install needs
+            // an explicit `numan setup nu use --force`. Skip with a clear reason
+            // instead of recording a Failed repair when the managed tree exists.
+            if crate::nu::bootstrap::managed_nu_dir(root).is_dir() {
+                records.push(RepairRecord {
                     id,
-                    status: RepairStatus::Applied,
-                    reason: None,
-                }),
-                Err(e) => records.push(RepairRecord {
-                    id,
-                    status: RepairStatus::Failed,
-                    reason: Some(e.to_string()),
-                }),
+                    status: RepairStatus::Skipped,
+                    reason: Some("managed_tree_present_requires_force".to_string()),
+                });
+            } else {
+                let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
+                // Never pass `--yes` here: `setup nu use` may wipe a managed install
+                // and that path is fail-closed without explicit consent / TTY.
+                match setup_fn(&NuSetupArgs::use_existing(off_path, false, false), root) {
+                    Ok(()) => records.push(RepairRecord {
+                        id,
+                        status: RepairStatus::Applied,
+                        reason: None,
+                    }),
+                    Err(e) => records.push(RepairRecord {
+                        id,
+                        status: RepairStatus::Failed,
+                        reason: Some(e.to_string()),
+                    }),
+                }
             }
         } else {
             records.push(RepairRecord {
@@ -2401,6 +2412,68 @@ mod tests {
         assert!(
             PendingMigration::load(root).unwrap().is_none(),
             "journal must be cleared by reconcile"
+        );
+    }
+
+    #[test]
+    fn doctor_skips_off_path_repair_when_managed_tree_present() {
+        use std::sync::Mutex;
+        static OFF: Mutex<Option<PathBuf>> = Mutex::new(None);
+        static CALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+        fn discover() -> Option<PathBuf> {
+            OFF.lock().ok()?.clone()
+        }
+        fn setup_must_not_run(_: &NuSetupArgs, _: &Path) -> Result<()> {
+            CALLED.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(crate::nu::bootstrap::managed_nu_dir(root)).unwrap();
+        let off_path = root.join("off-path-nu");
+        std::fs::write(&off_path, b"fake").unwrap();
+        *OFF.lock().unwrap() = Some(off_path);
+        CALLED.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        let findings = vec![Finding {
+            id: "nu.binary.found_off_path".to_string(),
+            severity: Severity::Warn,
+            message: "off path".to_string(),
+            fix: None,
+            repair: RepairTier::Confirm,
+        }];
+        let args = DoctorArgs {
+            scan: false,
+            json: false,
+            nupm_home: None,
+        };
+        let repairs = apply_repairs(
+            &args,
+            root,
+            &findings,
+            &DoctorOptions {
+                skip_network: true,
+                discover_off_path: Some(discover),
+                nu_setup_repair: Some(setup_must_not_run),
+                ..test_doctor_options()
+            },
+        )
+        .unwrap();
+
+        assert!(
+            !CALLED.load(std::sync::atomic::Ordering::SeqCst),
+            "setup repair must not run when managed tree exists"
+        );
+        let record = repairs
+            .iter()
+            .find(|r| r.id == "nu.binary.found_off_path")
+            .expect("off-path repair record");
+        assert_eq!(record.status, RepairStatus::Skipped);
+        assert_eq!(
+            record.reason.as_deref(),
+            Some("managed_tree_present_requires_force")
         );
     }
 

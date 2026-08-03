@@ -591,7 +591,8 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
     Ok(())
 }
 
-/// Silently remove the managed Nu directory if it exists (used by --use-existing).
+/// Silently remove the managed Nu directory if it exists (used by
+/// `setup nu path` / `setup nu use <path>` when replacing a managed tree).
 fn remove_managed_nu_if_present(root: &Path) -> Result<()> {
     let managed_dir = bootstrap::managed_nu_dir(root);
     // Clear the marker immediately before deleting the managed tree (confirm was
@@ -612,7 +613,7 @@ fn remove_managed_nu_if_present(root: &Path) -> Result<()> {
             )
         })?;
         println!(
-            "Removed managed Nushell at '{}' (replaced by --use-existing).",
+            "Removed managed Nushell at '{}' (replaced by registered off-path Nu).",
             managed_dir.display()
         );
     }
@@ -925,6 +926,25 @@ mod tests {
     }
 
     #[test]
+    fn remove_managed_nu_clears_stale_marker_when_tree_absent() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        version_manager::write_active_version(&root, "0.113.1").unwrap();
+        assert!(version_manager::read_active_version(&root)
+            .unwrap()
+            .is_some());
+
+        remove_managed_nu(&root, true).unwrap();
+
+        assert!(
+            version_manager::read_active_version(&root)
+                .unwrap()
+                .is_none(),
+            "absent managed tree must clear a stale on-tree active marker"
+        );
+    }
+
+    #[test]
     fn remove_managed_nu_if_present_clears_directory() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("numan-root");
@@ -934,6 +954,26 @@ mod tests {
 
         remove_managed_nu_if_present(&root).unwrap();
         assert!(!managed_dir.exists());
+    }
+
+    #[test]
+    fn remove_managed_nu_if_present_preserves_off_tree_marker_when_absent() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        let off_tree = dir.path().join("external-nu");
+        std::fs::write(&off_tree, b"fake").unwrap();
+        version_manager::write_active_version_with_binary(&root, "0.113.1", &off_tree).unwrap();
+
+        remove_managed_nu_if_present(&root).unwrap();
+
+        let active = version_manager::read_active_version(&root)
+            .unwrap()
+            .expect("off-tree selection must survive a no-op managed removal");
+        assert_eq!(active.version, "0.113.1");
+        assert_eq!(
+            active.binary_path.as_deref(),
+            Some(off_tree.to_string_lossy().as_ref())
+        );
     }
 
     #[test]

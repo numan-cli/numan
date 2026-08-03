@@ -370,9 +370,7 @@ fn setup_nu_use_existing_refuses_when_managed_tree_present_without_force() {
     // Keep PATH reads consistent with sibling ignored tests that mutate PATH.
     let _path_guard = PathRestoreGuard::new();
 
-    let Some(nu_source) = runnable_nu_on_path() else {
-        return;
-    };
+    let nu_source = runnable_nu_on_path().expect("ignored test requires Nu on PATH");
     let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
 
     let dir = tempfile::tempdir().unwrap();
@@ -432,9 +430,7 @@ fn setup_nu_use_existing_force_drops_managed_tree() {
     // Serialize PATH mutation with sibling ignored tests in this binary.
     let _path_guard = PathRestoreGuard::new();
 
-    let Some(nu_source) = runnable_nu_on_path() else {
-        return;
-    };
+    let nu_source = runnable_nu_on_path().expect("ignored test requires Nu on PATH");
     let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
 
     let dir = tempfile::tempdir().unwrap();

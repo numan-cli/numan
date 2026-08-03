@@ -267,11 +267,44 @@ mod tests {
 
         assert!(
             list_snapshots(root).unwrap().is_empty(),
-            "`numan use list` is read-only and must not create a snapshot"
+            "`numan use list` must not create a PreMutation snapshot"
         );
-        // Active selection unchanged (no mutation / no rollback side effects).
+        // Active selection unchanged (list may migrate legacy layout but must
+        // not flip the active-version marker when one already exists).
         let active = version_manager::read_active_version(root).unwrap().unwrap();
         assert_eq!(active.version, "0.113.1");
+    }
+
+    #[test]
+    fn test_use_list_migrates_legacy_without_snapshot() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let tools = version_manager::versioned_nu_dir(root);
+        std::fs::create_dir_all(&tools).unwrap();
+        let bin = if cfg!(windows) { "nu.exe" } else { "nu" };
+        std::fs::write(tools.join(bin), b"legacy").unwrap();
+        std::fs::write(tools.join("VERSION"), "0.113.1\n").unwrap();
+
+        execute(
+            &UseArgs {
+                version: "list".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        assert!(
+            list_snapshots(root).unwrap().is_empty(),
+            "list must not create a PreMutation snapshot even when it migrates"
+        );
+        assert!(
+            !tools.join(bin).is_file(),
+            "list must migrate the flat legacy binary into the versioned layout"
+        );
+        assert!(
+            version_manager::version_binary(root, "0.113.1").is_file(),
+            "migrated binary must land under tools/nushell/<version>/"
+        );
     }
 
     #[test]
