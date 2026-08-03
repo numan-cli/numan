@@ -320,9 +320,18 @@ pub fn load_snapshot(root: &Path, id: &str) -> Result<Snapshot> {
     };
 
     // Legacy snapshots omit the paths digest; treat them as NotCaptured (`None`)
-    // so rollback leaves the live Nu path cache alone.
+    // so rollback leaves the live Nu path cache alone. When a digest is present,
+    // the paths.json sidecar is required; do not silently degrade to legacy.
     let paths = if let Some(expected) = manifest.sidecar_digests.paths_sha256.as_deref() {
         let paths_path = dir.join("paths.json");
+        if !paths_path.exists() {
+            bail!(
+                "Snapshot '{}' declares a paths sidecar digest but paths.json is missing. \
+                 Refuse to load an incomplete snapshot; re-create the snapshot or restore \
+                 the sidecar file.",
+                id
+            );
+        }
         let paths: SnapshotPaths = read_json(&paths_path)?;
         verify_digest(&paths, expected, "paths")?;
         Some(paths)
@@ -1001,6 +1010,57 @@ mod tests {
         );
         let loaded = load_snapshot(root, &manifest.id).unwrap();
         assert!(matches!(loaded.paths, Some(SnapshotPaths::Absent)));
+    }
+
+    #[test]
+    fn create_snapshot_fails_when_existing_paths_json_is_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        std::fs::create_dir_all(root.join("nu_state")).unwrap();
+        // Present but unreadable as NuPaths: must not be recorded as Absent.
+        std::fs::write(root.join("nu_state/paths.json"), "{ not-json").unwrap();
+
+        let err = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Install,
+            None,
+            None,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Failed to load paths sidecar") || msg.contains("paths"),
+            "expected paths load failure, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn load_snapshot_rejects_missing_paths_sidecar_when_digest_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+
+        let manifest = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Install,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(manifest.sidecar_digests.paths_sha256.is_some());
+
+        let snap_dir = root.join(format!("state/snapshots/{}", manifest.id));
+        std::fs::remove_file(snap_dir.join("paths.json")).unwrap();
+
+        let err = load_snapshot(root, &manifest.id).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("incomplete snapshot") || msg.contains("paths.json is missing"),
+            "expected missing sidecar rejection, got: {msg}"
+        );
     }
 
     #[test]
