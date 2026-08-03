@@ -200,7 +200,6 @@ where
         )?;
     }
 
-    let mut lockfile = lockfile;
     refresh_activation_records(&mut lockfile, &new_paths)?;
     lockfile.nu_version = new_paths.nu_version.clone();
     lockfile.platform = new_paths.platform.clone();
