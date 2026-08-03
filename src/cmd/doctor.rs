@@ -29,6 +29,7 @@ use crate::state::lifecycle_journal::PendingLifecycle;
 use crate::state::lockfile::Lockfile;
 use crate::state::nupm_import::NupmImportsFile;
 use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
+use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::fs_safety::{acquire_mutation_lock, assert_managed_file_owned};
 use crate::util::hints::{
     self, active_plugin_mutation_gated_doctor_message, registry_none_fix, setup_nu_use_existing,
@@ -1019,6 +1020,17 @@ fn apply_repairs(
     } else {
         None
     };
+
+    if needs_lock {
+        create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Doctor,
+            None,
+            None,
+        )
+        .context("Failed to create doctor pre-mutation snapshot")?;
+    }
 
     let mut records = Vec::new();
     let confirm = match options.confirm_repairs {
@@ -2237,56 +2249,100 @@ mod tests {
         assert!(json.contains("registry.trust_root"));
     }
 
-    fn test_noop_setup_repair(_args: &NuSetupArgs, _root: &Path) -> Result<()> {
-        // No-op for testing: should not be called when repair is skipped.
-        panic!("setup repair should not be called when confirm_repairs returns false");
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static SETUP_REPAIR_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    fn counting_setup_repair(_args: &NuSetupArgs, _root: &Path) -> Result<()> {
+        SETUP_REPAIR_CALLS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 
     #[test]
     fn doctor_found_off_path_repair_preserves_managed_install_when_not_confirmed() {
-        // Regression test: found_off_path repair should not destroy an existing
-        // managed installation when confirm-tier repairs are skipped.
-        let _guard = TEST_PATH_GUARD.lock().unwrap();
+        // Regression: when confirm-tier is closed, found_off_path must be Skipped
+        // without dispatching setup (which could wipe a managed Nu tree).
+        let _path_guard = TEST_PATH_GUARD.lock().unwrap();
         let dir = TempDir::new().unwrap();
         let root = dir.path();
 
-        // Set up a managed Nu installation.
-        let managed_binary = ensure_fake_managed_nu(root);
-        assert!(managed_binary.exists(), "managed binary should exist");
+        // Clear PATH so managed/off-PATH discovery controls availability.
+        let _path_restore = PathRestoreGuard::new();
+        std::env::set_var("PATH", "");
 
-        // Set up an off-path Nu binary for the discover seam (fn pointer, no captures).
-        let off_path_dir = dir.path().join("external_nu");
+        let off_path_dir = root.join("external_nu");
         std::fs::create_dir_all(&off_path_dir).unwrap();
         let off_path_binary = off_path_dir.join("nu");
         std::fs::write(&off_path_binary, b"external nu").unwrap();
         *TEST_OFF_PATH.lock().unwrap() = Some(off_path_binary);
 
-        // Force the confirm-tier gate closed so this test is deterministic even
-        // when cargo test has a TTY attached locally.
         let args = DoctorArgs {
             scan: false,
             json: false,
             nupm_home: None,
         };
+        let options = DoctorOptions {
+            skip_network: true,
+            nu_version_probe: Some(probe_fixed_version),
+            discover_off_path: Some(discover_off_path_test),
+            nu_setup_repair: Some(counting_setup_repair),
+            confirm_repairs: Some(confirm_repairs_never),
+            // Avoid init creating a managed Nu mid-pass before we seed one.
+            init_repair: Some(|_, _| Ok(())),
+            ..DoctorOptions::default()
+        };
+
+        SETUP_REPAIR_CALLS.store(0, Ordering::SeqCst);
+        // No managed binary yet: otherwise nu_is_available suppresses found_off_path.
+        let report = run_checks_with_options(&args, root, &options).expect("doctor checks");
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "nu.binary.found_off_path" && f.severity == Severity::Warn),
+            "expected found_off_path finding before repair"
+        );
+
+        // Seed managed Nu after findings so a mistaken setup dispatch would wipe it.
+        let managed_binary = ensure_fake_managed_nu(root);
+        assert!(managed_binary.exists(), "managed binary should exist");
+
+        let repairs =
+            apply_repairs(&args, root, &report.findings, &options).expect("apply_repairs");
+        let off_path_repair = repairs
+            .iter()
+            .find(|r| r.id == "nu.binary.found_off_path")
+            .expect("nu.binary.found_off_path repair record");
+        assert_eq!(off_path_repair.status, RepairStatus::Skipped);
+        assert_eq!(
+            off_path_repair.reason.as_deref(),
+            Some("not_confirmed"),
+            "confirm gate closed must record not_confirmed"
+        );
+        assert_eq!(
+            SETUP_REPAIR_CALLS.load(Ordering::SeqCst),
+            0,
+            "setup repair must not be dispatched when confirm-tier is skipped"
+        );
 
         let options = DoctorOptions {
             skip_network: true,
             nu_version_probe: Some(probe_fixed_version),
             discover_off_path: Some(discover_off_path_test),
-            nu_setup_repair: Some(test_noop_setup_repair),
+            nu_setup_repair: Some(counting_setup_repair),
             confirm_repairs: Some(confirm_repairs_never),
+            init_repair: Some(|_, _| Ok(())),
             ..DoctorOptions::default()
         };
+        execute_with_options(&args, root, options)
+            .expect("execute_with_options must succeed when confirm-tier is skipped");
+        assert_eq!(
+            SETUP_REPAIR_CALLS.load(Ordering::SeqCst),
+            0,
+            "execute_with_options must not dispatch setup when confirm-tier is skipped"
+        );
 
-        // confirm_repairs_never skips confirm-tier; test_noop_setup_repair must
-        // not panic.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            execute_with_options(&args, root, options).ok();
-        }));
         *TEST_OFF_PATH.lock().unwrap() = None;
-        result.expect("doctor repair must not call setup when confirm_repairs is false");
-
-        // Verify the managed installation was NOT removed.
         assert!(
             managed_binary.exists(),
             "managed installation should be preserved when confirm-tier repair is skipped"

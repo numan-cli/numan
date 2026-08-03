@@ -152,7 +152,7 @@ tests/
 4. **Lockfile pins immutable paths** — cached artifacts retained while referenced
 5. **Registry trust** — Ed25519 signatures over exact `index.json` bytes; bypass requires `NUMAN_ALLOW_UNSIGNED=1` (dev only)
 6. **Artifact SHA256 is mandatory for plugins** — the install transaction bails if `sha256` is missing from a binary artifact
-7. **State snapshots before mutation** — `create_snapshot()` before `install`/`update`/`remove`/`activate`/`deactivate`/nupm-import mutations; `numan gc` treats every snapshot's referenced payloads as live roots
+7. **State snapshots before mutation** — `create_snapshot()` before `install`/`update`/`remove`/`activate`/`deactivate`/`init --refresh`/nupm-import/doctor repair mutations; `numan gc` treats every snapshot's referenced payloads as live roots
 8. **Platform triple** — comes from `#[cfg(target_env)]` at compile time, not `std::env::consts` (see `core/platform.rs`; `LIBC` is a compile-time const)
 
 ## Development Workflow
