@@ -34,8 +34,8 @@ use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::fs_safety::{acquire_mutation_lock, assert_managed_file_owned};
 use crate::util::hints::{
     self, active_plugin_mutation_gated_doctor_message, registry_none_fix, setup_nu_use_existing,
-    ACTIVE_PLUGIN_MUTATION_GATED_FIX, CMD_ACTIVATE, CMD_DEACTIVATE, CMD_INIT, CMD_INIT_REFRESH,
-    CMD_REGISTRY_SYNC, CMD_SETUP_NU,
+    ACTIVE_PLUGIN_MUTATION_GATED_FIX, CMD_ACTIVATE, CMD_DEACTIVATE, CMD_DOCTOR_FIX, CMD_INIT,
+    CMD_INIT_REFRESH, CMD_REGISTRY_SYNC, CMD_SETUP_NU,
 };
 use crate::util::stdio_redirect::StdoutToStderr;
 
@@ -346,7 +346,7 @@ fn check_active_version_marker(root: &Path, findings: &mut Vec<Finding>) {
             "nu.active_version.malformed",
             Severity::Error,
             e.to_string(),
-            Some("numan doctor"),
+            Some(CMD_DOCTOR_FIX),
             RepairTier::Auto,
         )),
     }

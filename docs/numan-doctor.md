@@ -34,9 +34,10 @@ numan doctor [--scan] [--json] [--nupm-home PATH]
 Global `--root` applies as for all commands.
 
 **Default (no flags):** diagnose and apply available repairs, then print findings.
-Confirm-tier repairs run only when stdin is a TTY (allow-gate, not a prompt);
-non-interactive sessions skip them as `not_confirmed`. Nested `setup nu`
-repairs may still prompt when allowed.
+Confirm-tier repairs are applied automatically in default mode (no TTY gate,
+no `not_confirmed` outcome). Nested `setup nu use` for
+`nu.binary.found_off_path` still requires explicit consent (`--yes` / TTY)
+and is never auto-approved by doctor.
 **`--scan`:** diagnose and print findings without mutating state.
 
 ## Exit codes

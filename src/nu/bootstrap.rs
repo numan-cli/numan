@@ -21,6 +21,19 @@ const RELEASES_LATEST: &str = "https://api.github.com/repos/nushell/nushell/rele
 const RELEASES_TAGS_BASE: &str = "https://api.github.com/repos/nushell/nushell/releases/tags/";
 const USER_AGENT: &str = "numan-cli (https://github.com/tonythethompson/numan)";
 
+/// Snapshot established Numan state before a `setup nu` install/PATH mutation.
+fn snapshot_before_nu_setup(root: &Path, context: &'static str) -> Result<()> {
+    create_snapshot(
+        root,
+        SnapshotReason::PreMutation,
+        SnapshotTrigger::Install,
+        None,
+        None,
+    )
+    .context(context)?;
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
     tag_name: String,
@@ -718,14 +731,10 @@ where
         if !options.force {
             if options.yes {
                 // PATH persistence mutates user shell state; snapshot first.
-                create_snapshot(
+                snapshot_before_nu_setup(
                     root,
-                    SnapshotReason::PreMutation,
-                    SnapshotTrigger::Install,
-                    None,
-                    None,
-                )
-                .context("Failed to create pre-mutation snapshot for existing `numan setup nu`")?;
+                    "Failed to create pre-mutation snapshot for existing `numan setup nu`",
+                )?;
                 if let Some(parent) = dest.parent() {
                     prepend_process_path(parent)?;
                 }
@@ -765,14 +774,10 @@ where
     // Snapshot established state right before the download/install mutates the
     // filesystem. Same lifecycle boundary used by install/update/remove/activate
     // per AGENTS.md.
-    create_snapshot(
+    snapshot_before_nu_setup(
         root,
-        SnapshotReason::PreMutation,
-        SnapshotTrigger::Install,
-        None,
-        None,
-    )
-    .with_context(|| "Failed to create pre-install snapshot for `numan setup nu`")?;
+        "Failed to create pre-install snapshot for `numan setup nu`",
+    )?;
 
     let installed = install(root, platform)?;
 
