@@ -8,6 +8,7 @@ use crate::nu::autoload::{validate_candidate, CandidateRunner, NuCandidateRunner
 use crate::nu::paths::NuPaths;
 use crate::state::autoload_state::AutoloadState;
 use crate::state::lockfile::Lockfile;
+use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::format_timestamp;
 use crate::util::fs_safety::acquire_mutation_lock;
 use crate::util::fs_safety::assert_managed_file_owned;
@@ -192,6 +193,17 @@ where
             runner_factory,
         )?;
     }
+
+    // Capture pre-refresh state (including paths.json) before any mutation so
+    // rollback can restore the prior Nu path cache even with an empty lockfile.
+    create_snapshot(
+        root,
+        SnapshotReason::PreMutation,
+        SnapshotTrigger::Init,
+        None,
+        None,
+    )
+    .context("Failed to create pre-refresh snapshot for `numan init --refresh`")?;
 
     let mut lockfile = lockfile;
     refresh_activation_records(&mut lockfile, &new_paths)?;
@@ -442,11 +454,14 @@ mod tests {
         paths_v1.save(root).unwrap();
 
         let hash_v1 = paths_v1.nu_executable_hash.clone();
+        let payload_rel = "packages/plugins/owner/plugin/1.0.0-abc";
+        std::fs::create_dir_all(root.join(payload_rel)).unwrap();
+        std::fs::write(root.join(payload_rel).join("nu_plugin_test"), b"bin").unwrap();
         let mut lockfile = Lockfile::empty();
         lockfile.packages.insert(
             "owner/plugin".to_string(),
             plugin_entry(
-                "packages/plugins/owner/plugin/1.0.0-abc",
+                payload_rel,
                 Some(PluginActivation {
                     plugin_registry_path: paths_v1.plugin_registry_path.clone(),
                     nu_executable_sha256: hash_v1,

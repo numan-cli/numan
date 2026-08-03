@@ -7,11 +7,11 @@
 
 A snapshot captures the complete Numan-owned activation graph at a point in
 time: the lockfile, the managed module-autoload file (`numan.nu`) content and
-its derived active-module-ID projection, and nupm-import provenance. Rollback
-restores that exact graph. This answers *"how do I get back to a known-good
-state after a bad update, interrupted change, or incompatible package
-revision?"* without re-solving against a registry or guessing at a substitute
-version.
+its derived active-module-ID projection, nupm-import provenance, and the Nu
+path cache (`nu_state/paths.json`). Rollback restores that exact graph. This
+answers *"how do I get back to a known-good state after a bad update,
+interrupted change, or incompatible package revision?"* without re-solving
+against a registry or guessing at a substitute version.
 
 ## Scope — what a snapshot captures
 
@@ -21,11 +21,19 @@ version.
   vendor-autoload target was configured at snapshot time.
 - The autoload-state projection (`nu_state/autoload-state.json`), if present.
 - The nupm-import provenance sidecar (`state/nupm-imports.json`), if present.
+- The Nu path cache (`nu_state/paths.json`): executable path, hash, version,
+  vendor-autoload dirs, and plugin registry path. New snapshots always record
+  either a full cache or an explicit `Absent` marker when the root was
+  uninitialized. Legacy snapshots that predate this sidecar leave the live
+  cache untouched on rollback.
 - A computed revision hash for every payload directory referenced by the
   lockfile, so a rollback can detect a payload that has gone missing or been
   modified since the snapshot was taken.
-- The Nu identity (executable SHA-256, version) and platform triple recorded
-  at snapshot time, when a managed autoload file was captured.
+- The Nu identity (executable SHA-256, version) recorded at snapshot time
+  when paths were available. This remains a convenience field for display and
+  the managed-autoload Nu-identity precondition; the paths sidecar is
+  authoritative for cache restore.
+- The platform triple recorded at snapshot time.
 
 ## Scope — what a snapshot does **not** capture
 
@@ -35,17 +43,23 @@ version.
   revision hash and lets rollback verify it against the existing directory.
 - Plugin registration state inside Nu's own `plugin.msgpackz` (Numan does not
   touch Nu's plugin registry directly — see `numan activate`'s design).
+- Nu binaries themselves, shell `PATH`, or which Nu process is currently
+  running. Restoring `paths.json` rewrites Numan's cache only.
 - Any file outside Numan's ownership, including user shell configuration,
   `env.nu`/`config.nu`, or unmanaged autoload entries.
 - Full filesystem state. This is not a system snapshot/checkpoint feature.
 
+Absolute paths inside the paths and autoload sidecars are root-specific (same
+limitation as managed autoload content today).
+
 ## Storage cost
 
 Snapshots are cheap: they store JSON metadata and small sidecar files
-(lockfile, autoload content, imports), not payload copies. Storage under
+(lockfile, autoload content, imports, paths), not payload copies. Storage under
 `<root>/state/snapshots/<uuid-v7>/` grows roughly linearly with the number of
 snapshot-triggering operations (`install`, `update`, `remove`, `activate`,
-`deactivate`, nupm imports, and rollback itself), not with payload size.
+`deactivate`, `init --refresh`, nupm imports, and rollback itself), not with
+payload size.
 
 A snapshot does, however, keep any payload directory it references alive:
 `numan gc` treats every committed snapshot's lockfile as a live root, so an
@@ -102,7 +116,12 @@ Rollback refuses rather than approximates when:
 - **Nu identity has changed** (for snapshots that captured a managed autoload
   file). Restoring content generated for a different Nu binary would produce
   an activation graph that was never validated against the Nu now in use;
-  rollback asks the user to re-activate under the current Nu instead.
+  rollback asks the user to re-activate under the current Nu instead. This
+  check uses the **live** path cache before paths restore runs, so
+  refresh-then-rollback with a Present managed autoload still refuses when the
+  post-refresh Nu identity differs. Paths restore alone (empty lockfile / no
+  Present autoload) does not require this match and works with no active
+  packages.
 - **A different lifecycle operation is mid-flight.** An interrupted
   `update`/`remove`/nupm-import journal must be resolved first. An
   interrupted rollback *to the same snapshot* is safe to resume — rollback
@@ -118,6 +137,12 @@ syntax-validated with the current Nu binary (`nu -n <candidate>`), matching
 the same validation Numan uses for `activate`/`deactivate`. Commits are
 journaled through dedicated `PendingLifecycle` rollback stages so a crash
 mid-rollback is recoverable by re-running `numan snapshot rollback <id>`.
+
+Restore order (each step is a journaled commit): lockfile → managed autoload
+file → autoload-state projection → nupm-imports sidecar → Nu path cache.
+Paths restore runs even when the lockfile is empty and there are no
+activations; that is the `init --refresh` then rollback gap this design
+closes. Legacy snapshots without a paths sidecar skip the final step.
 
 ## Limitations
 

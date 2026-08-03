@@ -80,8 +80,8 @@ src/
     autoload_recovery.rs — Command-independent PendingAutoload reconciliation into lockfile + derived autoload state
     autoload_state.rs  — Derived autoload-state projection (NOT authoritative; lockfile is ground truth) (Phase 4)
     lifecycle_journal.rs — pending-lifecycle.json for update/remove/nupm_import crash recovery (Phase 5–6)
-    snapshot.rs        — Immutable activation snapshots (`create_snapshot`, `list_snapshots`, etc.)
-    rollback.rs        — Journaled restore of Numan-owned state to a snapshot
+    snapshot.rs        — Immutable activation snapshots (`create_snapshot`, `list_snapshots`, etc.); captures lockfile, autoload, imports, and `nu_state/paths.json` (Absent when uninitialized)
+    rollback.rs        — Journaled restore of Numan-owned state to a snapshot (including paths cache; legacy snapshots without paths sidecar leave live paths untouched)
     nupm_import.rs     — nupm-import provenance (`state/nupm-imports.json`, Phase 6.2)
   nu/
     bootstrap.rs        — download/install official Nushell release under tools/nushell
@@ -152,7 +152,7 @@ tests/
 4. **Lockfile pins immutable paths** — cached artifacts retained while referenced
 5. **Registry trust** — Ed25519 signatures over exact `index.json` bytes; bypass requires `NUMAN_ALLOW_UNSIGNED=1` (dev only)
 6. **Artifact SHA256 is mandatory for plugins** — the install transaction bails if `sha256` is missing from a binary artifact
-7. **State snapshots before mutation** — `create_snapshot()` before `install`/`update`/`remove`/`activate`/`deactivate`/nupm-import mutations; `numan gc` treats every snapshot's referenced payloads as live roots
+7. **State snapshots before mutation** — `create_snapshot()` before `install`/`update`/`remove`/`activate`/`deactivate`/nupm-import/`init --refresh` mutations; every snapshot captures `nu_state/paths.json` when present (or records Absent); `numan gc` treats every snapshot's referenced payloads as live roots
 8. **Platform triple** — comes from `#[cfg(target_env)]` at compile time, not `std::env::consts` (see `core/platform.rs`; `LIBC` is a compile-time const)
 
 ## Development Workflow

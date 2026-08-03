@@ -107,6 +107,9 @@ fn inspect(root: &Path, id: &str) -> Result<()> {
     if let Some(h) = &m.sidecar_digests.imports_sha256 {
         println!("  imports:  {}", short_hash(h));
     }
+    if let Some(h) = &m.sidecar_digests.paths_sha256 {
+        println!("  paths:    {}", short_hash(h));
+    }
 
     println!(
         "\nPayload provenance ({} package(s)):",
@@ -155,6 +158,24 @@ fn inspect(root: &Path, id: &str) -> Result<()> {
                 "  {}  from {} (trust: {})",
                 pkg, rec.nupm_source_path, rec.trust_level
             );
+        }
+    }
+
+    match &snapshot.paths {
+        Some(crate::state::snapshot::SnapshotPaths::Present(p)) => {
+            println!(
+                "\nNu path cache: {} (executable sha256 {})",
+                p.nu_version,
+                short_hash(&p.nu_executable_hash)
+            );
+            println!("  executable: {}", p.nu_executable);
+            println!("  plugin registry: {}", p.plugin_registry_path);
+        }
+        Some(crate::state::snapshot::SnapshotPaths::Absent) => {
+            println!("\nNu path cache: absent at snapshot time");
+        }
+        None => {
+            println!("\nNu path cache: not captured (legacy snapshot)");
         }
     }
 
