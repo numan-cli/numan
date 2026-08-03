@@ -223,7 +223,7 @@ pub fn create_snapshot(
     let nu_identity = load_nu_identity(root).ok();
     let autoload = capture_autoload(root, &nu_identity)?;
     let imports = load_imports_sidecar(root);
-    let paths = capture_paths_sidecar(root);
+    let paths = capture_paths_sidecar(root)?;
     let payload_revisions = compute_payload_revisions(root, &lockfile)?;
 
     let sidecar_digests = SidecarDigests {
@@ -319,14 +319,12 @@ pub fn load_snapshot(root: &Path, id: &str) -> Result<Snapshot> {
         None
     };
 
-    // Legacy snapshots omit paths.json; treat as NotCaptured (`None`) so
-    // rollback leaves the live Nu path cache alone.
-    let paths_path = dir.join("paths.json");
-    let paths = if paths_path.exists() {
+    // Legacy snapshots omit the paths digest; treat them as NotCaptured (`None`)
+    // so rollback leaves the live Nu path cache alone.
+    let paths = if let Some(expected) = manifest.sidecar_digests.paths_sha256.as_deref() {
+        let paths_path = dir.join("paths.json");
         let paths: SnapshotPaths = read_json(&paths_path)?;
-        if let Some(expected) = manifest.sidecar_digests.paths_sha256.as_deref() {
-            verify_digest(&paths, expected, "paths")?;
-        }
+        verify_digest(&paths, expected, "paths")?;
         Some(paths)
     } else {
         None
@@ -621,11 +619,19 @@ fn load_imports_sidecar(root: &Path) -> Option<NupmImportsFile> {
     NupmImportsFile::load(root).ok()
 }
 
-fn capture_paths_sidecar(root: &Path) -> SnapshotPaths {
-    match NuPaths::load(root) {
-        Ok(paths) => SnapshotPaths::Present(paths),
-        Err(_) => SnapshotPaths::Absent,
+fn capture_paths_sidecar(root: &Path) -> Result<SnapshotPaths> {
+    let paths_path = root.join("nu_state/paths.json");
+    if !paths_path.exists() {
+        return Ok(SnapshotPaths::Absent);
     }
+
+    let paths = NuPaths::load(root).with_context(|| {
+        format!(
+            "Failed to load paths sidecar '{}'; refusing to create snapshot",
+            paths_path.display()
+        )
+    })?;
+    Ok(SnapshotPaths::Present(paths))
 }
 
 fn compute_payload_revisions(root: &Path, lockfile: &Lockfile) -> Result<BTreeMap<String, String>> {
