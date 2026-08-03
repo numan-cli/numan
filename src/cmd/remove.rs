@@ -36,7 +36,10 @@ fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> 
     // automation has to opt in; interactive sessions keep the existing flow.
     crate::util::confirm::require_tty_or_yes_with_seam(args.yes, "package removal", is_tty)?;
     crate::util::confirm::confirm_or_bail(
-        &format!("Remove package '{}' ? This deletes its payload.", args.package),
+        &format!(
+            "Remove package '{}' ? This deletes its payload.",
+            args.package
+        ),
         args.yes,
         "Cancelled.",
     )?;
