@@ -170,8 +170,9 @@ where
     let new_paths = detect()?;
 
     // Always serialize refresh writes (lockfile, autoload-state, paths), even
-    // when no packages are active. Skipping the lock left a race window against
-    // concurrent mutators.
+    // when no packages are active. The snapshot below captures all pre-refresh
+    // state before any of those files are mutated. Skipping the lock left a
+    // race window against concurrent mutators.
     let _lock = acquire_mutation_lock(root)?;
     create_snapshot(
         root,
@@ -198,17 +199,6 @@ where
             runner_factory,
         )?;
     }
-
-    // Capture pre-refresh state (including paths.json) before any mutation so
-    // rollback can restore the prior Nu path cache even with an empty lockfile.
-    create_snapshot(
-        root,
-        SnapshotReason::PreMutation,
-        SnapshotTrigger::Init,
-        None,
-        None,
-    )
-    .context("Failed to create pre-refresh snapshot for `numan init --refresh`")?;
 
     let mut lockfile = lockfile;
     refresh_activation_records(&mut lockfile, &new_paths)?;
