@@ -54,7 +54,7 @@ src/
     registry.rs        — Registry management subcommands
     activate.rs        — Plugin + module activation (Phase 3 & 4); public entry: execute_with_candidate_runner
     init.rs            — `numan init [--refresh]`: Nu probe, paths cache, auto-configures official registry
-    doctor.rs          — `numan doctor [--scan]`: health checks + safe repairs by default (or report-only with `--scan`) (Phase 7.2; spec: docs/numan-doctor.md)
+    doctor.rs          — `numan doctor [--scan] [--json]`: repairs by default; `--scan` report-only (Phase 7.2; spec: docs/numan-doctor.md)
     snapshot.rs        — `numan snapshot list|inspect|delete|rollback` (Phase 5.3)
     deactivate.rs      — Plugin + module deactivation: journaled plugin unregister (`execute_with_unregistrar`); module full/partial (Phase 4 / Issue #22 PR2)
     plugin_lifecycle.rs — Activate/deactivate-owned lifecycle boundary exposed to opt-in update orchestration (Issue #22 PR3)
@@ -109,7 +109,7 @@ tests/
   fixtures/nupm/       — supported/rejected fixture corpus for parser/classifier tests
   init_test.rs          — `numan init` / `init --refresh` (vendor drift, managed-file revalidation)
   completions_test.rs  — shell completion script generation (Phase 7.3)
-  doctor_test.rs       — `numan doctor` report-only (`--scan`), default auto/confirm tiers, journal checks (Phase 7.2)
+  doctor_test.rs       — `numan doctor` default repairs, `--scan` report-only, journal checks (Phase 7.2)
   nupm_compat_test.rs  — Phase 6 integration tests (T13–T25, import/drift/manifest/activation/platform)
   nupm_real_nu_test.rs — Phase 6.4 real-Nu #[ignore] acceptance tests (run with `cargo test -- --ignored`)
   plugin_lifecycle_real_nu.rs — Issue #22 smoke marker (points at Stage 1 + active-update suite)

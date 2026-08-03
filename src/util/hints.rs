@@ -15,11 +15,8 @@ pub const CMD_ACTIVATE_CHECK: &str = "numan activate --check";
 /// `numan registry sync`
 pub const CMD_REGISTRY_SYNC: &str = "numan registry sync";
 
-/// `numan doctor` (default mode applies safe repairs; use `--scan` for report-only)
-pub const CMD_DOCTOR: &str = "numan doctor";
-
-/// Historical alias for [`CMD_DOCTOR`] (named when doctor repairs required `--fix`).
-pub const CMD_DOCTOR_FIX: &str = CMD_DOCTOR;
+/// `numan doctor`
+pub const CMD_DOCTOR_FIX: &str = "numan doctor";
 
 /// `numan setup nu`
 pub const CMD_SETUP_NU: &str = "numan setup nu";
@@ -50,6 +47,7 @@ pub fn shell_quote(s: &str) -> String {
                     '\'' | '"'
                         | '`'
                         | '$'
+                        | '\\'
                         | '&'
                         | '|'
                         | ';'
@@ -124,7 +122,7 @@ pub fn registry_none_fix(root: &std::path::Path) -> &'static str {
     if OFFICIAL_REGISTRY.is_placeholder_key() {
         CMD_REGISTRY_ADD
     } else if root.join("nu_state/paths.json").exists() {
-        CMD_DOCTOR
+        CMD_DOCTOR_FIX
     } else {
         CMD_INIT
     }
@@ -228,6 +226,11 @@ mod tests {
     }
 
     #[test]
+    fn shell_quote_wraps_paths_with_backslashes() {
+        assert_eq!(shell_quote(r"/tmp/nu\bin"), r"'/tmp/nu\bin'");
+    }
+
+    #[test]
     fn active_plugin_mutation_gated_mentions_package_and_issue() {
         let hint = active_plugin_mutation_gated("owner/plugin");
         assert!(hint.contains("owner/plugin"));
@@ -302,6 +305,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("nu_state")).unwrap();
         std::fs::write(dir.path().join("nu_state/paths.json"), b"{}").unwrap();
-        assert_eq!(registry_none_fix(dir.path()), CMD_DOCTOR);
+        assert_eq!(registry_none_fix(dir.path()), CMD_DOCTOR_FIX);
     }
 }
