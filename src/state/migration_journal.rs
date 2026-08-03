@@ -147,6 +147,14 @@ impl PendingMigration {
                 SCHEMA_VERSION,
             );
         }
+        if !is_safe_version_component(&journal.version) {
+            anyhow::bail!(
+                "Migration journal at '{}' has unsafe version component '{}'. \\
+                 Delete the journal manually to recover.",
+                path.display(),
+                journal.version,
+            );
+        }
         Ok(Some(journal))
     }
 
@@ -221,7 +229,7 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
         bail!(
             "Migration journal at '{}' has unsafe version component '{}'. \
              Refusing to reconcile to avoid escaping the managed tree. \
-             Run `numan doctor --fix` to discard the journal.",
+             Delete the journal manually to recover.",
             PendingMigration::journal_path(root).display(),
             journal.version
         );
