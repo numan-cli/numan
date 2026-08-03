@@ -86,14 +86,15 @@ Repair steps run in this **order** (each step re-validates only what it changed)
 |------|---------|-------------|--------|
 | **auto** | Never | `layout.*` (missing dirs), `nu.active_version.malformed` | Independent of PreMutation success: `create_dir_all` for layout; clear invalid `nu_state/active-version.json` via `clear_active_version` |
 | **auto** | Never | `nu_paths.missing` | `numan init` (skipped with `snapshot_unavailable` when PreMutation fails) |
-| **auto** | Never | `registry.index_missing` | `numan registry sync` |
+| **auto** | Never | `registry.index_missing` | `numan registry sync` (skipped with `snapshot_unavailable` when PreMutation fails) |
 | **auto** | Never | `registry.none` (production trust root only) | Add official registry via same path as `numan init` (continues even when PreMutation fails) |
 | **manual** | Never auto | `nu.binary.missing_on_path` | Print fix hint (`numan setup nu`); doctor never downloads managed Nu without explicit user opt-in |
 | **confirm** | Explicit consent when managed Nu exists | `nu.binary.found_off_path` | `numan setup nu use <path>` (adds existing install to PATH; doctor never passes `--yes`, so a managed wipe stays fail-closed / interactive) |
 | **confirm** | Never (applied in default mode) | `nu_paths.drift`, `nu_paths.vendor_drift` | `numan init --refresh` |
 | **confirm** | Never (applied in default mode) | `journal.plugin_pending`, `journal.autoload_pending`, `journal.plugin_stale`, `journal.autoload_stale`, `activation.plugin_stale`, `activation.module_stale`, `autoload.projection`, `autoload.managed_missing` | `numan activate` (empty package list — reconciles journals and re-activates stale entries; same entry point as normal activate recovery) |
 | **confirm** | Never (applied in default mode) | `journal.plugin_deactivate_pending` | `numan deactivate <journal package ids>` (reconciles pending-plugin-deactivate journal only; not a full-root deactivate) |
-| **confirm** | Never (applied in default mode) | `journal.plugin_deactivate_stale` | `numan init --refresh` then `numan deactivate` || **manual** | Never auto | `autoload.managed_foreign`, `payload.missing`, `journal.lifecycle_pending`, `journal.lifecycle_stale`, `registry.none` (placeholder trust root), `nu_paths.vendor_missing`, `nupm.*` | Print fix hint only |
+| **confirm** | Never (applied in default mode) | `journal.plugin_deactivate_stale` | `numan init --refresh` then `numan deactivate` |
+| **manual** | Never auto | `autoload.managed_foreign`, `payload.missing`, `journal.lifecycle_pending`, `journal.lifecycle_stale`, `registry.none` (placeholder trust root), `nu_paths.vendor_missing`, `nupm.*` | Print fix hint only |
 | **none** | Never | `activation.plugin_mutation_gated` (`info`) | Informational only; see [docs/active-plugin-gate.md](active-plugin-gate.md) |
 
 **Invariants during repair:**
