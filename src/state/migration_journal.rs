@@ -246,6 +246,8 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
                         )
                     })?;
                 }
+                let managed_dir = versioned_nu_dir(root);
+                assert_not_symlink(&managed_dir, "managed Nushell directory")?;
                 let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
                 let legacy_binary = managed_dir.join(bin_name);
                 if legacy_binary.is_file() {
@@ -264,6 +266,8 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
                 // once the user resolves the underlying issue. Discarding
                 // both the orphan dir AND the journal would silently lose
                 // the recoverable crash window.
+                let managed_dir = versioned_nu_dir(root);
+                assert_not_symlink(&managed_dir, "managed Nushell directory")?;
                 let version_dir = version_install_dir(root, &journal.version);
                 if version_dir.is_dir() {
                     if let Err(e) = std::fs::remove_dir(&version_dir) {
@@ -308,6 +312,8 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
             // Defensive cleanup: a stray legacy binary at `tools/nushell/<bin>`
             // would otherwise confuse `list_installed_versions` into
             // re-running migration. Remove it.
+            let managed_dir = versioned_nu_dir(root);
+            assert_not_symlink(&managed_dir, "managed Nushell directory")?;
             let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
             let legacy_binary = managed_dir.join(bin_name);
             if legacy_binary.is_file() {
