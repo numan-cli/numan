@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use console::style;
 use serde::Serialize;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use crate::cmd::activate::{execute as activate_execute, ActivateArgs};
