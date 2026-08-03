@@ -10,6 +10,7 @@ use numan_cli::core::platform::Platform;
 use numan_cli::nu::bootstrap::{self, install_from_archive, NuSetupOptions};
 use numan_cli::nu::paths::{find_nu_executable_with_root, validate_nushell_binary};
 use numan_cli::nu::version_manager;
+use numan_cli::util::test_paths::PathRestoreGuard;
 use std::io::Write;
 use std::path::PathBuf;
 use zip::write::SimpleFileOptions;
@@ -129,6 +130,9 @@ fn runnable_nu_on_path() -> Option<PathBuf> {
 #[test]
 #[ignore = "requires real Nu binary on $PATH — run in platform acceptance job"]
 fn setup_nu_use_existing_registers_binary_without_download() {
+    // Serialize PATH mutation with sibling ignored tests in this binary.
+    let _path_guard = PathRestoreGuard::new();
+
     let Some(nu_source) = runnable_nu_on_path() else {
         return;
     };
@@ -166,11 +170,20 @@ fn setup_nu_use_existing_registers_binary_without_download() {
         .unwrap()
         .to_path_buf();
     let parent_str = parent.to_string_lossy().replace("\\\\?\\", "");
-    let path_contains = std::env::split_paths(&path_var)
-        .any(|part| part.to_string_lossy().eq_ignore_ascii_case(&parent_str));
+    let path_contains = std::env::split_paths(&path_var).any(|part| {
+        let part_str = part.to_string_lossy().replace("\\\\?\\", "");
+        if part_str.eq_ignore_ascii_case(&parent_str) {
+            return true;
+        }
+        // macOS temp dirs often appear as /var/... vs /private/var/...;
+        // compare canonical forms when the entry still exists on disk.
+        part.canonicalize()
+            .map(|canon| canon == parent)
+            .unwrap_or(false)
+    });
     assert!(
         path_contains,
-        "PATH should contain the existing Nu directory after use-existing"
+        "PATH should contain the existing Nu directory after use-existing; PATH={path_var}"
     );
 }
 
@@ -343,6 +356,9 @@ fn stage_fake_nu(src: &std::path::Path, dst: &std::path::Path) {
 #[test]
 #[ignore = "requires real Nu binary on $PATH — run in platform acceptance job"]
 fn setup_nu_use_existing_refuses_when_managed_tree_present_without_force() {
+    // Keep PATH reads consistent with sibling ignored tests that mutate PATH.
+    let _path_guard = PathRestoreGuard::new();
+
     let Some(nu_source) = runnable_nu_on_path() else {
         return;
     };
@@ -402,6 +418,9 @@ fn setup_nu_use_existing_refuses_when_managed_tree_present_without_force() {
 #[test]
 #[ignore = "requires real Nu binary on $PATH — run in platform acceptance job"]
 fn setup_nu_use_existing_force_drops_managed_tree() {
+    // Serialize PATH mutation with sibling ignored tests in this binary.
+    let _path_guard = PathRestoreGuard::new();
+
     let Some(nu_source) = runnable_nu_on_path() else {
         return;
     };

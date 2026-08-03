@@ -2,8 +2,7 @@ pub mod atomic;
 pub mod confirm;
 pub mod fs_safety;
 pub mod hints;
-
-#[cfg(test)]
+/// PATH snapshot/restore for unit and integration tests that mutate process env.
 pub mod test_paths;
 
 pub fn format_timestamp() -> String {
