@@ -12,14 +12,42 @@ use crate::util::hints::{self, CMD_INIT_REFRESH};
 /// Print blast-radius warning and optionally install managed Nu + refresh paths.
 ///
 /// Returns `Ok(true)` when a pin was installed and `init --refresh` succeeded.
-/// Returns `Ok(false)` when the user declined or the session is non-interactive /
-/// `--yes` (hints printed only; never auto-downloads Nu from `--yes` alone).
+/// Returns `Ok(false)` when the user declined or the session is non-interactive
+/// (hints printed only; never auto-downloads Nu without explicit confirmation).
 pub fn offer_managed_nu_pin(
     root: &Path,
     current_nu: &str,
     diagnosis: &PackageIncompatibility,
-    auto_yes: bool,
 ) -> Result<bool> {
+    offer_managed_nu_pin_with_interaction(
+        root,
+        current_nu,
+        diagnosis,
+        std::io::stdin().is_terminal(),
+        || {
+            let mut input = String::new();
+            std::io::stdin()
+                .read_line(&mut input)
+                .context("Failed to read Nu pin confirmation from stdin")?;
+            Ok(input)
+        },
+    )
+}
+
+/// Testable offer path with explicit terminal/interaction state.
+///
+/// When `interactive` is false, prints setup hints and returns `Ok(false)` without
+/// installing managed Nu (never auto-downloads).
+pub fn offer_managed_nu_pin_with_interaction<F>(
+    root: &Path,
+    current_nu: &str,
+    diagnosis: &PackageIncompatibility,
+    interactive: bool,
+    read_line: F,
+) -> Result<bool>
+where
+    F: FnOnce() -> Result<String>,
+{
     let Some(pin) = diagnosis.suggested_pin.as_deref() else {
         return Ok(false);
     };
@@ -36,7 +64,7 @@ pub fn offer_managed_nu_pin(
 
     let setup_cmd = hints::setup_nu_version(pin);
 
-    if auto_yes || !std::io::stdin().is_terminal() {
+    if !interactive {
         println!("To switch Nu, run:");
         println!("  {setup_cmd} --yes --force");
         println!("  {CMD_INIT_REFRESH}");
@@ -46,8 +74,7 @@ pub fn offer_managed_nu_pin(
 
     print!("Install managed Nu {pin} via `{setup_cmd}`? [y/N] ");
     std::io::stdout().flush()?;
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
+    let input = read_line().context("Failed to read Nu pin confirmation input")?;
     if !input.trim().eq_ignore_ascii_case("y") {
         println!("Skipped Nu switch.");
         return Ok(false);

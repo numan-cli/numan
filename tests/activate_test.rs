@@ -22,7 +22,6 @@ use numan_cli::core::integrity;
 use numan_cli::nu::paths::NuPaths;
 use numan_cli::state::journal::{PendingActivation, PendingActivationEntry, PendingStatus};
 use numan_cli::state::lockfile::{Lockfile, LockfileEntry, PluginActivation};
-use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -137,7 +136,6 @@ impl TestEnv {
     fn no_args(&self) -> ActivateArgs {
         ActivateArgs {
             packages: vec![],
-            yes: true,
             verbose: false,
             list: false,
             check: false,
@@ -147,7 +145,6 @@ impl TestEnv {
     fn args_for(&self, packages: &[&str]) -> ActivateArgs {
         ActivateArgs {
             packages: packages.iter().map(|s| s.to_string()).collect(),
-            yes: true,
             verbose: false,
             list: false,
             check: false,
@@ -352,7 +349,6 @@ fn test_activate_path_with_spaces() {
 
     let args = ActivateArgs {
         packages: vec![],
-        yes: true,
         verbose: false,
         list: false,
         check: false,
@@ -609,12 +605,9 @@ fn test_activate_stale_journal_requires_refresh() {
 }
 
 #[test]
-fn test_activate_auto_confirms_on_no_tty() {
-    // With the shared confirm utility, non-TTY sessions auto-confirm instead of
-    // bailing. Without --yes and no TTY, activate should proceed. The TTY
-    // branches of `confirm_or_auto` are covered by the unconditional unit tests
-    // in `src/util/confirm.rs`; this end-to-end path now runs everywhere.
-
+fn test_activate_succeeds_without_prompt() {
+    // Activate prints an informational consent table and proceeds without a
+    // prompt (no `--yes` flag). This covers the no-input activation path.
     let env = TestEnv::new();
     env.write_nu_paths();
     env.create_plugin_binary("owner", "guarded", "1.0.0");
@@ -628,7 +621,6 @@ fn test_activate_auto_confirms_on_no_tty() {
 
     let args = ActivateArgs {
         packages: vec![],
-        yes: false,
         verbose: false,
         list: false,
         check: false,
@@ -636,7 +628,7 @@ fn test_activate_auto_confirms_on_no_tty() {
     let result = execute_with_registrar(&args, &env.root(), &ok_registrar);
     assert!(
         result.is_ok(),
-        "non-TTY should auto-confirm, got error: {:?}",
+        "activation should succeed without a prompt, got error: {:?}",
         result.err()
     );
 }

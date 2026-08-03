@@ -54,7 +54,7 @@ src/
     registry.rs        — Registry management subcommands
     activate.rs        — Plugin + module activation (Phase 3 & 4); public entry: execute_with_candidate_runner
     init.rs            — `numan init [--refresh]`: Nu probe, paths cache, auto-configures official registry
-    doctor.rs          — `numan doctor [--fix] [--yes]`: health checks + safe repairs (Phase 7.2; spec: docs/numan-doctor.md)
+    doctor.rs          — `numan doctor [--scan] [--json]`: repairs by default; `--scan` report-only (Phase 7.2; spec: docs/numan-doctor.md)
     snapshot.rs        — `numan snapshot list|inspect|delete|rollback` (Phase 5.3)
     deactivate.rs      — Plugin + module deactivation: journaled plugin unregister (`execute_with_unregistrar`); module full/partial (Phase 4 / Issue #22 PR2)
     plugin_lifecycle.rs — Activate/deactivate-owned lifecycle boundary exposed to opt-in update orchestration (Issue #22 PR3)
@@ -64,7 +64,7 @@ src/
     nupm.rs            — `numan nupm status|inspect|import|diff`: nupm discovery + import + drift (Phase 6.1–6.3)
     completions.rs     — `numan completions <shell>`: bash/fish/zsh/powershell/nushell scripts (Phase 7.3)
     setup.rs           — `numan setup nu [VERSION]|remove|path|use <path>` + `setup loader`: Nushell bootstrap + nushell-loader install
-    try_cmd.rs         — `numan try [--yes] [--no-activate]`: curated starter install + activate for current Nu
+    try_cmd.rs         — `numan try [--no-activate]`: curated starter install + activate for current Nu
     use_cmd.rs         — `numan use <version>|latest|list`: activates a previously installed managed Nu version (no auto-download); writes the active-version marker after a PreMutation snapshot under the root mutation lock
     nu_pin_offer.rs    — Shared TTY offer to `setup nu <version>` + `init --refresh` on Nu mismatch
   install/
@@ -112,7 +112,7 @@ tests/
   fixtures/nupm/       — supported/rejected fixture corpus for parser/classifier tests
   init_test.rs          — `numan init` / `init --refresh` (vendor drift, managed-file revalidation)
   completions_test.rs  — shell completion script generation (Phase 7.3)
-  doctor_test.rs       — `numan doctor` report-only, --fix auto tier, journal checks (Phase 7.2)
+  doctor_test.rs       — `numan doctor` default repairs, `--scan` report-only, journal checks (Phase 7.2)
   nupm_compat_test.rs  — Phase 6 integration tests (T13–T25, import/drift/manifest/activation/platform)
   nupm_real_nu_test.rs — Phase 6.4 real-Nu #[ignore] acceptance tests (run with `cargo test -- --ignored`)
   plugin_lifecycle_real_nu.rs — Issue #22 smoke marker (points at Stage 1 + active-update suite)
@@ -156,7 +156,7 @@ tests/
 4. **Lockfile pins immutable paths** — cached artifacts retained while referenced
 5. **Registry trust** — Ed25519 signatures over exact `index.json` bytes; bypass requires `NUMAN_ALLOW_UNSIGNED=1` (dev only)
 6. **Artifact SHA256 is mandatory for plugins** — the install transaction bails if `sha256` is missing from a binary artifact
-7. **State snapshots before mutation** — `create_snapshot()` before `install`/`update`/`remove`/`activate`/`deactivate`/nupm-import mutations; `numan gc` treats every snapshot's referenced payloads as live roots
+7. **State snapshots before mutation** — `create_snapshot()` before `install`/`update`/`remove`/`activate`/`deactivate`/`init --refresh`/nupm-import/doctor repair mutations; `numan gc` treats every snapshot's referenced payloads as live roots
 8. **Platform triple** — comes from `#[cfg(target_env)]` at compile time, not `std::env::consts` (see `core/platform.rs`; `LIBC` is a compile-time const)
 
 ## Development Workflow

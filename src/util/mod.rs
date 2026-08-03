@@ -2,6 +2,7 @@ pub mod atomic;
 pub mod confirm;
 pub mod fs_safety;
 pub mod hints;
+pub mod stdio_redirect;
 
 #[cfg(test)]
 pub mod test_paths;

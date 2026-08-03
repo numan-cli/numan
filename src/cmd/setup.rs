@@ -15,6 +15,13 @@ use crate::util::fs_safety::{
     assert_managed_file_owned, assert_not_symlink, setup_subcommand_lock,
 };
 
+/// PreMutation snapshot for destructive `setup nu` leaf paths.
+fn snapshot_setup_mutation(root: &Path, trigger: SnapshotTrigger) -> Result<()> {
+    create_snapshot(root, SnapshotReason::PreMutation, trigger, None, None)
+        .with_context(|| "Failed to create pre-mutation snapshot for `numan setup nu`")?;
+    Ok(())
+}
+
 const VENDOR_LOADER: &str = include_str!("../../assets/nushell-loader/loader.nu");
 
 const CONFIG_SOURCE_LINE: &str = "source ($nu.config-path | path dirname | path join 'loader.nu')";
@@ -235,13 +242,6 @@ fn reject_skip_path_for_off_path_registration(skip_path: bool) -> Result<()> {
              Off-PATH registration must persist the binary directory to PATH."
         );
     }
-    Ok(())
-}
-
-/// PreMutation snapshot for destructive `setup nu` leaf paths.
-fn snapshot_setup_mutation(root: &Path, trigger: SnapshotTrigger) -> Result<()> {
-    create_snapshot(root, SnapshotReason::PreMutation, trigger, None, None)
-        .with_context(|| "Failed to create pre-mutation snapshot for `numan setup nu`")?;
     Ok(())
 }
 
@@ -975,6 +975,28 @@ mod tests {
 
         remove_managed_nu_if_present(&root).unwrap();
         assert!(!managed_dir.exists());
+    }
+
+    #[test]
+    fn execute_use_existing_invalid_binary_preserves_managed_installation() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        let managed_dir = bootstrap::managed_nu_dir(&root);
+        std::fs::create_dir_all(&managed_dir).unwrap();
+        let marker = managed_dir.join("keep-me");
+        std::fs::write(&marker, b"managed").unwrap();
+
+        let missing = dir.path().join("no-such-nu");
+        let err =
+            execute_use_existing(&missing, true, &root, ExecuteUseOpts::default()).unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to resolve") || err.to_string().contains("no-such-nu"),
+            "expected resolve failure, got: {err}"
+        );
+        assert!(
+            marker.exists(),
+            "managed Nu must remain intact when off-PATH binary fails validation"
+        );
     }
 
     #[test]
