@@ -1546,7 +1546,6 @@ fn real_nu_import_mode_all_exports_to_global_scope() {
 #[cfg(target_os = "windows")]
 #[ignore = "requires real Nu binary on $PATH — run in platform acceptance job"]
 fn real_nu_windows_path_with_spaces_validates() {
-
     let nu = match find_nu_binary() {
         Some(p) => p,
         None => {
