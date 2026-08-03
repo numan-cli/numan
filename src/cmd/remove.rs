@@ -16,25 +16,9 @@ pub struct RemoveArgs {
     /// Package to remove (owner/name)
     package: String,
 
-    /// Skip confirmation prompts (required in non-interactive sessions)
+    /// Allow package removal in non-interactive sessions (required when stdin is not a TTY)
     #[arg(long)]
     yes: bool,
-
-    /// Remove even if the package has an active *module* activation record (does not bypass active plugin activation; see Issue #22)
-    #[arg(long)]
-    force: bool,
-}
-
-pub fn execute(args: &RemoveArgs, root: &Path) -> Result<()> {
-    execute_with_tty(args, root, std::io::stdin().is_terminal())
-}
-
-/// Same as [`execute`] with an injectable terminal-status seam for tests.
-fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> {
-    // Destructive: permanently deletes the package payload and lockfile entry.
-    // Refuse unattended (non-TTY) sessions without explicit --yes so safe-batch
-    // automation has to opt in; interactive sessions keep the existing flow.
-    crate::util::confirm::require_tty_or_yes_with_seam(args.yes, "package removal", is_tty)?;
 
     let _lock = acquire_mutation_lock(root)?;
 
