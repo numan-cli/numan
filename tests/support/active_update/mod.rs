@@ -243,10 +243,7 @@ impl ActiveUpdateRun {
         self.plant_fixture_registry()?;
         let install_spec = format!("{}@{FROM_VERSION}", self.package_id);
         self.require_ok(&["install", &install_spec], Duration::from_secs(300))?;
-        self.require_ok(
-            &["activate", &self.package_id, "--yes"],
-            Duration::from_secs(120),
-        )?;
+        self.require_ok(&["activate", &self.package_id], Duration::from_secs(120))?;
         let lockfile = Lockfile::load(&self.root)?;
         let entry = lockfile
             .packages

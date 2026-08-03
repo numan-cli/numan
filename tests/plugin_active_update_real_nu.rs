@@ -175,10 +175,7 @@ fn real_nu_active_update_resume_lockfile_updated_reactivates() -> Result<()> {
     run.prepare_active_v1()?;
 
     // Deactivate + install v2 without reactivate, then seed needs_reactivate journal.
-    run.require_ok(
-        &["deactivate", &run.package_id, "--yes"],
-        Duration::from_secs(120),
-    )?;
+    run.require_ok(&["deactivate", &run.package_id], Duration::from_secs(120))?;
     let install_spec = format!("{}@{TO_VERSION}", run.package_id);
     run.require_ok(&["install", &install_spec], Duration::from_secs(300))?;
 

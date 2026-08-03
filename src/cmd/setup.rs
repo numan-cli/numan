@@ -8,10 +8,18 @@ use crate::nu::bootstrap::{self, NuSetupOptions};
 use crate::nu::paths::{
     find_nu_executable_with_root, find_nu_on_path, probe_nu_config_path, validate_nushell_binary,
 };
+use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::atomic::write_bytes_atomic;
 use crate::util::fs_safety::{
     acquire_mutation_lock, assert_managed_file_owned, assert_not_symlink,
 };
+
+/// Snapshot established Numan state before a `setup nu` mutation.
+fn snapshot_before_setup_mutation(root: &Path, trigger: SnapshotTrigger) -> Result<()> {
+    create_snapshot(root, SnapshotReason::PreMutation, trigger, None, None)
+        .context("Failed to create pre-mutation snapshot for `numan setup nu`")?;
+    Ok(())
+}
 
 const VENDOR_LOADER: &str = include_str!("../../assets/nushell-loader/loader.nu");
 
@@ -356,6 +364,7 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
         }
     }
 
+    snapshot_before_setup_mutation(root, SnapshotTrigger::Update)?;
     remove_managed_nu_if_present(root)?;
     let options = NuSetupOptions {
         yes,
@@ -418,6 +427,7 @@ fn execute_use_existing(
         }
     }
 
+    snapshot_before_setup_mutation(root, SnapshotTrigger::Update)?;
     remove_managed_nu_if_present(root)?;
     let options = NuSetupOptions {
         yes,
@@ -457,6 +467,8 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
         yes,
         "Managed Nushell removal cancelled.",
     )?;
+
+    snapshot_before_setup_mutation(root, SnapshotTrigger::Remove)?;
 
     // Clear the active-version marker before removing the versioned tree so
     // it cannot dangle at a now-missing binary (see `clear_active_version`).
@@ -837,6 +849,28 @@ mod tests {
 
         remove_managed_nu_if_present(&root).unwrap();
         assert!(!managed_dir.exists());
+    }
+
+    #[test]
+    fn execute_use_existing_invalid_binary_preserves_managed_installation() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        let managed_dir = bootstrap::managed_nu_dir(&root);
+        std::fs::create_dir_all(&managed_dir).unwrap();
+        let marker = managed_dir.join("keep-me");
+        std::fs::write(&marker, b"managed").unwrap();
+
+        let missing = dir.path().join("no-such-nu");
+        let err =
+            execute_use_existing(&missing, true, &root, ExecuteUseOpts::default()).unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to resolve") || err.to_string().contains("no-such-nu"),
+            "expected resolve failure, got: {err}"
+        );
+        assert!(
+            marker.exists(),
+            "managed Nu must remain intact when off-PATH binary fails validation"
+        );
     }
 
     #[test]

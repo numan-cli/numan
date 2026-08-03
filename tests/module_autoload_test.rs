@@ -167,22 +167,20 @@ impl ModuleTestEnv {
         lockfile.save(self.root()).unwrap();
     }
 
-    /// Build ActivateArgs for the given package IDs with --yes.
+    /// Build ActivateArgs for the given package IDs.
     fn activate_args(&self, packages: &[&str]) -> ActivateArgs {
         ActivateArgs {
             packages: packages.iter().map(|s| s.to_string()).collect(),
-            yes: true,
             verbose: false,
             list: false,
             check: false,
         }
     }
 
-    /// Build DeactivateArgs for the given package IDs with --yes.
+    /// Build DeactivateArgs for the given package IDs.
     fn deactivate_args(&self, packages: &[&str]) -> DeactivateArgs {
         DeactivateArgs {
             packages: packages.iter().map(|s| s.to_string()).collect(),
-            yes: true,
             verbose: false,
         }
     }
@@ -1545,16 +1543,9 @@ fn real_nu_import_mode_all_exports_to_global_scope() {
 }
 
 #[test]
+#[cfg(target_os = "windows")]
 #[ignore = "requires real Nu binary on $PATH — run in platform acceptance job"]
 fn real_nu_windows_path_with_spaces_validates() {
-    // On Windows, verify that a path containing spaces is correctly escaped
-    // and that Nu can parse the generated use statement.
-    #[cfg(not(windows))]
-    {
-        eprintln!("Skipping: Windows-specific test");
-        return;
-    }
-
     let nu = match find_nu_binary() {
         Some(p) => p,
         None => {
