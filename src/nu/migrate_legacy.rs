@@ -175,18 +175,15 @@ pub fn migrate_legacy_install_with_detector(
     detect: &LegacyVersionDetector,
     post_create: Option<&LegacyPostCreateHook>,
 ) -> Result<bool> {
-    // cubic PR69 UzG: refuse to scan or mutate under a symlinked managed
-    // directory. A symlink under `<root>/tools/nushell` could redirect the
-    // rename or filesystem-truth cleanup outside `$NUMAN_ROOT` and silently
-    // rewrite unrelated user-visible state.
-    let legacy_dir = versioned_nu_dir(root);
-    if crate::util::fs_safety::is_symlink_or_reparse(&legacy_dir)? {
-        anyhow::bail!(
-            "Refusing to migrate: managed Nushell directory '{}' is a symlink or reparse point. \
+    // Refuse when `tools` / `tools/nushell` is a symlink or when a symlinked
+    // ancestor would redirect rename/cleanup outside `$NUMAN_ROOT`.
+    crate::util::fs_safety::assert_managed_nushell_layout(root).with_context(|| {
+        format!(
+            "Refusing to migrate: managed Nushell layout under '{}' is unsafe. \
              Run `numan setup nu` from a clean root before migrating.",
-            legacy_dir.display(),
-        );
-    }
+            root.display()
+        )
+    })?;
 
     // Self-heal any in-flight migration journal from a prior crashed attempt.
     // The `Prepared` path removes any orphan `<version>/` subdir; the
@@ -288,6 +285,14 @@ pub fn migrate_legacy_install_with_detector(
 
     let version_dir = version_install_dir(root, &version);
     let version_journal_path = PendingMigration::journal_path(root);
+    // A pre-planted symlink at `<version>/` would redirect the rename outside
+    // `$NUMAN_ROOT`. Refuse before create_dir_all / rename.
+    crate::util::fs_safety::assert_not_symlink(
+        &version_dir,
+        "migration version install directory",
+    )?;
+    let version_rel = Path::new("tools").join("nushell").join(&version);
+    let _ = crate::util::fs_safety::assert_contained(root, &version_rel)?;
     std::fs::create_dir_all(&version_dir).with_context(|| {
         format!(
             "Failed to create version directory '{}' (migration journal at Prepared: '{}')",
@@ -295,6 +300,10 @@ pub fn migrate_legacy_install_with_detector(
             version_journal_path.display()
         )
     })?;
+    crate::util::fs_safety::assert_not_symlink(
+        &version_dir,
+        "migration version install directory",
+    )?;
 
     // Post-create seam (tests only). Real callers pass `None`; a failing
     // hook here simulates the original cross-device rename bug.
@@ -610,9 +619,72 @@ mod tests {
         .unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("symlink") || msg.contains("reparse"),
-            "must mention symlink in error, got: {msg}"
+            msg.contains("symlink")
+                || msg.contains("reparse")
+                || msg.contains("containment")
+                || msg.contains("unsafe"),
+            "must mention symlink/containment in error, got: {msg}"
         );
+    }
+
+    /// Symlinked ancestor (`tools` → elsewhere) must also be refused even when
+    /// the leaf `nushell` directory is a real directory under the target.
+    #[cfg(unix)]
+    #[test]
+    fn migrate_legacy_refuses_symlinked_tools_ancestor() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let bin_name = nu_binary_name();
+
+        let outside = tmp.path().join("outside-tools");
+        let managed = outside.join("nushell");
+        std::fs::create_dir_all(&managed).unwrap();
+        std::fs::write(managed.join(bin_name), b"fake legacy nu").unwrap();
+
+        std::os::unix::fs::symlink(&outside, root.join("tools")).unwrap();
+
+        let err = migrate_legacy_install_with_detector(
+            root,
+            &|_| panic!("detector must not run when tools is a symlink"),
+            None,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("symlink")
+                || msg.contains("reparse")
+                || msg.contains("containment")
+                || msg.contains("unsafe"),
+            "must refuse symlinked tools ancestor, got: {msg}"
+        );
+    }
+
+    /// A pre-planted symlink at the destination version dir must be refused
+    /// before rename so the legacy binary cannot escape `$NUMAN_ROOT`.
+    #[cfg(unix)]
+    #[test]
+    fn migrate_legacy_refuses_symlinked_version_dir() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let bin_name = nu_binary_name();
+
+        let managed = root.join("tools").join("nushell");
+        std::fs::create_dir_all(&managed).unwrap();
+        std::fs::write(managed.join(bin_name), b"fake legacy nu").unwrap();
+
+        let outside = tmp.path().join("escape-version");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, managed.join("0.113.1")).unwrap();
+
+        let err = migrate_legacy_install_with_detector(root, &|_| Ok("0.113.1".to_string()), None)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("symlink") || msg.contains("reparse") || msg.contains("containment"),
+            "must refuse symlinked version dir, got: {msg}"
+        );
+        // Legacy binary must remain in place (no rename attempted).
+        assert!(managed.join(bin_name).is_file());
     }
 
     #[test]

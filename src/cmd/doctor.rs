@@ -1099,6 +1099,35 @@ fn apply_repairs(
 
     drop(lock.take());
 
+    // Reconcile pending migration journals BEFORE off-PATH Nu registration.
+    // A Prepared orphan empty `<version>/` under tools/nushell makes
+    // `setup nu use` refuse without `--force`; cleaning it first lets one
+    // `doctor --fix` pass complete both repairs.
+    if findings
+        .iter()
+        .any(|f| f.id == "journal.migration_pending" && f.severity == Severity::Warn)
+    {
+        let id = "journal.migration_repaired".to_string();
+        let _migration_repair_lock = acquire_mutation_lock(root)?;
+        match migration_journal::reconcile(root) {
+            Ok(Some(_)) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Applied,
+                reason: None,
+            }),
+            Ok(None) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Skipped,
+                reason: None,
+            }),
+            Err(e) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Failed,
+                reason: Some(e.to_string()),
+            }),
+        }
+    }
+
     if findings
         .iter()
         .any(|f| f.id == "nu.binary.found_off_path" && f.severity == Severity::Warn)
@@ -1345,37 +1374,6 @@ fn apply_repairs(
                     }),
                 }
             }
-        }
-    }
-
-    // The migration journal path is self-healing in normal use (top of
-    // `migrate_legacy_install_with_detector`); the doctor repair is the
-    // catch-up for users who ran `numan doctor --fix` without ever calling
-    // `numan use`. `reconcile` returns `Ok(Some(_))` when a journal was found
-    // and cleaned, `Ok(None)` when there is nothing to do, and `Err` when the
-    // reconcile itself fails.
-    if findings
-        .iter()
-        .any(|f| f.id == "journal.migration_pending" && f.severity == Severity::Warn)
-    {
-        let id = "journal.migration_repaired".to_string();
-        let _migration_repair_lock = acquire_mutation_lock(root)?;
-        match migration_journal::reconcile(root) {
-            Ok(Some(_)) => records.push(RepairRecord {
-                id,
-                status: RepairStatus::Applied,
-                reason: None,
-            }),
-            Ok(None) => records.push(RepairRecord {
-                id,
-                status: RepairStatus::Skipped,
-                reason: None,
-            }),
-            Err(e) => records.push(RepairRecord {
-                id,
-                status: RepairStatus::Failed,
-                reason: Some(e.to_string()),
-            }),
         }
     }
 

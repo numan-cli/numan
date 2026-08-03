@@ -245,6 +245,28 @@ pub fn assert_contained(root: &Path, relative: &Path) -> Result<PathBuf> {
     Ok(canonical_joined)
 }
 
+/// Refuse migration/reconcile when the managed Nushell layout escapes `$NUMAN_ROOT`.
+///
+/// Checks:
+/// 1. `tools` and `tools/nushell` are not themselves symlinks/reparse points
+/// 2. When those paths exist, their canonical forms stay under the canonical root
+///    (catches a symlinked *ancestor* such as `$NUMAN_ROOT/tools` → elsewhere,
+///    where the leaf `nushell` directory is a real dir and a leaf-only symlink
+///    check would miss the escape)
+pub fn assert_managed_nushell_layout(root: &Path) -> Result<()> {
+    let tools = root.join("tools");
+    assert_not_symlink(&tools, "managed tools directory")?;
+    let managed = tools.join("nushell");
+    assert_not_symlink(&managed, "managed Nushell directory")?;
+    if tools.exists() {
+        let _ = assert_contained(root, Path::new("tools"))?;
+    }
+    if managed.exists() {
+        let _ = assert_contained(root, Path::new("tools/nushell"))?;
+    }
+    Ok(())
+}
+
 /// Lexically normalize a path without requiring it to exist on disk.
 ///
 /// Processes components sequentially, collapsing `.` and refusing `..`
@@ -437,6 +459,30 @@ mod tests {
         std::fs::write(&target, b"hello").unwrap();
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert!(is_symlink_or_reparse(&link).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_nushell_layout_refuses_symlinked_tools_ancestor() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(outside.join("nushell")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("tools")).unwrap();
+        let err = assert_managed_nushell_layout(root).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("symlink") || msg.contains("reparse") || msg.contains("containment"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn managed_nushell_layout_accepts_plain_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("tools/nushell")).unwrap();
+        assert_managed_nushell_layout(root).unwrap();
     }
 
     // ── setup_subcommand_lock ───────────────────────────────────────────────

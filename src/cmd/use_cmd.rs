@@ -250,6 +250,36 @@ mod tests {
     }
 
     #[test]
+    fn test_use_latest_self_heals_dangling_off_tree_binary_path() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.113.1");
+        // Marker names latest version but points at a missing off-tree binary.
+        version_manager::write_active_version_with_binary(
+            root,
+            "0.113.1",
+            std::path::Path::new("/nonexistent/nu"),
+        )
+        .unwrap();
+
+        execute(
+            &UseArgs {
+                version: "latest".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.113.1");
+        assert!(
+            active.binary_path.is_none(),
+            "dangling off-tree path must be cleared; got {:?}",
+            active.binary_path
+        );
+    }
+
+    #[test]
     fn test_use_latest_creates_pre_mutation_snapshot() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();

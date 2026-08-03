@@ -37,7 +37,7 @@ use crate::nu::version_manager::{
     read_active_version, version_install_dir, versioned_nu_dir, write_active_version,
 };
 use crate::util::atomic::write_json_atomic;
-use crate::util::fs_safety::assert_not_symlink;
+use crate::util::fs_safety::{assert_managed_nushell_layout, assert_not_symlink};
 
 /// Schema version for `migration-journal.json`.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -239,9 +239,10 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
 
     // Validate once before any stage-specific recovery. Active-version writes,
     // orphan scrubbing, and journal deletion must not run when the managed
-    // tree has been replaced by a symlink or reparse point.
+    // tree has been replaced by a symlink/reparse point or when a symlinked
+    // ancestor would redirect mutations outside `$NUMAN_ROOT`.
     let managed_dir = versioned_nu_dir(root);
-    assert_not_symlink(&managed_dir, "managed Nushell directory")?;
+    assert_managed_nushell_layout(root)?;
 
     match journal.stage {
         MigrationStage::Prepared => {
@@ -256,7 +257,7 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
                         )
                     })?;
                 }
-                let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
+                let bin_name = crate::nu::version_manager::nu_binary_name();
                 let legacy_binary = managed_dir.join(bin_name);
                 if legacy_binary.is_file() {
                     std::fs::remove_file(&legacy_binary).with_context(|| {
@@ -275,6 +276,7 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
                 // both the orphan dir AND the journal would silently lose
                 // the recoverable crash window.
                 let version_dir = version_install_dir(root, &journal.version);
+                assert_not_symlink(&version_dir, "migration version install directory")?;
                 if version_dir.is_dir() {
                     if let Err(e) = std::fs::remove_dir(&version_dir) {
                         bail!(
@@ -655,8 +657,11 @@ mod tests {
         let err = reconcile(root).expect_err("reconcile must refuse symlinked managed dir");
         let msg = err.to_string();
         assert!(
-            msg.contains("symlink") || msg.contains("reparse"),
-            "err must name the symlink/reparse guard: {msg}"
+            msg.contains("symlink")
+                || msg.contains("reparse")
+                || msg.contains("containment")
+                || msg.contains("unsafe"),
+            "err must name the symlink/reparse/containment guard: {msg}"
         );
 
         // Journal retained; no active-version write; managed payload untouched.
