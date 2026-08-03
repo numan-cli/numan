@@ -567,11 +567,8 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
         "Managed Nushell removal cancelled.",
     )?;
 
-<<<<<<< HEAD
     snapshot_before_setup_mutation(root, SnapshotTrigger::Remove)?;
 
-=======
->>>>>>> 85dcc8c (Fix PR #71 review: PATH test mutex and clear-before-delete)
     // Clear after confirmation so decline leaves selection intact. Fail loud if
     // the marker cannot be cleared; do not proceed to delete with a stale marker.
     version_manager::clear_active_version(root).with_context(|| {
@@ -580,10 +577,7 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
             managed_dir.display()
         )
     })?;
-<<<<<<< HEAD
 
-=======
->>>>>>> 85dcc8c (Fix PR #71 review: PATH test mutex and clear-before-delete)
     std::fs::remove_dir_all(&managed_dir).with_context(|| {
         format!(
             "Failed to remove managed Nushell directory '{}'",
