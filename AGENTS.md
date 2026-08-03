@@ -65,7 +65,7 @@ src/
     completions.rs     — `numan completions <shell>`: bash/fish/zsh/powershell/nushell scripts (Phase 7.3)
     setup.rs           — `numan setup nu [VERSION]|remove|path|use <path>` + `setup loader`: Nushell bootstrap + nushell-loader install
     try_cmd.rs         — `numan try [--no-activate]`: curated starter install + activate for current Nu
-    use_cmd.rs         — `numan use <version>|latest|list`: activates a previously installed managed Nu version (no auto-download); writes the active-version marker after a PreMutation snapshot under the root mutation lock
+    use_cmd.rs         — `numan use <version>|latest|list`: activates a previously installed managed Nu version (no auto-download); mutating arms acquire the root mutation lock, run the PreMutation snapshot, perform legacy migration, and write the active-version marker; `numan use list` is exempt from all four operations
     nu_pin_offer.rs    — Shared TTY offer to `setup nu <version>` + `init --refresh` on Nu mismatch
   install/
     download.rs        — HTTP download with progress
@@ -80,6 +80,7 @@ src/
     autoload_recovery.rs — Command-independent PendingAutoload reconciliation into lockfile + derived autoload state
     autoload_state.rs  — Derived autoload-state projection (NOT authoritative; lockfile is ground truth) (Phase 4)
     lifecycle_journal.rs — pending-lifecycle.json for update/remove/nupm_import crash recovery (Phase 5–6)
+    migration_journal.rs — `state/migration-journal.json` for legacy-Nu single-binary → versioned-layout transition (Prepared → Renamed → Active stages); self-heal at top of `migrate_legacy_install_with_detector`, reconciled by `numan doctor --fix` (auto-tier repair)
     snapshot.rs        — Immutable activation snapshots (`create_snapshot`, `list_snapshots`, etc.)
     rollback.rs        — Journaled restore of Numan-owned state to a snapshot
     nupm_import.rs     — nupm-import provenance (`state/nupm-imports.json`, Phase 6.2)
@@ -87,10 +88,15 @@ src/
     bootstrap.rs        — download/install official Nushell release under tools/nushell
     paths.rs           — Nu path cache (detect, load, save, validate_drift)
     autoload.rs        — render_use_statement, generate_autoload_content, FakeCandidateRunner, managed-file ops (Phase 4)
+    migrate_legacy.rs  — Legacy single-binary Nu → versioned-layout transition (journaled; Phase-1 cleanup; see docs/numan-doctor.md)
+    version_manager.rs — Managed-Nu versioned layout (`tools/nushell/<version>/`), active marker (`nu_state/active-version.json`), on/off-tree resolution
   util/
     atomic.rs          — write_json_atomic helper (tempfile+persist)
     fs_safety.rs       — OWNERSHIP_MARKER, acquire_mutation_lock (advisory fd_lock mutex), assert_managed_file_owned (Phase 4)
     hints.rs           — Canonical `fix` hint strings aligned with docs/numan-doctor.md (Phase 7.3)
+    confirm.rs         — TTY/`--yes` consent helpers (`require_tty_or_yes`, `confirm_or_bail`)
+    stdio_redirect.rs  — StdoutToStderr guard so nested repair output cannot corrupt `--json` stdout
+    test_paths.rs      — PathRestoreGuard: serializes and restores `PATH` for PATH-sensitive tests
   nupm_compat/         — nupm discovery, import, drift (Phase 6.1–6.3); contract: docs/nupm-compatibility.md (compat-schema-v1)
     drift.rs           — compare_import, count_drifted_imports, DriftStatus (Phase 6.3)
     import.rs          — safe payload copy, lifecycle-journaled import transaction
@@ -141,6 +147,7 @@ tests/
 - **Activation scope**: `PluginActivation` struct stores `(nu_executable_sha256, nu_version, plugin_registry_path)`; a plugin is "active" only when all three match the current `NuPaths` — bare `bool` would go stale after `numan init --refresh`
 - **Journal**: `state/pending-activation.json` written as all-`prepared` before first registration; each entry advances to `registered` atomically before lockfile update; reconciled on next `activate` run if process is interrupted
 - **Plugin deactivate journal**: `state/pending-plugin-deactivate.json` (`Prepared` → `Unregistered` → clear lockfile `activation`); reconciled on next `deactivate`; doctor warns `journal.plugin_deactivate_pending`
+- **Migration journal**: `state/migration-journal.json` for the legacy-Nu single-binary → versioned layout transition. Stages `Prepared` (before `create_dir_all`) → `Renamed` (after legitimate `rename`) → `Active` (after `write_active_version`); journal deleted on transition to `Active`. `Prepared`-only entries are reconciled by `numan doctor --fix` (Auto-tier, fix hint `numan use`) and by the self-healing `reconcile(root)?` at the top of every `migrate_legacy_install_with_detector` call; file-system truth takes precedence over journal stage when they disagree.
 - **Active version marker**: `nu_state/active-version.json` (`{ "version": "X.Y.Z" }`, optionally `{ "version": "X.Y.Z", "binary_path": "/abs/path/to/nu" }` for off-tree selections). Sole authority for which `tools/nushell/<v>/` is selected. Written by `numan setup nu` and `numan use <version>|latest`. The optional `binary_path` records the resolved off-tree binary when `numan setup nu use <path>` swaps to a user-supplied Nu so subsequent `numan use list` and `find_nu_executable_with_root` can resolve the chosen version even when no on-tree install exists (the field uses `#[serde(default, skip_serializing_if = "Option::is_none")]` so the on-disk shape stays `{ "version": ... }` for on-tree selections and pre-existing markers still load).
 - **Atomic writes**: all JSON state files (lockfile, journal, nu_state/paths.json) use `write_json_atomic` (tempfile in same dir + persist) — no partial-write corruption
 - **Function signatures**: use `&Path` not `&PathBuf` in function parameters (clippy::ptr_arg is CI-enforced)

@@ -8,16 +8,17 @@ use crate::nu::bootstrap::{self, NuSetupOptions};
 use crate::nu::paths::{
     find_nu_executable_with_root, find_nu_on_path, probe_nu_config_path, validate_nushell_binary,
 };
+use crate::nu::version_manager;
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::atomic::write_bytes_atomic;
 use crate::util::fs_safety::{
-    acquire_mutation_lock, assert_managed_file_owned, assert_not_symlink,
+    assert_managed_file_owned, assert_not_symlink, setup_subcommand_lock,
 };
 
-/// Snapshot established Numan state before a `setup nu` mutation.
-fn snapshot_before_setup_mutation(root: &Path, trigger: SnapshotTrigger) -> Result<()> {
+/// PreMutation snapshot for destructive `setup nu` leaf paths.
+fn snapshot_setup_mutation(root: &Path, trigger: SnapshotTrigger) -> Result<()> {
     create_snapshot(root, SnapshotReason::PreMutation, trigger, None, None)
-        .context("Failed to create pre-mutation snapshot for `numan setup nu`")?;
+        .with_context(|| "Failed to create pre-mutation snapshot for `numan setup nu`")?;
     Ok(())
 }
 
@@ -185,23 +186,49 @@ pub fn execute(cmd: SetupCommands, root: &Path) -> Result<()> {
 }
 
 pub fn execute_nu(args: &NuSetupArgs, root: &Path) -> Result<()> {
-    let _lock = acquire_mutation_lock(root)?;
-    execute_nu_impl(args, root)
+    // Every destructive setup entry acquires the root mutation
+    // lock through `setup_subcommand_lock`. The helper audit-logs the
+    // entry so safe-batch automation can grep one consistent `(audit)`
+    // prefix across the destructive setup surface. Direct callers of
+    // `execute_nu_impl` (e.g. `cmd::doctor::apply_repairs`) get the same
+    // guarantee because `execute_nu_impl` itself acquires the lock.
+    let what = setup_action_lock_label(args);
+    setup_subcommand_lock(root, what, || execute_nu_impl_locked(args, root))
 }
 
-/// Execute [`execute_nu_impl`] with the root mutation lock held.
+/// Short, audit-friendly label describing which destructive setup
+/// subcommand is requesting the mutation lock.
+fn setup_action_lock_label(args: &NuSetupArgs) -> &'static str {
+    // Legacy hidden flags take precedence in `execute_nu_impl` and route
+    // to the same leaf helpers as the explicit subcommands. We need the
+    // lock label to reflect the *effective* action, not the literal
+    // `args.action` field, so peek at the legacy flags first.
+    if args.remove {
+        return "managed Nushell removal";
+    }
+    if args.use_path {
+        return "PATH Nu registration";
+    }
+    if args.use_existing.is_some() {
+        return "off-path Nu registration";
+    }
+    match &args.action {
+        Some(NuAction::Remove) => "managed Nushell removal",
+        Some(NuAction::Path) => "PATH Nu registration",
+        Some(NuAction::Use { .. }) => "off-path Nu registration",
+        None => "Nushell install",
+    }
+}
+
+/// Execute [`execute_nu_impl`] under its own mutation lock.
 ///
-/// Doctor's repair path used to call `execute_nu_impl` directly. The doctor's
-/// own lock was released before invoke, contradicting AGENTS.md ("Every mutating
-/// code path must acquire the mutation lock"). This wrapper re-acquires the
-/// lock so the repair path stays single-writer and races safely with `install`
-/// and `activate`.
+/// Doctor calls this after releasing the doctor lock. Unlike master's
+/// older wrapper, we must not pre-acquire the mutation lock here:
+/// `execute_nu_impl` already takes `setup_subcommand_lock`.
 pub fn execute_nu_repair(args: &NuSetupArgs, root: &Path) -> Result<()> {
-    let _lock = acquire_mutation_lock(root)?;
     execute_nu_impl(args, root)
 }
 
-/// Setup Nu without acquiring the mutation lock (caller must hold it).
 /// Reject combining `--skip-path` with an off-PATH registration command.
 ///
 /// Off-PATH registration (`use <path>` / `use path` / `--use-path`) MUST persist
@@ -219,6 +246,11 @@ fn reject_skip_path_for_off_path_registration(skip_path: bool) -> Result<()> {
 }
 
 pub(crate) fn execute_nu_impl(args: &NuSetupArgs, root: &Path) -> Result<()> {
+    let what = setup_action_lock_label(args);
+    setup_subcommand_lock(root, what, || execute_nu_impl_locked(args, root))
+}
+
+fn execute_nu_impl_locked(args: &NuSetupArgs, root: &Path) -> Result<()> {
     // COMPAT: remove in v0.3.0 — translate hidden legacy flags to subcommands
     if args.remove {
         eprintln!("warning: --remove is deprecated, use 'numan setup nu remove' instead");
@@ -247,12 +279,25 @@ pub(crate) fn execute_nu_impl(args: &NuSetupArgs, root: &Path) -> Result<()> {
             execute_use_existing(path, args.yes, root, ExecuteUseOpts::default())
         }
         None => {
-            // Default: install (latest or pinned version)
+            // Default: install (latest or pinned version). Canonicalize the
+            // version before bootstrap so whitespace / `v` prefixes cannot
+            // pass early validation then fail mid-install.
+            let version = match args.version.as_deref() {
+                Some(version) => {
+                    let stripped = version.trim().strip_prefix('v').unwrap_or(version.trim());
+                    Some(version_manager::normalize_version(stripped).with_context(|| {
+                        format!(
+                            "Invalid --version '{version}'; expected a semver Nu release like 0.113.1"
+                        )
+                    })?)
+                }
+                None => None,
+            };
             let options = NuSetupOptions {
                 yes: args.yes,
                 force: args.force,
                 skip_path: args.skip_path,
-                version: args.version.clone(),
+                version,
                 caller_consented_destructive: false,
                 is_tty: None,
             };
@@ -282,6 +327,11 @@ pub(crate) struct ExecuteUseOpts<'a> {
     /// contains "no undo") and decline by returning `Err`.
     #[allow(clippy::type_complexity)]
     pub(crate) confirm: Option<&'a dyn Fn(&str, &str) -> Result<()>>,
+    /// When `true`, registration skips persistent shell-profile / user-PATH
+    /// writes. Unit tests must set this so temporary directories never land in
+    /// the developer's real profile. Production callers leave the default
+    /// `false`.
+    pub(crate) skip_path: bool,
 }
 
 /// Validate a user-supplied Nushell binary before destructive operations
@@ -314,6 +364,20 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
 
     let managed_dir = bootstrap::managed_nu_dir(root);
     let managed_dir_was_present = managed_dir.is_dir();
+
+    // Fail closed for non-TTY without `--yes` before PATH mutation or wipe,
+    // including the managed-dir-absent path that only updates PATH.
+    if opts.confirm.is_none() {
+        require_tty_or_yes(
+            yes,
+            if managed_dir_was_present {
+                "managed Nushell wipe + PATH update"
+            } else {
+                "PATH Nu registration"
+            },
+        )?;
+    }
+
     if managed_dir_was_present {
         let resolved_path_nu = Path::new(&path_nu)
             .canonicalize()
@@ -347,13 +411,6 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
             nu_parent,
         );
         let cancel_msg = "Switch to PATH Nu cancelled; managed install kept intact.";
-        // Fail closed in non-interactive sessions without `--yes` unless a
-        // confirm seam is being used for testing/audit. This step wipes every
-        // managed Nu version and mutates PATH, so `confirm_or_bail`'s non-TTY
-        // auto-confirm must not silently proceed.
-        if opts.confirm.is_none() {
-            require_tty_or_yes(yes, "managed Nushell wipe + PATH update")?;
-        }
         // Gate on `!yes` so `confirm_or_bail`'s yes-skip contract holds
         // when callers inject a confirm seam for telemetry/audit.
         if !yes {
@@ -364,12 +421,11 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
         }
     }
 
-    snapshot_before_setup_mutation(root, SnapshotTrigger::Update)?;
-    remove_managed_nu_if_present(root)?;
+    snapshot_setup_mutation(root, SnapshotTrigger::Install)?;
     let options = NuSetupOptions {
         yes,
         force: false,
-        skip_path: false,
+        skip_path: opts.skip_path,
         version: None,
         // Hoist consent so register_existing_nu's inner PATH prompt is
         // suppressed -- only valid because the merged prompt above
@@ -377,7 +433,10 @@ fn execute_use_path(yes: bool, root: &Path, opts: ExecuteUseOpts<'_>) -> Result<
         caller_consented_destructive: managed_dir_was_present,
         is_tty: None,
     };
+    // Register (PATH + active marker) before removing the managed tree so a
+    // failed registration leaves the prior install intact.
     bootstrap::register_existing_nu(Path::new(&path_nu), root, &options)?;
+    remove_managed_nu_if_present(root)?;
     Ok(())
 }
 
@@ -396,9 +455,37 @@ fn execute_use_existing(
     // `execute_use_path`'s gate).
     let managed_dir = bootstrap::managed_nu_dir(root);
     let managed_dir_was_present = managed_dir.is_dir();
+
+    // Fail closed for non-TTY without `--yes` before PATH mutation or wipe.
+    if opts.confirm.is_none() {
+        require_tty_or_yes(
+            yes,
+            if managed_dir_was_present {
+                "managed Nushell wipe + PATH update"
+            } else {
+                "PATH Nu registration"
+            },
+        )?;
+    }
+
+    let resolved_path = std::fs::canonicalize(path)
+        .with_context(|| format!("Failed to resolve Nushell binary '{}'", path.display()))?;
     if managed_dir_was_present {
-        let resolved_path = std::fs::canonicalize(path)
-            .with_context(|| format!("Failed to resolve Nushell binary '{}'", path.display()))?;
+        let resolved_managed_dir = managed_dir.canonicalize().with_context(|| {
+            format!(
+                "Failed to resolve managed Nushell directory '{}'",
+                managed_dir.display()
+            )
+        })?;
+        if resolved_path.starts_with(&resolved_managed_dir) {
+            bail!(
+                "Refusing to register '{}': it resolves inside the managed install at '{}'. \
+                 Choose an external Nu binary, or run `numan setup nu remove` first.",
+                path.display(),
+                managed_dir.display()
+            );
+        }
+
         let nu_parent = resolved_path
             .parent()
             .map(|p| p.display().to_string())
@@ -412,13 +499,6 @@ fn execute_use_existing(
             nu_parent,
         );
         let cancel_msg = "Switch to existing Nushell cancelled; managed install kept intact.";
-        // Fail closed in non-interactive sessions without `--yes` unless a
-        // confirm seam is being used for testing/audit. This step wipes every
-        // managed Nu version and mutates PATH, so `confirm_or_bail`'s non-TTY
-        // auto-confirm must not silently proceed.
-        if opts.confirm.is_none() {
-            require_tty_or_yes(yes, "managed Nushell wipe + PATH update")?;
-        }
         if !yes {
             match opts.confirm {
                 Some(confirm_fn) => confirm_fn(&prompt, cancel_msg)?,
@@ -427,12 +507,11 @@ fn execute_use_existing(
         }
     }
 
-    snapshot_before_setup_mutation(root, SnapshotTrigger::Update)?;
-    remove_managed_nu_if_present(root)?;
+    snapshot_setup_mutation(root, SnapshotTrigger::Install)?;
     let options = NuSetupOptions {
         yes,
         force: false,
-        skip_path: false,
+        skip_path: opts.skip_path,
         version: None,
         // Hoist consent so register_existing_nu's inner PATH prompt is
         // suppressed -- only valid because the merged prompt above
@@ -440,7 +519,10 @@ fn execute_use_existing(
         caller_consented_destructive: managed_dir_was_present,
         is_tty: None,
     };
+    // Register (PATH + active marker) before removing the managed tree so a
+    // failed registration leaves the prior install intact.
     bootstrap::register_existing_nu(path, root, &options)?;
+    remove_managed_nu_if_present(root)?;
     Ok(())
 }
 
@@ -468,10 +550,11 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
         "Managed Nushell removal cancelled.",
     )?;
 
-    snapshot_before_setup_mutation(root, SnapshotTrigger::Remove)?;
+    snapshot_setup_mutation(root, SnapshotTrigger::Remove)?;
 
-    // Clear the active-version marker before removing the versioned tree so
-    // it cannot dangle at a now-missing binary (see `clear_active_version`).
+    // Clear the active-version marker immediately before removing the versioned
+    // tree so the marker cannot dangle at a now-missing binary. Must happen
+    // after confirm so cancel / no-op paths leave an existing marker alone.
     crate::nu::version_manager::clear_active_version(root)?;
 
     std::fs::remove_dir_all(&managed_dir).with_context(|| {
@@ -489,15 +572,11 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
 
 /// Silently remove the managed Nu directory if it exists (used by --use-existing).
 fn remove_managed_nu_if_present(root: &Path) -> Result<()> {
+    // Caller (`execute_use_path` / `execute_use_existing`) already persisted the
+    // off-tree active marker via `register_existing_nu`. Only remove the managed
+    // tree — do not clear the marker (that would undo the just-written selection).
     let managed_dir = bootstrap::managed_nu_dir(root);
     if managed_dir.is_dir() {
-        // Clear the active-version marker before removing the versioned tree so
-        // it cannot dangle at a now-missing binary. The caller
-        // (`execute_use_path`/`execute_use_existing`) writes a fresh off-tree
-        // marker afterwards via `register_existing_nu`; clearing first keeps
-        // state consistent even if that later write fails.
-        crate::nu::version_manager::clear_active_version(root)?;
-
         std::fs::remove_dir_all(&managed_dir).with_context(|| {
             format!(
                 "Failed to remove managed Nushell directory '{}'",
@@ -574,6 +653,10 @@ fn install_loader_file(loader_path: &Path, args: &LoaderArgs) -> Result<()> {
         assert_managed_file_owned(loader_path)?;
 
         if !args.force {
+            // Overwriting a divergent loader rewrites user-visible state.
+            // `confirm_or_bail` would auto-confirm on a pipe; require TTY or
+            // `--yes` so CI cannot clobber an existing loader silently.
+            require_tty_or_yes(args.yes, "loader.nu overwrite")?;
             confirm_or_bail(
                 &format!(
                     "loader.nu already exists at '{}'. Overwrite with the vendored copy?",
@@ -618,6 +701,10 @@ fn configure_config_nu(config_path: &Path, args: &LoaderArgs) -> Result<()> {
             return Ok(());
         }
 
+        // Appending to an existing config.nu is user-visible mutation.
+        // Fail closed in non-TTY sessions without `--yes` (confirm_or_auto
+        // would otherwise auto-confirm on a pipe).
+        require_tty_or_yes(args.yes, "config.nu loader source append")?;
         if !crate::util::confirm::confirm_or_auto(
             &format!("Append loader source line to '{}'?", config_path.display()),
             args.yes,
@@ -739,6 +826,41 @@ mod tests {
         assert_eq!(
             std::fs::read(&loader_path).unwrap(),
             VENDOR_LOADER.as_bytes()
+        );
+    }
+
+    #[test]
+    fn install_loader_refuses_divergent_overwrite_without_yes_on_non_tty() {
+        use std::io::IsTerminal as _;
+        if std::io::stdin().is_terminal() {
+            // Guard is only observable on non-TTY hosts; interactive sessions
+            // would prompt via confirm_or_bail instead of bailing here.
+            return;
+        }
+
+        let dir = TempDir::new().unwrap();
+        let loader_path = dir.path().join("loader.nu");
+        // Owned but divergent content so we reach the overwrite confirm path.
+        write_bytes_atomic(
+            &loader_path,
+            format!(
+                "{}# divergent managed loader\n",
+                crate::util::fs_safety::OWNERSHIP_MARKER
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+
+        let args = LoaderArgs {
+            force: false,
+            configure: false,
+            yes: false,
+        };
+        let err = install_loader_file(&loader_path, &args).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("non-interactive") || msg.contains("--yes"),
+            "expected fail-closed non-TTY guard, got: {msg}"
         );
     }
 
@@ -927,28 +1049,21 @@ esac\n";
         bin
     }
 
-    /// Save/restore process-global PATH around a closure so `prepend_*`
-    /// calls don't leak across tests.
-    #[cfg_attr(not(unix), allow(dead_code))]
-    fn run_with_path_snapshot<F, R>(body: F) -> R
-    where
-        F: FnOnce() -> R + std::panic::UnwindSafe,
-    {
-        let saved = std::env::var("PATH").ok();
-        let result = std::panic::catch_unwind(body);
-        match saved {
-            Some(p) => std::env::set_var("PATH", p),
-            None => std::env::remove_var("PATH"),
-        }
-        match result {
-            Ok(output) => output,
-            Err(panic) => std::panic::resume_unwind(panic),
+    /// Unit-test opts: skip persistent PATH writes so temp dirs never land
+    /// in the developer's shell profile.
+    #[cfg(unix)]
+    fn test_use_opts<'a>() -> ExecuteUseOpts<'a> {
+        ExecuteUseOpts {
+            validate: None,
+            confirm: None,
+            skip_path: true,
         }
     }
 
     #[cfg(unix)]
     #[test]
     fn execute_use_existing_passes_with_yes_and_drops_managed() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("numan-root");
         std::fs::create_dir_all(&root).unwrap();
@@ -960,9 +1075,7 @@ esac\n";
 
         let fake_nu = write_fake_nu(dir.path());
 
-        run_with_path_snapshot(std::panic::AssertUnwindSafe(|| {
-            execute_use_existing(&fake_nu, true, &root, ExecuteUseOpts::default()).unwrap();
-        }));
+        execute_use_existing(&fake_nu, true, &root, test_use_opts()).unwrap();
 
         assert!(
             !managed.is_file(),
@@ -978,6 +1091,7 @@ esac\n";
     #[cfg(unix)]
     #[test]
     fn execute_use_existing_no_prompts_above_when_no_managed_install() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("numan-root");
         std::fs::create_dir_all(&root).unwrap();
@@ -987,9 +1101,7 @@ esac\n";
         // No managed tree, so the destructive-removal confirm prompt is
         // gated off (`managed_dir_was_present == false`). End-to-end
         // success via register_existing_nu is the assertion.
-        run_with_path_snapshot(std::panic::AssertUnwindSafe(|| {
-            execute_use_existing(&fake_nu, true, &root, ExecuteUseOpts::default()).unwrap();
-        }));
+        execute_use_existing(&fake_nu, true, &root, test_use_opts()).unwrap();
         assert!(
             !root.join("tools/nushell").exists(),
             "no managed tree initially -> nothing to remove"
@@ -998,7 +1110,36 @@ esac\n";
 
     #[cfg(unix)]
     #[test]
+    fn execute_use_existing_rejects_binary_inside_managed_dir() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let managed = root.join("tools").join("nushell").join("nu");
+        std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+        // Real executable probe would fail; write a script so validation
+        // can succeed before the containment guard runs.
+        let fake_nu = write_fake_nu(dir.path());
+        std::fs::copy(&fake_nu, &managed).unwrap();
+
+        let err = execute_use_existing(&managed, true, &root, test_use_opts())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("inside the managed install") || err.contains("managed"),
+            "expected managed-dir containment rejection, got: {err}"
+        );
+        assert!(
+            managed.is_file(),
+            "managed binary must remain after rejected registration"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn execute_use_existing_decline_keeps_managed_intact_and_prompt_says_no_undo() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("numan-root");
         std::fs::create_dir_all(&root).unwrap();
@@ -1020,10 +1161,9 @@ esac\n";
         let opts = ExecuteUseOpts {
             validate: None,
             confirm: Some(&mock_confirm),
+            skip_path: true,
         };
-        let result = run_with_path_snapshot(std::panic::AssertUnwindSafe(|| {
-            execute_use_existing(&fake_nu, false, &root, opts)
-        }));
+        let result = execute_use_existing(&fake_nu, false, &root, opts);
         let err_msg = match result {
             Ok(()) => panic!("expected Err from declined confirm"),
             Err(e) => format!("{e:#}"),
@@ -1047,6 +1187,19 @@ esac\n";
         assert!(
             root.join("tools/nushell").is_dir(),
             "managed tree must remain intact after decline"
+        );
+    }
+
+    #[test]
+    fn execute_nu_rejects_unparseable_version_flag() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        std::fs::create_dir_all(&root).unwrap();
+        let args = NuSetupArgs::install(Some("../evil".to_string()), false, true, true);
+        let err = execute_nu_impl(&args, &root).unwrap_err().to_string();
+        assert!(
+            err.contains("Invalid --version") || err.contains("Invalid Nu version"),
+            "expected unparseable --version to fail closed before network/install: {err}"
         );
     }
 }

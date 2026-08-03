@@ -236,6 +236,17 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
     let normalized = version_manager::normalize_version(version)
         .with_context(|| format!("Invalid Nu version '{}' for installation", version))?;
     let dest_dir = version_manager::version_install_dir(root, &normalized);
+    // Never overwrite an existing versioned payload in place (including
+    // `--force` reinstalls). Callers must remove the version first or install
+    // a different version so the original binary remains intact.
+    if dest_dir.exists() {
+        bail!(
+            "managed Nu {} already exists at {}; refuse to overwrite in place \
+             (run `numan setup nu remove` or install a different version)",
+            normalized,
+            dest_dir.display()
+        );
+    }
     std::fs::create_dir_all(&dest_dir).with_context(|| {
         format!(
             "Failed to create managed Nushell version directory '{}'",
@@ -474,8 +485,35 @@ pub fn register_existing_nu(
         );
     }
 
-    let version = validate_nushell_binary(&resolved)
+    // Fail closed on non-TTY without `--yes` before spawning Nu for version
+    // probing (and before PATH / active-marker mutation). When the caller has
+    // already collected destructive consent, skip this gate — they already
+    // ran `require_tty_or_yes` upstream.
+    if !options.caller_consented_destructive {
+        let is_tty = options
+            .is_tty
+            .unwrap_or_else(|| std::io::stdin().is_terminal());
+        crate::util::confirm::require_tty_or_yes_with_tty(
+            options.yes,
+            "off-path Nu PATH registration",
+            is_tty,
+        )?;
+    }
+
+    let probed = validate_nushell_binary(&resolved)
         .with_context(|| format!("'{}' is not a runnable Nushell binary", binary.display()))?;
+    // Prefer the probed Nu version; if it is not semver-safe for the marker,
+    // fall back to a valid build-metadata label instead of failing after PATH
+    // mutation or writing an unreadable marker.
+    let version = match version_manager::normalize_version(&probed) {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!(
+                "(audit) Nu version '{probed}' is not semver; recording active marker as 0.0.0+external."
+            );
+            "0.0.0+external".to_string()
+        }
+    };
 
     let parent = path_parent_for_registration(input.as_path(), &resolved)?;
 
@@ -489,16 +527,6 @@ pub fn register_existing_nu(
         // backward-compatible UX.
         eprintln!("{}", crate::util::confirm::hoisted_audit_message(&parent));
     } else {
-        // Fail closed on non-TTY without `--yes`. `confirm_or_bail` alone
-        // would auto-confirm and mutate PATH / active-version state.
-        let is_tty = options
-            .is_tty
-            .unwrap_or_else(|| std::io::stdin().is_terminal());
-        crate::util::confirm::require_tty_or_yes_with_tty(
-            options.yes,
-            "off-path Nu PATH registration",
-            is_tty,
-        )?;
         println!(
             "This will add '{}' to your user PATH so Nushell can be found.",
             parent.display()
@@ -740,35 +768,58 @@ where
     .filter(|dest| dest.is_file());
 
     if let Some(dest) = already_installed.as_ref() {
-        if !options.force {
-            if options.yes {
-                // PATH persistence mutates user shell state; snapshot first.
-                snapshot_before_nu_setup(
-                    root,
-                    "Failed to create pre-mutation snapshot for existing `numan setup nu`",
-                )?;
-                if let Some(parent) = dest.parent() {
-                    prepend_process_path(parent)?;
-                }
-                if !options.skip_path {
-                    persist_user_path(dest)?;
-                }
-                println!(
-                    "Nushell already installed at '{}' (unchanged).",
-                    dest.display()
-                );
-                return Ok(dest.clone());
-            }
+        // Never overwrite an existing managed payload in place — even `--force`.
+        // Users must remove first (`numan setup nu remove`) or pick another version.
+        if options.force {
+            bail!(
+                "Nushell is already installed at '{}'; refusing in-place overwrite even with --force. \
+                 Run `numan setup nu remove` then install again, or choose a different version.",
+                dest.display()
+            );
+        }
 
+        if !options.yes {
+            let is_tty = options
+                .is_tty
+                .unwrap_or_else(|| std::io::stdin().is_terminal());
+            crate::util::confirm::require_tty_or_yes_with_tty(
+                options.yes,
+                "Nushell setup",
+                is_tty,
+            )?;
             crate::util::confirm::confirm_or_bail(
                 &format!(
-                    "Nushell is already installed at '{}'. Reinstall {version_label} release?",
+                    "Nushell is already installed at '{}'. Configure shell integration?",
                     dest.display()
                 ),
-                false,
+                options.yes,
                 "Nushell setup cancelled.",
             )?;
         }
+
+        // PATH/profile mutation still needs a PreMutation snapshot even
+        // when the managed binary itself is left in place.
+        create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Install,
+            None,
+            None,
+        )
+        .with_context(|| {
+            "Failed to create pre-mutation snapshot for already-installed `numan setup nu`"
+        })?;
+        if let Some(parent) = dest.parent() {
+            prepend_process_path(parent)?;
+        }
+        if !options.skip_path {
+            persist_user_path(dest)?;
+        }
+        println!(
+            "Nushell already installed at '{}' (unchanged).",
+            dest.display()
+        );
+        return Ok(dest.clone());
     }
 
     println!(
@@ -1023,6 +1074,71 @@ mod tests {
     }
 
     #[test]
+    fn forced_reinstall_refuses_in_place_overwrite_and_preserves_payload() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let zip_path = root.join("nu-test.zip");
+        let original = b"original-nu-payload-v1";
+
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zip = ZipWriter::new(file);
+            let options = SimpleFileOptions::default();
+            let inner = format!("nu-0.108.0/{}", nu_binary_name());
+            zip.start_file(&inner, options).unwrap();
+            zip.write_all(original).unwrap();
+            zip.finish().unwrap();
+        }
+
+        let installed = install_from_archive(&zip_path, root, "0.108.0").unwrap();
+        assert_eq!(std::fs::read(&installed).unwrap(), original);
+
+        // Second archive would clobber if copy-over-existing were allowed.
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zip = ZipWriter::new(file);
+            let options = SimpleFileOptions::default();
+            let inner = format!("nu-0.108.0/{}", nu_binary_name());
+            zip.start_file(&inner, options).unwrap();
+            zip.write_all(b"replacement-payload-v2").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let err = install_from_archive(&zip_path, root, "0.108.0").unwrap_err();
+        assert!(
+            err.to_string().contains("refuse to overwrite in place"),
+            "unexpected error: {err:#}"
+        );
+        assert_eq!(
+            std::fs::read(&installed).unwrap(),
+            original,
+            "original managed payload must remain unchanged after refused reinstall"
+        );
+
+        // Orchestrator `--force` path must also refuse before mutating.
+        let platform = Platform::detect();
+        let options = NuSetupOptions {
+            yes: true,
+            force: true,
+            skip_path: true,
+            version: Some("0.108.0".to_string()),
+            caller_consented_destructive: false,
+            is_tty: None,
+        };
+        let force_err = execute_nu_setup_with_installer(root, &platform, &options, |_, _| {
+            panic!("installer must not run when force reinstall is refused");
+        })
+        .unwrap_err();
+        assert!(
+            force_err
+                .to_string()
+                .contains("refusing in-place overwrite even with --force"),
+            "unexpected force error: {force_err:#}"
+        );
+        assert_eq!(std::fs::read(&installed).unwrap(), original);
+    }
+
+    #[test]
     fn execute_nu_setup_with_pinned_version_persists_active_marker() {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
@@ -1067,6 +1183,53 @@ mod tests {
     }
 
     #[test]
+    fn execute_nu_setup_already_installed_non_tty_requires_yes() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let platform = Platform::detect();
+
+        // Pre-create installed version
+        let bin = version_manager::version_binary(root, "0.113.1");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        std::fs::write(&bin, b"fake nu").unwrap();
+
+        // Without `--yes` on injected non-TTY, already-installed PATH configure must fail-closed.
+        let options = NuSetupOptions {
+            yes: false,
+            force: false,
+            skip_path: true,
+            version: Some("0.113.1".to_string()),
+            caller_consented_destructive: false,
+            is_tty: Some(false),
+        };
+        let err = execute_nu_setup_with_installer(root, &platform, &options, |_, _| {
+            panic!("installer must not run when already installed");
+        })
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("non-interactive") || msg.contains("Refusing destructive"),
+            "expected non-TTY refusal, got: {msg}"
+        );
+
+        // With `--yes`, it succeeds and returns the binary path
+        let options_yes = NuSetupOptions {
+            yes: true,
+            force: false,
+            skip_path: true,
+            version: Some("0.113.1".to_string()),
+            caller_consented_destructive: false,
+            is_tty: Some(false),
+        };
+        let res = execute_nu_setup_with_installer(root, &platform, &options_yes, |_, _| {
+            panic!("installer must not run when already installed");
+        })
+        .unwrap();
+        assert_eq!(res, bin);
+    }
+
+    #[test]
     fn execute_nu_setup_refuses_non_tty_without_yes_and_skips_installer() {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
@@ -1094,29 +1257,15 @@ mod tests {
 
     #[test]
     fn register_existing_nu_refuses_non_tty_without_yes_before_path_mutation() {
-        let nu_name = nu_binary_name();
-        let Some(src) = std::env::var_os("PATH").and_then(|path| {
-            std::env::split_paths(&path)
-                .map(|dir| dir.join(nu_name))
-                .find(|p| p.is_file() && validate_nushell_binary(p).is_ok())
-        }) else {
-            // Unit CI without Nu on PATH cannot exercise the post-validate gate.
-            return;
-        };
-
+        // Use a placeholder file (not a real Nu binary). The non-TTY gate runs
+        // before `validate_nushell_binary`, so this unit test must not spawn Nu.
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
         let dir = TempDir::new().unwrap();
         let root = dir.path();
         let existing_dir = dir.path().join("existing-nu");
         std::fs::create_dir_all(&existing_dir).unwrap();
-        let existing = existing_dir.join(nu_name);
-        std::fs::copy(&src, &existing).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&existing).unwrap().permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&existing, perms).unwrap();
-        }
+        let existing = existing_dir.join(nu_binary_name());
+        std::fs::write(&existing, b"not a real nu binary").unwrap();
 
         let before_path = std::env::var_os("PATH");
         let options = NuSetupOptions {

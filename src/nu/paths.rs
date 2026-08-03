@@ -302,19 +302,53 @@ pub fn find_nu_executable() -> Result<String> {
 /// 4. PATH lookup.
 /// 5. Off-path discover (bail with a corrective hint).
 ///
-/// The marker consultation is tolerant: if either record path is stale
-/// (file moved or replaced), we fall through to PATH rather than bail —
-/// keeping the lookup self-healing instead of surfacing a hard error for
-/// what is really a stale hint. Dangling markers are still surfaced by
-/// `active_nu_binary` / `numan doctor` for the on-tree authoritative check.
+/// Stale marker *paths* remain tolerant: if a recorded on-tree/off-tree path
+/// is missing (file moved or replaced), we fall through rather than bail —
+/// keeping the lookup self-healing. A present but unreadable/malformed marker
+/// fails loud (no silent PATH fallback). Dangling on-tree markers are also
+/// surfaced by `active_nu_binary` / `numan doctor`.
 pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
     let managed = managed_nu_binary(root);
     if managed.is_file() {
         return Ok(managed.to_string_lossy().into_owned());
     }
 
-    // Consult the active-version marker as a hint table (see function doc).
-    if let Ok(Some(active)) = version_manager::read_active_version(root) {
+    // Don't swallow corrupt-marker errors. A present but
+    // malformed marker should fail loudly so `numan init` / loader setup
+    // can't silently fall back to PATH Nu because the marker happens
+    // to be unreadable.
+    let marker = match version_manager::read_active_version(root) {
+        Ok(Some(m)) => Some(m),
+        Ok(None) => None,
+        // A torn or tampered active-version.json must fail loud, not
+        // silently fall back to PATH Nu (which produces the "wrong Nu"
+        // bug PR #22 already gates against). The only failure mode we
+        // tolerate here is `io::ErrorKind::NotFound` from a missing
+        // marker file (TOCTOU between exists() and read). Any other
+        // failure is escalated with an audit-grade fix hint.
+        Err(version_manager::VersionManagerError::ReadActiveMarker { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            None
+        }
+        Err(version_manager::VersionManagerError::ReadActiveMarker { source, .. }) => {
+            return Err(anyhow::anyhow!(
+                "Failed to read active-version marker (io: {}); \
+                 a torn marker must not silently fall back to PATH Nu. \
+                 Run `numan doctor --fix` to reconcile.",
+                source
+            ));
+        }
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "Failed to parse active-version marker: {}. \
+                 A malformed marker must not silently fall back to PATH Nu. \
+                 Run `numan doctor --fix` to reconcile.",
+                e
+            ));
+        }
+    };
+    if let Some(active) = marker.as_ref() {
         // 1. on-tree version-binary, if the version is well-formed and its
         //    installed binary still exists.
         if let Ok(version) = version_manager::normalize_version(&active.version) {
@@ -333,13 +367,13 @@ pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
     }
 
     // 3. Any on-tree/off-tree installed version (covers direct installs where
-    //    no active marker has been written yet).
-    if let Ok(versions) = version_manager::list_installed_versions(root) {
-        for version in versions {
-            if let Some(binary) = version_manager::resolve_installed_version(root, &version) {
-                if binary.is_file() {
-                    return Ok(binary.to_string_lossy().into_owned());
-                }
+    //    no active marker has been written yet). Propagate listing errors —
+    //    do not soft-fall through to PATH when version state is unreadable.
+    let versions = version_manager::list_installed_versions(root)?;
+    for version in versions {
+        if let Some(binary) = version_manager::resolve_installed_version(root, &version) {
+            if binary.is_file() {
+                return Ok(binary.to_string_lossy().into_owned());
             }
         }
     }
@@ -351,10 +385,10 @@ pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
     if let Some(off_path) = discover_nu_off_path() {
         bail!(
             "Nu not found on PATH or in '{}', but an install exists at '{}'. \
-             Add it to PATH with: numan setup nu use {}",
+             Add it to PATH with: {}",
             managed.display(),
             off_path.display(),
-            off_path.display()
+            crate::util::hints::setup_nu_use_existing(&off_path)
         );
     }
 
@@ -567,17 +601,13 @@ mod tests {
 
     #[test]
     fn find_nu_executable_with_root_errors_when_nu_absent() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("numan-root");
         std::fs::create_dir_all(&root).unwrap();
 
-        let saved_path = std::env::var("PATH").ok();
         std::env::set_var("PATH", "");
         let result = find_nu_executable_with_root(&root);
-        match saved_path {
-            Some(path) => std::env::set_var("PATH", path),
-            None => std::env::remove_var("PATH"),
-        }
 
         let err = result.unwrap_err();
         assert!(err.to_string().contains("numan setup nu"));
@@ -585,6 +615,7 @@ mod tests {
 
     #[test]
     fn find_nu_executable_with_root_prefers_managed_over_path() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("numan-root");
         let managed = crate::nu::bootstrap::managed_nu_binary(&root);
@@ -596,14 +627,9 @@ mod tests {
         let path_nu = path_dir.join(if cfg!(windows) { "nu.exe" } else { "nu" });
         std::fs::write(&path_nu, b"path nu").unwrap();
 
-        let saved_path = std::env::var("PATH").ok();
         std::env::set_var("PATH", &path_dir);
 
         let resolved = find_nu_executable_with_root(&root).unwrap();
-        match saved_path {
-            Some(path) => std::env::set_var("PATH", path),
-            None => std::env::remove_var("PATH"),
-        }
 
         assert_eq!(
             std::fs::canonicalize(resolved).unwrap(),
@@ -812,6 +838,7 @@ mod tests {
 
     #[test]
     fn find_nu_executable_with_root_prefers_marker_ontree_hint() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("numan-root");
         std::fs::create_dir_all(&root).unwrap();
@@ -826,14 +853,8 @@ mod tests {
 
         crate::nu::version_manager::write_active_version(&root, "0.113.1").unwrap();
 
-        let saved = std::env::var("PATH").ok();
         std::env::set_var("PATH", "");
         let resolved = find_nu_executable_with_root(&root).unwrap();
-        if let Some(p) = saved {
-            std::env::set_var("PATH", p)
-        } else {
-            std::env::remove_var("PATH");
-        }
 
         assert_eq!(
             std::fs::canonicalize(resolved).unwrap(),
@@ -843,6 +864,7 @@ mod tests {
 
     #[test]
     fn find_nu_executable_with_root_uses_marker_offtree_when_ontree_missing() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("numan-root");
         std::fs::create_dir_all(&root).unwrap();
@@ -854,14 +876,8 @@ mod tests {
         crate::nu::version_manager::write_active_version_with_binary(&root, "0.113.1", &off_tree)
             .unwrap();
 
-        let saved = std::env::var("PATH").ok();
         std::env::set_var("PATH", "");
         let resolved = find_nu_executable_with_root(&root).unwrap();
-        if let Some(p) = saved {
-            std::env::set_var("PATH", p)
-        } else {
-            std::env::remove_var("PATH");
-        }
 
         assert_eq!(
             std::fs::canonicalize(resolved).unwrap(),
@@ -871,6 +887,7 @@ mod tests {
 
     #[test]
     fn find_nu_executable_with_root_falls_through_when_marker_paths_stale() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("numan-root");
         std::fs::create_dir_all(&root).unwrap();
@@ -885,16 +902,35 @@ mod tests {
         )
         .unwrap();
 
-        let saved = std::env::var("PATH").ok();
         std::env::set_var("PATH", "");
         let result = find_nu_executable_with_root(&root);
-        if let Some(p) = saved {
-            std::env::set_var("PATH", p)
-        } else {
-            std::env::remove_var("PATH");
-        }
 
         let err = result.unwrap_err();
         assert!(err.to_string().contains("numan setup nu"));
+    }
+
+    #[test]
+    fn find_nu_executable_with_root_errors_on_malformed_active_marker() {
+        let _path_guard = crate::util::test_paths::PathRestoreGuard::new();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("numan-root");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let marker = crate::nu::version_manager::active_version_path(&root);
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, b"{ not json").unwrap();
+
+        // Even with Nu on PATH, a malformed marker must fail loud — no soft
+        // fallthrough that would hide the torn selection state.
+        let err = find_nu_executable_with_root(&root).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("doctor --fix"),
+            "malformed marker must point at doctor --fix, got: {msg}"
+        );
+        assert!(
+            msg.contains("parse") || msg.contains("malformed") || msg.contains("Malformed"),
+            "malformed marker must describe parse failure, got: {msg}"
+        );
     }
 }
