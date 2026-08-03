@@ -31,12 +31,20 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ref_file=$(mktemp)
-          curl --fail-with-body --silent --show-error \
+          status=$(curl --silent --show-error --output "$ref_file" --write-out "%{http_code}" \
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             -H "User-Agent: numan-ci" \
-            -o "$ref_file" \
-            "https://api.github.com/repos/tonythethompson/numan/git/refs/tags/${CONTRACT_TAG}"
+            "https://api.github.com/repos/tonythethompson/numan/git/refs/tags/${CONTRACT_TAG}")
+          if [ "$status" = "404" ]; then
+            echo "::warning::Tag $CONTRACT_TAG does not exist yet; skipping SHA resolution check."
+            exit 0
+          fi
+          if [ "$status" != "200" ]; then
+            echo "::error::GitHub API returned HTTP $status for tag $CONTRACT_TAG."
+            cat "$ref_file"
+            exit 1
+          fi
           object_type=$(jq -r '.object.type' "$ref_file")
           tagged_sha=$(jq -r '.object.sha' "$ref_file")
           if [ "$object_type" = "tag" ]; then
