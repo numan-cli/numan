@@ -67,6 +67,7 @@ fn setup_nu_uses_injected_installer_without_network() {
             skip_path: true,
             version: None,
             caller_consented_destructive: false,
+            is_tty: None,
         },
         installer,
     )
@@ -266,5 +267,44 @@ fn setup_nu_rejects_legacy_use_existing_with_skip_path() {
     assert!(
         err.to_string().contains("--skip-path"),
         "unexpected error: {err}"
+    );
+}
+
+/// Golden-string stability test for the hoisted-consent audit trail.
+///
+/// The literal text emitted when `register_existing_nu` runs with
+/// `caller_consented_destructive` is part of the public contract: safe-batch
+/// automation greps `(audit)` lines out of stderr to reason about which
+/// consent decision was made. Any accidental copy-edit would silently break
+/// that grep, so the literal string is pinned here. Update this test
+/// deliberately and in the same commit as the helper's text change.
+#[test]
+fn register_existing_nu_audit_text_is_stable() {
+    use numan_cli::util::confirm::hoisted_audit_message;
+    use std::path::Path;
+
+    let parent = Path::new("/usr/local/bin");
+    let actual = hoisted_audit_message(parent);
+    assert_eq!(
+        actual,
+        format!(
+            "(audit) prompt hoisted; skipping internal PATH-confirmation prompt \
+             for '{}' (caller has already gathered destructive-step consent).",
+            parent.display()
+        )
+    );
+
+    // Empty parent path: a corner case the future hoist surfaces (setup nu
+    // remove, install <v> one-shot) might pass through. The helper must still
+    // return a stable shape; an empty `display()` renders as `""`.
+    let empty_parent = Path::new("");
+    let empty = hoisted_audit_message(empty_parent);
+    assert_eq!(
+        empty,
+        format!(
+            "(audit) prompt hoisted; skipping internal PATH-confirmation prompt \
+             for '{}' (caller has already gathered destructive-step consent).",
+            empty_parent.display()
+        )
     );
 }
