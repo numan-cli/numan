@@ -1359,39 +1359,49 @@ fn apply_repairs(
                 reason: Some("snapshot_unavailable".to_string()),
             });
         } else {
-            let journal_packages = PendingPluginDeactivate::load(root)?
-                .map(|journal| {
-                    journal
-                        .entries
-                        .iter()
-                        .map(|entry| entry.package_id.clone())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            if journal_packages.is_empty() {
-                records.push(RepairRecord {
-                    id,
-                    status: RepairStatus::Skipped,
-                    reason: Some("no_pending_plugin_deactivate_journal".to_string()),
-                });
-            } else {
-                let deactivate_args = DeactivateArgs {
-                    packages: journal_packages,
-
-                    verbose: false,
-                };
-                let deactivate_fn = options.deactivate_repair.unwrap_or(deactivate_execute);
-                match deactivate_fn(&deactivate_args, root) {
-                    Ok(()) => records.push(RepairRecord {
-                        id,
-                        status: RepairStatus::Applied,
-                        reason: None,
-                    }),
-                    Err(e) => records.push(RepairRecord {
+            match PendingPluginDeactivate::load(root) {
+                Err(e) => {
+                    records.push(RepairRecord {
                         id,
                         status: RepairStatus::Failed,
                         reason: Some(e.to_string()),
-                    }),
+                    });
+                }
+                Ok(journal) => {
+                    let journal_packages = journal
+                        .map(|journal| {
+                            journal
+                                .entries
+                                .iter()
+                                .map(|entry| entry.package_id.clone())
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    if journal_packages.is_empty() {
+                        records.push(RepairRecord {
+                            id,
+                            status: RepairStatus::Skipped,
+                            reason: Some("no_pending_plugin_deactivate_journal".to_string()),
+                        });
+                    } else {
+                        let deactivate_args = DeactivateArgs {
+                            packages: journal_packages,
+                            verbose: false,
+                        };
+                        let deactivate_fn = options.deactivate_repair.unwrap_or(deactivate_execute);
+                        match deactivate_fn(&deactivate_args, root) {
+                            Ok(()) => records.push(RepairRecord {
+                                id,
+                                status: RepairStatus::Applied,
+                                reason: None,
+                            }),
+                            Err(e) => records.push(RepairRecord {
+                                id,
+                                status: RepairStatus::Failed,
+                                reason: Some(e.to_string()),
+                            }),
+                        }
+                    }
                 }
             }
         }

@@ -71,18 +71,20 @@ Doctor does **not** hold one lock for the entire repair pass end-to-end.
 A PreMutation snapshot (`SnapshotTrigger::Doctor`) is taken after the lock is
 acquired and before layout/config writes. If snapshot creation fails (for
 example a malformed lockfile or missing payload revision), doctor records
-`snapshot.pre_mutation` as failed, continues with independent `layout.*` and
-`registry.none` repairs, and skips nested mutations that need a PreMutation
-baseline (`init` / `setup` / `registry sync` / `activate` / `deactivate`) with
-reason `snapshot_unavailable`.
+`snapshot.pre_mutation` as failed, continues with independent `layout.*`,
+`nu.active_version.malformed` cleanup, and `registry.none` repairs, and skips
+nested mutations that need a PreMutation baseline (`nu_paths.missing` → `init`,
+plus `setup` / `registry sync` / `activate` / `deactivate`) with reason
+`snapshot_unavailable`.
 
 Repair steps run in this **order** (each step re-validates only what it changed):
 
 | Tier | Prompt? | Finding IDs | Action |
 |------|---------|-------------|--------|
-| **auto** | Never | `layout.*` (missing dirs), `nu.active_version.malformed`, `nu_paths.missing` | `create_dir_all` for layout; clear invalid `nu_state/active-version.json`; `numan init` |
+| **auto** | Never | `layout.*` (missing dirs), `nu.active_version.malformed` | Independent of PreMutation success: `create_dir_all` for layout; clear invalid `nu_state/active-version.json` via `clear_active_version` |
+| **auto** | Never | `nu_paths.missing` | `numan init` (skipped with `snapshot_unavailable` when PreMutation fails) |
 | **auto** | Never | `registry.index_missing` | `numan registry sync` |
-| **auto** | Never | `registry.none` (production trust root only) | Add official registry via same path as `numan init` |
+| **auto** | Never | `registry.none` (production trust root only) | Add official registry via same path as `numan init` (continues even when PreMutation fails) |
 | **manual** | Never auto | `nu.binary.missing_on_path` | Print fix hint (`numan setup nu`); doctor never downloads managed Nu without explicit user opt-in |
 | **confirm** | Explicit consent when managed Nu exists | `nu.binary.found_off_path` | `numan setup nu use <path>` (adds existing install to PATH; doctor never passes `--yes`, so a managed wipe stays fail-closed / interactive) |
 | **confirm** | Never (applied in default mode) | `nu_paths.drift`, `nu_paths.vendor_drift` | `numan init --refresh` |
