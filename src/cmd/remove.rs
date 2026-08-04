@@ -35,6 +35,14 @@ fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> 
     // Refuse unattended (non-TTY) sessions without explicit --yes so safe-batch
     // automation has to opt in; interactive sessions keep the existing flow.
     crate::util::confirm::require_tty_or_yes_with_seam(args.yes, "package removal", is_tty)?;
+    crate::util::confirm::confirm_or_bail(
+        &format!(
+            "Remove package '{}' ? This deletes its payload.",
+            args.package
+        ),
+        args.yes,
+        "Cancelled.",
+    )?;
 
     let _lock = acquire_mutation_lock(root)?;
 

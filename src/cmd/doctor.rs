@@ -1185,6 +1185,35 @@ fn apply_repairs(
 
     drop(lock.take());
 
+    // Reconcile pending migration journals BEFORE off-PATH Nu registration.
+    // A Prepared orphan empty `<version>/` under tools/nushell makes
+    // `setup nu use` refuse without `--force`; cleaning it first lets one
+    // `doctor --fix` pass complete both repairs.
+    if findings
+        .iter()
+        .any(|f| f.id == "journal.migration_pending" && f.severity == Severity::Warn)
+    {
+        let id = "journal.migration_repaired".to_string();
+        let _migration_repair_lock = acquire_mutation_lock(root)?;
+        match migration_journal::reconcile(root) {
+            Ok(Some(_)) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Applied,
+                reason: None,
+            }),
+            Ok(None) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Skipped,
+                reason: None,
+            }),
+            Err(e) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Failed,
+                reason: Some(e.to_string()),
+            }),
+        }
+    }
+
     if findings
         .iter()
         .any(|f| f.id == "nu.binary.found_off_path" && f.severity == Severity::Warn)
@@ -2386,14 +2415,36 @@ mod tests {
         .save(root)
         .unwrap();
 
-        let args = DoctorArgs {
+        // Capture the findings first so we can call apply_repairs directly and
+        // inspect the returned RepairRecord list.
+        let scan_args = DoctorArgs {
+            scan: true,
+            json: false,
+            nupm_home: None,
+        };
+        let report = run_checks_with_options(&scan_args, root, &test_doctor_options()).unwrap();
+
+        let fix_args = DoctorArgs {
             scan: false,
             json: false,
             nupm_home: None,
         };
-        let _ = execute_with_options(&args, root, test_doctor_options()).unwrap();
+        let records =
+            apply_repairs(&fix_args, root, &report.findings, &test_doctor_options()).unwrap();
 
-        // After `doctor --fix`: the empty subdir AND the journal must be gone.
+        // The repair record for the migration journal must be Applied.
+        let rec = records
+            .iter()
+            .find(|r| r.id == "journal.migration_repaired")
+            .expect("journal.migration_repaired repair record must be present");
+        assert_eq!(
+            rec.status,
+            RepairStatus::Applied,
+            "migration journal repair must be Applied, got: {:?}",
+            rec.status
+        );
+
+        // After repair: the empty subdir AND the journal must be gone.
         assert!(
             !tools.join("0.113.1").exists(),
             "empty versioned subdir must be removed by reconcile"
@@ -2401,6 +2452,51 @@ mod tests {
         assert!(
             PendingMigration::load(root).unwrap().is_none(),
             "journal must be cleared by reconcile"
+        );
+    }
+
+    /// A well-formed journal with an unknown `schema_version` must surface a
+    /// `journal.migration_invalid` finding (Error severity, Manual repair tier)
+    /// and must NOT produce a `journal.migration_pending` finding.
+    #[test]
+    fn doctor_reports_unsupported_schema_version_as_invalid() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Construct a well-formed JSON journal with an unsupported schema_version.
+        let journal_path = PendingMigration::journal_path(root);
+        std::fs::create_dir_all(journal_path.parent().unwrap()).unwrap();
+        let content = serde_json::json!({
+            "schema_version": 9999,
+            "version": "0.113.1",
+            "stage": "prepared"
+        });
+        std::fs::write(&journal_path, serde_json::to_vec(&content).unwrap()).unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let invalid = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_invalid")
+            .expect("journal.migration_invalid must be reported for unknown schema_version");
+        assert_eq!(invalid.severity, Severity::Error);
+        assert_eq!(invalid.repair, RepairTier::Manual);
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.id != "journal.migration_pending"),
+            "migration_pending must NOT be reported alongside migration_invalid"
         );
     }
 

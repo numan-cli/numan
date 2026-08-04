@@ -46,7 +46,8 @@ pub enum VersionManagerError {
     #[error("Invalid Nu version '{version}'; expected X.Y.Z")]
     InvalidVersion { version: String },
     #[error(
-        "Refusing to persist active-version marker with `..` in binary path '{path}'          (path-traversal segments would let a tampered marker escape the managed tree)."
+        "Refusing to persist active-version marker with `..` in binary path '{path}' \
+         (path traversal would let a tampered marker escape the managed tree)."
     )]
     PathTraversal { path: String },
     #[error("Failed to read Nu versions directory '{path}'")]
@@ -62,7 +63,10 @@ pub enum VersionManagerError {
         source: std::io::Error,
     },
     #[error(
-        "Active Nu version '{version}' is set but neither the on-tree binary at '{on_tree}'          nor the recorded off-tree path '{off_tree}' is present.          Run 'numan setup nu' to install the selected version or          'numan use <version>' / 'numan use latest' to choose a different one."
+        "Active Nu version '{version}' is set but neither the on-tree binary at '{on_tree}' \
+         nor the recorded off-tree path '{off_tree}' is present. \
+         Run 'numan setup nu' to install the selected version or \
+         'numan use <version>' / 'numan use latest' to choose a different one."
     )]
     DanglingActiveWithOffTree {
         version: String,
@@ -70,7 +74,9 @@ pub enum VersionManagerError {
         off_tree: String,
     },
     #[error(
-        "Active Nu version '{version}' is set but the on-tree binary at '{on_tree}' is missing.          Run 'numan setup nu' to install the selected version or          'numan use <version>' / 'numan use latest' to choose a different one."
+        "Active Nu version '{version}' is set but the on-tree binary at '{on_tree}' is missing. \
+         Run 'numan setup nu' to install the selected version or \
+         'numan use <version>' / 'numan use latest' to choose a different one."
     )]
     DanglingActive { version: String, on_tree: String },
 }
@@ -341,12 +347,20 @@ pub fn list_installed_versions(root: &Path) -> Result<Vec<String>, VersionManage
                 if let Some(name) = entry.file_name().to_str() {
                     // Only well-formed versions are installable selections;
                     // a stray directory must not become `numan use latest`.
-                    let Ok(name) = normalize_version(name) else {
+                    // Also skip directories whose name does not survive
+                    // normalization unchanged (e.g. a `v0.113.1` prefix would
+                    // map to a different string, producing a phantom entry).
+                    let Ok(normalized) = normalize_version(name) else {
                         continue;
                     };
+                    if normalized != name {
+                        // Directory was created with a non-canonical name (e.g. `v0.113.1`);
+                        // skip it so `numan use list` stays clean.
+                        continue;
+                    }
                     // Check if this directory contains a Nu binary.
                     if entry.path().join(nu_binary_name()).is_file() {
-                        versions.push(name);
+                        versions.push(normalized);
                     }
                 }
             }
@@ -387,8 +401,13 @@ pub fn list_installed_versions(root: &Path) -> Result<Vec<String>, VersionManage
     if let Some(marker) = read_active_version(root)? {
         if let Some(off_tree) = marker.binary_path.as_ref() {
             let off_tree_path = std::path::Path::new(off_tree);
-            if off_tree_path.is_file() && !versions.iter().any(|v| v == &marker.version) {
-                versions.push(marker.version.clone());
+            // Normalize the marker's version before dedup/insert so a marker
+            // written with a `v`-prefixed version doesn't create a duplicate
+            // entry alongside the canonically-named on-tree install.
+            if let Ok(normalized_marker) = normalize_version(&marker.version) {
+                if off_tree_path.is_file() && !versions.iter().any(|v| v == &normalized_marker) {
+                    versions.push(normalized_marker);
+                }
             }
         }
     }
@@ -443,6 +462,23 @@ pub fn is_version_installed(root: &Path, version: &str) -> Result<bool, VersionM
 pub fn latest_installed_version(root: &Path) -> Result<Option<String>, VersionManagerError> {
     let versions = list_installed_versions(root)?;
     Ok(versions.into_iter().next())
+}
+
+/// Binary name for the managed Nu binary on the current target.
+/// Windows: `nu.exe`; posix: `nu`. Used by every versioned-layout
+/// helper so the conditional is not scattered across callers.
+pub(crate) fn nu_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "nu.exe"
+    } else {
+        "nu"
+    }
+}
+
+/// Legacy single-binary path that older installs wrote:
+/// `<root>/tools/nushell/${bin}`.
+pub(crate) fn legacy_managed_binary_with_bin(root: &Path, bin: &str) -> PathBuf {
+    root.join("tools").join("nushell").join(bin)
 }
 
 #[cfg(test)]
@@ -736,26 +772,97 @@ mod tests {
         let versions = list_installed_versions(root).unwrap();
         assert!(versions.is_empty());
     }
-}
 
-/// Binary name for the managed Nu binary on the current target.
-/// Windows: `nu.exe`; posix: `nu`. Used by every versioned-layout
-/// helper below so we don't sprinkle the conditional across callers.
-pub(crate) fn nu_binary_name() -> &'static str {
-    if cfg!(windows) {
-        "nu.exe"
-    } else {
-        "nu"
+    /// Legacy flat binary with a VERSION file: `list_installed_versions` must
+    /// return that version when no versioned installs exist.
+    #[test]
+    fn list_installed_versions_falls_back_to_legacy_version_file() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let tools = versioned_nu_dir(root);
+        std::fs::create_dir_all(&tools).unwrap();
+        // Write the legacy flat binary.
+        std::fs::write(tools.join(nu_binary_name()), b"fake legacy nu").unwrap();
+        // Write the VERSION metadata.
+        std::fs::write(tools.join("VERSION"), "0.113.1").unwrap();
+
+        let versions = list_installed_versions(root).unwrap();
+        assert_eq!(versions, vec!["0.113.1"]);
     }
-}
 
-/// Legacy single-binary path that older installs wrote.
-///
-/// `<root>/tools/nushell/${bin}`. Tests pass `bin` so they don't have
-/// to re-derive the platform-specific binary name.
-pub(crate) fn legacy_managed_binary_with_bin(
-    root: &std::path::Path,
-    bin: &str,
-) -> std::path::PathBuf {
-    root.join("tools").join("nushell").join(bin)
+    /// Legacy flat binary WITHOUT a VERSION file: `list_installed_versions`
+    /// must return an empty list (no version to report, not an error).
+    #[test]
+    fn list_installed_versions_missing_version_file_returns_empty() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let tools = versioned_nu_dir(root);
+        std::fs::create_dir_all(&tools).unwrap();
+        // Write the legacy flat binary without any VERSION file.
+        std::fs::write(tools.join(nu_binary_name()), b"fake legacy nu").unwrap();
+
+        let versions = list_installed_versions(root).unwrap();
+        assert!(
+            versions.is_empty(),
+            "no version metadata → empty list, got: {versions:?}"
+        );
+    }
+
+    /// When at least one versioned install exists, the legacy flat binary must
+    /// NOT contribute an additional entry (mixed-layout must not be selectable
+    /// via `numan use`).
+    #[test]
+    fn list_installed_versions_omits_legacy_when_versioned_exists() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let tools = versioned_nu_dir(root);
+        std::fs::create_dir_all(&tools).unwrap();
+
+        // Legacy flat binary with version file.
+        std::fs::write(tools.join(nu_binary_name()), b"legacy nu").unwrap();
+        std::fs::write(tools.join("VERSION"), "0.110.0").unwrap();
+
+        // A real versioned install alongside it.
+        let versioned = version_install_dir(root, "0.113.1");
+        std::fs::create_dir_all(&versioned).unwrap();
+        std::fs::write(versioned.join(nu_binary_name()), b"versioned nu").unwrap();
+
+        let versions = list_installed_versions(root).unwrap();
+        assert_eq!(
+            versions,
+            vec!["0.113.1"],
+            "legacy entry must not appear when versioned install exists"
+        );
+    }
+
+    /// A versioned directory whose name carries a `v`-prefix (e.g. `v0.113.1`)
+    /// must be skipped because its name does not survive normalization
+    /// unchanged.
+    #[test]
+    fn list_installed_versions_skips_v_prefixed_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let tools = versioned_nu_dir(root);
+
+        // Create a `v`-prefixed directory — must be skipped.
+        let v_dir = tools.join("v0.113.1");
+        std::fs::create_dir_all(&v_dir).unwrap();
+        std::fs::write(v_dir.join(nu_binary_name()), b"fake nu").unwrap();
+
+        // Also create a canonical directory — must be included.
+        let ok_dir = version_install_dir(root, "0.114.0");
+        std::fs::create_dir_all(&ok_dir).unwrap();
+        std::fs::write(ok_dir.join(nu_binary_name()), b"fake nu").unwrap();
+
+        let versions = list_installed_versions(root).unwrap();
+        assert_eq!(
+            versions,
+            vec!["0.114.0"],
+            "`v`-prefixed directory must be skipped, got: {versions:?}"
+        );
+    }
 }
