@@ -663,8 +663,16 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
             // Failed repair while the corrupt journal remains. Escalate to
             // Error/Manual so exit status surfaces the broken migration state.
             let unsafe_version = !migration_journal::is_safe_version_component(&j.version);
+            // Probe the normalized layout path. Journals are written with a
+            // normalized version, but a hand-edited safe-but-prefixed value
+            // like "v0.113.1" must still resolve to tools/nushell/0.113.1/nu
+            // (matching migrate_legacy / reconcile), not tools/nushell/v0.113.1/nu.
             let renamed_missing = matches!(j.stage, migration_journal::MigrationStage::Renamed)
-                && !version_manager::version_binary(root, &j.version).is_file();
+                && !match version_manager::normalize_version(&j.version) {
+                    Ok(normalized) => version_manager::version_binary(root, &normalized).is_file(),
+                    // Unparseable versions cannot map onto the versioned layout.
+                    Err(_) => false,
+                };
 
             if unsafe_version || renamed_missing {
                 let (message, fix) = if unsafe_version {
@@ -2638,6 +2646,54 @@ mod tests {
         );
         // exit_code must be non-zero so safe-batch / CI do not treat this as healthy
         assert_eq!(report.exit_code(), 1);
+    }
+
+    /// Hand-edited journals may keep a safe `v`-prefix. Doctor must probe the
+    /// normalized layout path so Renamed + present `0.113.1/nu` is Warn/Auto,
+    /// not a false-positive Error/Manual "missing binary".
+    #[test]
+    fn doctor_renamed_probe_normalizes_v_prefix() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        let version_dir = version_manager::version_install_dir(root, "0.113.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        let bin = if cfg!(windows) { "nu.exe" } else { "nu" };
+        std::fs::write(version_dir.join(bin), b"binary").unwrap();
+        std::fs::write(
+            PendingMigration::journal_path(root),
+            format!(
+                r#"{{"schema_version":{},"version":"v0.113.1","stage":"renamed"}}"#,
+                crate::state::migration_journal::SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.id != "journal.migration_invalid"),
+            "v-prefixed Renamed with normalized binary present must not be invalid"
+        );
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_pending")
+            .expect("journal.migration_pending for recoverable Renamed");
+        assert_eq!(f.severity, Severity::Warn);
+        assert_eq!(f.repair, RepairTier::Auto);
     }
 
     #[test]

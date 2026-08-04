@@ -34,7 +34,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::nu::version_manager::{
-    read_active_version, version_install_dir, versioned_nu_dir, write_active_version,
+    normalize_version, read_active_version, version_install_dir, versioned_nu_dir,
+    write_active_version,
 };
 use crate::util::atomic::write_json_atomic;
 use crate::util::fs_safety::assert_not_symlink;
@@ -183,9 +184,18 @@ Upgrade Numan or remove the stale journal.",
 ///
 /// Takes precedence over the journal stage when there is disagreement —
 /// recovery actions are gated by what's actually on disk.
+///
+/// Normalizes first so a safe-but-prefixed journal value like `v0.113.1`
+/// probes `tools/nushell/0.113.1/<bin>` (the path migrate_legacy writes),
+/// not `tools/nushell/v0.113.1/<bin>`.
 fn versioned_binary_present(root: &Path, version: &str) -> bool {
+    let Ok(normalized) = normalize_version(version) else {
+        return false;
+    };
     let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
-    version_install_dir(root, version).join(bin_name).is_file()
+    version_install_dir(root, &normalized)
+        .join(bin_name)
+        .is_file()
 }
 
 /// Reconcile any in-flight migration journal.
@@ -227,6 +237,17 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
         );
     }
 
+    // Canonicalize to the same directory name migrate_legacy writes
+    // (`0.113.1`, not `v0.113.1`) before any path probe or scrub.
+    let version = normalize_version(&journal.version).map_err(|_| {
+        anyhow::anyhow!(
+            "Migration journal at '{}' has non-normalizable version '{}'. \
+             Refusing to reconcile. Delete the stale journal to recover.",
+            PendingMigration::journal_path(root).display(),
+            journal.version
+        )
+    })?;
+
     // Validate once before any stage-specific recovery. Active-version writes,
     // orphan scrubbing, and journal deletion must not run when the managed
     // tree has been replaced by a symlink or reparse point.
@@ -237,12 +258,12 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
         MigrationStage::Prepared => {
             // The rename can complete before the journal advances to Renamed.
             // Trust the filesystem in that crash window and finish recovery.
-            if versioned_binary_present(root, &journal.version) {
+            if versioned_binary_present(root, &version) {
                 if read_active_version(root)?.is_none() {
-                    write_active_version(root, &journal.version).with_context(|| {
+                    write_active_version(root, &version).with_context(|| {
                         format!(
                             "Migration recovery: failed to write active version '{}'",
-                            journal.version
+                            version
                         )
                     })?;
                 }
@@ -264,7 +285,7 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
                 // once the user resolves the underlying issue. Discarding
                 // both the orphan dir AND the journal would silently lose
                 // the recoverable crash window.
-                let version_dir = version_install_dir(root, &journal.version);
+                let version_dir = version_install_dir(root, &version);
                 if version_dir.is_dir() {
                     if let Err(e) = std::fs::remove_dir(&version_dir) {
                         bail!(
@@ -274,7 +295,7 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
                              `numan doctor --fix`) can recover once permissions or \
                              the directory contents are resolved.",
                             PendingMigration::journal_path(root).display(),
-                            journal.version,
+                            version,
                             version_dir.display(),
                             e
                         );
@@ -286,22 +307,22 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
         }
         MigrationStage::Renamed => {
             // File-system truth: the versioned binary should exist.
-            if !versioned_binary_present(root, &journal.version) {
+            if !versioned_binary_present(root, &version) {
                 anyhow::bail!(
                     "Migration journal at '{}' is staged 'Renamed' but the versioned binary is missing.\n\
                      Run `numan setup nu {}` to repair.",
                     PendingMigration::journal_path(root).display(),
-                    journal.version,
+                    version,
                 );
             }
             // Complete the transaction — write active-version if no selection
             // exists. (If a user has already chosen a different active
             // version, that user-controlled choice takes precedence.)
             if read_active_version(root)?.is_none() {
-                write_active_version(root, &journal.version).with_context(|| {
+                write_active_version(root, &version).with_context(|| {
                     format!(
                         "Migration recovery: failed to write active version '{}'",
-                        journal.version
+                        version
                     )
                 })?;
             }
@@ -586,6 +607,36 @@ mod tests {
         write_journal(root, "0.113.1", MigrationStage::Renamed);
 
         let recovered = reconcile(root).unwrap().unwrap();
+        assert_eq!(recovered.stage, MigrationStage::Renamed);
+
+        let active = read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.113.1");
+        assert!(PendingMigration::load(root).unwrap().is_none());
+    }
+
+    /// Hand-edited `v0.113.1` journals must reconcile against the normalized
+    /// `tools/nushell/0.113.1/<bin>` path that migrate_legacy writes.
+    #[test]
+    fn reconcile_renamed_normalizes_v_prefix_before_path_probe() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let version_dir = version_install_dir(root, "0.113.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::fs::write(version_dir.join(bin_name()), b"binary").unwrap();
+
+        // Bypass save() so the on-disk journal keeps the v-prefix.
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        std::fs::write(
+            PendingMigration::journal_path(root),
+            format!(
+                r#"{{"schema_version":{SCHEMA_VERSION},"version":"v0.113.1","stage":"renamed"}}"#
+            ),
+        )
+        .unwrap();
+
+        let recovered = reconcile(root).unwrap().unwrap();
+        assert_eq!(recovered.version, "v0.113.1");
         assert_eq!(recovered.stage, MigrationStage::Renamed);
 
         let active = read_active_version(root).unwrap().unwrap();
