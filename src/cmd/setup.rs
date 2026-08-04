@@ -263,19 +263,24 @@ fn execute_nu_impl_locked(args: &NuSetupArgs, root: &Path) -> Result<()> {
         return remove_managed_nu(root, args.yes);
     }
     if args.use_path {
-        eprintln!("warning: --use-path is deprecated, use 'numan setup nu path' instead");
-        return execute_use_path(args.yes, root, args.force, ExecuteUseOpts::default());
+        // Do not pass install-scoped `args.force` into the managed-tree
+        // destructive gate. Legacy flags always refuse when a managed tree
+        // exists; use the explicit subcommand with `--force` instead.
+        eprintln!(
+            "warning: --use-path is deprecated, use 'numan setup nu path' instead \
+             (and 'numan setup nu path --force' if a managed tree must be replaced; \
+             install --force does not authorize managed-tree deletion on this flag)"
+        );
+        return execute_use_path(args.yes, root, false, ExecuteUseOpts::default());
     }
     if let Some(existing) = &args.use_existing {
-        eprintln!("warning: --use-existing is deprecated, use 'numan setup nu use <path>' instead");
-        reject_skip_path_for_off_path_registration(args.skip_path)?;
-        return execute_use_existing(
-            existing,
-            args.yes,
-            root,
-            args.force,
-            ExecuteUseOpts::default(),
+        eprintln!(
+            "warning: --use-existing is deprecated, use 'numan setup nu use <path>' instead \
+             (and 'numan setup nu use <path> --force' if a managed tree must be replaced; \
+             install --force does not authorize managed-tree deletion on this flag)"
         );
+        reject_skip_path_for_off_path_registration(args.skip_path)?;
+        return execute_use_existing(existing, args.yes, root, false, ExecuteUseOpts::default());
     }
 
     match &args.action {
@@ -653,12 +658,21 @@ fn remove_managed_nu_if_present(root: &Path) -> Result<()> {
 }
 
 pub fn execute_loader(args: &LoaderArgs, root: &Path) -> Result<()> {
-    execute_loader_with_probe(args, || {
-        let nu_exe = find_nu_executable_with_root(root)?;
-        probe_nu_config_path(&nu_exe)
+    // Public entry holds the root mutation lock (same boundary as setup nu /
+    // numan use). The probe helper below stays unlocked so unit tests can
+    // inject a fake config path without contending on the advisory lock.
+    setup_subcommand_lock(root, "nushell-loader install", || {
+        execute_loader_with_probe(args, || {
+            let nu_exe = find_nu_executable_with_root(root)?;
+            probe_nu_config_path(&nu_exe)
+        })
     })
 }
 
+/// Install loader.nu using an injected config-path probe.
+///
+/// Unlocked test seam — production callers must go through [`execute_loader`],
+/// which acquires [`setup_subcommand_lock`].
 pub fn execute_loader_with_probe<F>(args: &LoaderArgs, probe: F) -> Result<()>
 where
     F: FnOnce() -> Result<PathBuf>,

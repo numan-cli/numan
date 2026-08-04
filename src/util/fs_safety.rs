@@ -100,12 +100,12 @@ pub fn acquire_mutation_lock(root: &Path) -> Result<MutationLock> {
 /// release the lock on return.
 ///
 /// Every destructive setup entry point (install, off-path registration,
-/// PATH-Nu registration, managed removal, derive/active/upgrade via
-/// `numan use`) flows through this helper so the lock boundary has exactly
-/// one source of truth — closing PR #69's WCr (`setup_family_mutation_lock`)
-/// and ensuring that a concurrent `numan use`, `numan install`, or
-/// `numan doctor --fix` cannot interleave filesystem mutations on the same
-/// root.
+/// PATH-Nu registration, managed removal, `numan setup loader`, and
+/// derive/active/upgrade via `numan use`) flows through this helper so the
+/// lock boundary has exactly one source of truth — closing PR #69's WCr
+/// (`setup_family_mutation_lock`) and ensuring that a concurrent `numan use`,
+/// `numan install`, or `numan doctor --fix` cannot interleave filesystem
+/// mutations on the same root.
 ///
 /// `what` is a short human-readable label (e.g. `"Nushell install"`,
 /// `"off-path Nu registration"`, `"managed Nushell removal"`); it lands

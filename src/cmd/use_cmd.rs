@@ -13,7 +13,7 @@ use std::path::Path;
 use crate::nu::paths::NuPaths;
 use crate::nu::version_manager;
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
-use crate::util::fs_safety::acquire_mutation_lock;
+use crate::util::fs_safety::setup_subcommand_lock;
 use crate::util::hints::CMD_INIT_REFRESH;
 
 #[derive(Args, Debug)]
@@ -27,36 +27,40 @@ pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
     // Listing reconciles the legacy single-binary layout first so a flat
     // `tools/nushell/nu` install is not invisible. Migration is a no-op when
     // already versioned, and preserves any existing active selection.
+    // Route through `setup_subcommand_lock` so audit lines and the single
+    // lock source of truth match the fs_safety contract (same root lock as
+    // `numan setup nu` / `numan setup loader`).
     if args.version == "list" {
-        let _lock = acquire_mutation_lock(root)?;
-        crate::nu::migrate_legacy::migrate_legacy_install(root)
-            .with_context(|| "Failed to migrate legacy Nu installation before list")?;
-        return execute_list(root);
+        return setup_subcommand_lock(root, "Nu version list", || {
+            crate::nu::migrate_legacy::migrate_legacy_install(root)
+                .with_context(|| "Failed to migrate legacy Nu installation before list")?;
+            execute_list(root)
+        });
     }
 
     // Hold the mutation lock for the entire operation to prevent races
     // between concurrent `numan setup nu` and `numan use` invocations.
-    let _lock = acquire_mutation_lock(root)?;
+    setup_subcommand_lock(root, "Nu version switch", || {
+        // Snapshot established state before any mutation. This covers both the
+        // legacy-migration step (rename + active-version write) and the version
+        // switch below.
+        create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Update,
+            None,
+            None,
+        )
+        .with_context(|| "Failed to create pre-mutation snapshot for `numan use`")?;
 
-    // Snapshot established state before any mutation. This covers both the
-    // legacy-migration step (rename + active-version write) and the version
-    // switch below.
-    create_snapshot(
-        root,
-        SnapshotReason::PreMutation,
-        SnapshotTrigger::Update,
-        None,
-        None,
-    )
-    .with_context(|| "Failed to create pre-mutation snapshot for `numan use`")?;
+        crate::nu::migrate_legacy::migrate_legacy_install(root)
+            .with_context(|| "Failed to migrate legacy Nu installation")?;
 
-    crate::nu::migrate_legacy::migrate_legacy_install(root)
-        .with_context(|| "Failed to migrate legacy Nu installation")?;
-
-    match args.version.as_str() {
-        "latest" => execute_latest(root),
-        version => execute_switch(root, version),
-    }
+        match args.version.as_str() {
+            "latest" => execute_latest(root),
+            version => execute_switch(root, version),
+        }
+    })
 }
 
 /// List all installed Nu versions, marking the active one.
