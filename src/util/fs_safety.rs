@@ -223,15 +223,30 @@ pub fn assert_contained(root: &Path, relative: &Path) -> Result<PathBuf> {
         .canonicalize()
         .with_context(|| format!("Failed to canonicalize root '{}'", root.display()))?;
 
-    // Canonicalize the joined path only if it exists; otherwise fall back
-    // to a normalized lexical check that does not require the path to exist yet.
+    // Canonicalize the joined path only if it exists; otherwise append the
+    // relative components onto the *canonical* root. Lexically normalizing
+    // `root.join(relative)` would keep pre-canonicalize prefixes (e.g. macOS
+    // `/var` vs `/private/var`) and spuriously fail the `starts_with` check
+    // for not-yet-created paths such as `tools/nushell/<version>/`.
     let canonical_joined = if joined.exists() {
         joined
             .canonicalize()
             .with_context(|| format!("Failed to canonicalize '{}'", joined.display()))?
     } else {
-        // Path does not yet exist — normalize lexically.
-        normalize_lexical(&joined)
+        let mut out = canonical_root.clone();
+        for component in relative.components() {
+            match component {
+                Component::CurDir => {}
+                Component::Normal(c) => out.push(c),
+                Component::ParentDir => {
+                    // Should not occur after is_safe_relative_path; defensive.
+                    out.pop();
+                }
+                // RootDir / Prefix already rejected by is_safe_relative_path.
+                _ => {}
+            }
+        }
+        out
     };
 
     if !canonical_joined.starts_with(&canonical_root) {
@@ -245,23 +260,26 @@ pub fn assert_contained(root: &Path, relative: &Path) -> Result<PathBuf> {
     Ok(canonical_joined)
 }
 
-/// Lexically normalize a path without requiring it to exist on disk.
+/// Refuse migration/reconcile when the managed Nushell layout escapes `$NUMAN_ROOT`.
 ///
-/// Processes components sequentially, collapsing `.` and refusing `..`
-/// (which should have been caught by [`is_safe_relative_path`] already).
-fn normalize_lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                // Should not occur if is_safe_relative_path was enforced first.
-                out.pop();
-            }
-            other => out.push(other),
-        }
+/// Checks:
+/// 1. `tools` and `tools/nushell` are not themselves symlinks/reparse points
+/// 2. When those paths exist, their canonical forms stay under the canonical root
+///    (catches a symlinked *ancestor* such as `$NUMAN_ROOT/tools` → elsewhere,
+///    where the leaf `nushell` directory is a real dir and a leaf-only symlink
+///    check would miss the escape)
+pub fn assert_managed_nushell_layout(root: &Path) -> Result<()> {
+    let tools = root.join("tools");
+    assert_not_symlink(&tools, "managed tools directory")?;
+    let managed = tools.join("nushell");
+    assert_not_symlink(&managed, "managed Nushell directory")?;
+    if tools.exists() {
+        let _ = assert_contained(root, Path::new("tools"))?;
     }
-    out
+    if managed.exists() {
+        let _ = assert_contained(root, Path::new("tools/nushell"))?;
+    }
+    Ok(())
 }
 
 // ── Managed-file ownership guard ──────────────────────────────────────────────
@@ -365,6 +383,23 @@ mod tests {
     }
 
     #[test]
+    fn contained_nonexistent_path_uses_canonical_root_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Not-yet-created leaf must still pass under a (possibly
+        // symlink-prefixed) temp root — e.g. macOS /var → /private/var.
+        let result = assert_contained(root, Path::new("tools/nushell/0.113.1")).unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+        assert!(
+            result.starts_with(&canonical_root),
+            "expected {} under {}",
+            result.display(),
+            canonical_root.display()
+        );
+        assert!(result.ends_with(Path::new("tools/nushell/0.113.1")));
+    }
+
+    #[test]
     fn rejects_parent_traversal_in_assert_contained() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -437,6 +472,30 @@ mod tests {
         std::fs::write(&target, b"hello").unwrap();
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert!(is_symlink_or_reparse(&link).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_nushell_layout_refuses_symlinked_tools_ancestor() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(outside.join("nushell")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("tools")).unwrap();
+        let err = assert_managed_nushell_layout(root).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("symlink") || msg.contains("reparse") || msg.contains("containment"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn managed_nushell_layout_accepts_plain_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("tools/nushell")).unwrap();
+        assert_managed_nushell_layout(root).unwrap();
     }
 
     // ── setup_subcommand_lock ───────────────────────────────────────────────

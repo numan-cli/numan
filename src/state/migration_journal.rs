@@ -38,7 +38,7 @@ use crate::nu::version_manager::{
     write_active_version,
 };
 use crate::util::atomic::write_json_atomic;
-use crate::util::fs_safety::assert_not_symlink;
+use crate::util::fs_safety::{assert_managed_nushell_layout, assert_not_symlink};
 
 /// Schema version for `migration-journal.json`.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -148,6 +148,14 @@ Upgrade Numan or remove the stale journal.",
                 SCHEMA_VERSION,
             );
         }
+        if !is_safe_version_component(&journal.version) {
+            anyhow::bail!(
+                "Migration journal at '{}' has unsafe version component '{}'. \
+                 Delete the journal manually to recover.",
+                path.display(),
+                journal.version,
+            );
+        }
         Ok(Some(journal))
     }
 
@@ -192,9 +200,8 @@ fn versioned_binary_present(root: &Path, version: &str) -> bool {
     let Ok(normalized) = normalize_version(version) else {
         return false;
     };
-    let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
     version_install_dir(root, &normalized)
-        .join(bin_name)
+        .join(crate::nu::version_manager::nu_binary_name())
         .is_file()
 }
 
@@ -225,6 +232,8 @@ pub fn validate_reconcile(root: &Path, journal: &PendingMigration) -> Result<Str
         )
     })?;
 
+    // Layout + symlink guards before any stage-specific recovery.
+    assert_managed_nushell_layout(root)?;
     let managed_dir = versioned_nu_dir(root);
     assert_not_symlink(&managed_dir, "managed Nushell directory")?;
 
@@ -312,7 +321,7 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
                         )
                     })?;
                 }
-                let bin_name = if cfg!(windows) { "nu.exe" } else { "nu" };
+                let bin_name = crate::nu::version_manager::nu_binary_name();
                 let legacy_binary = managed_dir.join(bin_name);
                 if legacy_binary.is_file() {
                     std::fs::remove_file(&legacy_binary).with_context(|| {
@@ -331,6 +340,7 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
                 // both the orphan dir AND the journal would silently lose
                 // the recoverable crash window.
                 let version_dir = version_install_dir(root, &version);
+                assert_not_symlink(&version_dir, "migration version install directory")?;
                 if version_dir.is_dir() {
                     if let Err(e) = std::fs::remove_dir(&version_dir) {
                         bail!(
@@ -805,8 +815,11 @@ mod tests {
         let err = reconcile(root).expect_err("reconcile must refuse symlinked managed dir");
         let msg = err.to_string();
         assert!(
-            msg.contains("symlink") || msg.contains("reparse"),
-            "err must name the symlink/reparse guard: {msg}"
+            msg.contains("symlink")
+                || msg.contains("reparse")
+                || msg.contains("containment")
+                || msg.contains("unsafe"),
+            "err must name the symlink/reparse/containment guard: {msg}"
         );
 
         // Journal retained; no active-version write; managed payload untouched.
@@ -832,5 +845,99 @@ mod tests {
                 .is_symlink(),
             "managed path must remain a symlink/reparse point"
         );
+    }
+
+    // ── failure-path tests ──────────────────────────────────────────────────
+
+    /// Saving a journal with a version containing path-traversal components
+    /// must fail without creating the file on disk.
+    #[test]
+    fn save_rejects_unsafe_version_components() {
+        for bad_version in &["../etc", "/abs/path", "a\\b", "a\0b"] {
+            let tmp = TempDir::new().unwrap();
+            let root = tmp.path();
+            let journal = PendingMigration {
+                schema_version: SCHEMA_VERSION,
+                version: bad_version.to_string(),
+                stage: MigrationStage::Prepared,
+            };
+            let result = journal.save(root);
+            assert!(
+                result.is_err(),
+                "save must reject unsafe version '{}', but returned Ok",
+                bad_version
+            );
+            assert!(
+                !PendingMigration::journal_path(root).exists(),
+                "journal file must not be created for unsafe version '{}'",
+                bad_version
+            );
+        }
+    }
+
+    /// Loading a journal with an unsafe version component must fail even if
+    /// the schema_version matches, so `reconcile` cannot escape the managed
+    /// tree.
+    #[test]
+    fn load_rejects_unsafe_version_in_journal() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let path = PendingMigration::journal_path(root);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let content = serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "version": "../etc",
+            "stage": "prepared"
+        });
+        std::fs::write(&path, serde_json::to_vec(&content).unwrap()).unwrap();
+
+        let err = PendingMigration::load(root).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unsafe") || msg.contains("../etc"),
+            "error must mention unsafe version, got: {msg}"
+        );
+    }
+
+    // ── is_safe_version_component ────────────────────────────────────────────
+
+    #[test]
+    fn is_safe_rejects_empty_string() {
+        assert!(!is_safe_version_component(""));
+    }
+
+    #[test]
+    fn is_safe_rejects_dot_and_dotdot() {
+        assert!(!is_safe_version_component("."));
+        assert!(!is_safe_version_component(".."));
+    }
+
+    #[test]
+    fn is_safe_rejects_absolute_and_traversal() {
+        assert!(!is_safe_version_component("/absolute"));
+        assert!(!is_safe_version_component("\\backslash"));
+        assert!(!is_safe_version_component("a/b"));
+        assert!(!is_safe_version_component("a\\b"));
+        assert!(!is_safe_version_component("a:b"));
+    }
+
+    #[test]
+    fn is_safe_rejects_control_chars() {
+        assert!(!is_safe_version_component("a\0b"));
+        assert!(!is_safe_version_component("a\nb"));
+        assert!(!is_safe_version_component("a\tb"));
+    }
+
+    #[test]
+    fn is_safe_accepts_valid_versions() {
+        assert!(is_safe_version_component("0.113.1"));
+        assert!(is_safe_version_component("1.0.0-beta.1"));
+        assert!(is_safe_version_component("0.113.1+build.42"));
+    }
+
+    #[test]
+    fn is_safe_rejects_oversized_version() {
+        let long = "a".repeat(65);
+        assert!(!is_safe_version_component(&long));
     }
 }

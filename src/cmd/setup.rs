@@ -22,6 +22,26 @@ fn snapshot_before_setup_mutation(root: &Path, trigger: SnapshotTrigger) -> Resu
     Ok(())
 }
 
+/// True when the managed tree holds a real install (legacy binary or at least
+/// one versioned package). An empty `tools/nushell/` shell left after a
+/// partial migration / deleted binary must not trip the `--force` gate for
+/// `setup nu path|use` (including `doctor --fix` off-PATH repair).
+fn managed_tree_has_install(root: &Path) -> bool {
+    let managed_dir = bootstrap::managed_nu_dir(root);
+    if !managed_dir.is_dir() {
+        return false;
+    }
+    let legacy = bootstrap::managed_nu_binary(root);
+    if legacy.is_file() {
+        return true;
+    }
+    match version_manager::list_installed_versions(root) {
+        Ok(versions) => !versions.is_empty(),
+        // Unreadable tree: treat as present so we stay fail-closed on wipe.
+        Err(_) => true,
+    }
+}
+
 const VENDOR_LOADER: &str = include_str!("../../assets/nushell-loader/loader.nu");
 
 const CONFIG_SOURCE_LINE: &str = "source ($nu.config-path | path dirname | path join 'loader.nu')";
@@ -196,19 +216,10 @@ pub fn execute(cmd: SetupCommands, root: &Path) -> Result<()> {
 }
 
 pub fn execute_nu(args: &NuSetupArgs, root: &Path) -> Result<()> {
-    // PR69 WCr: every destructive setup entry acquires the root mutation
-    // lock through `setup_subcommand_lock`. The helper audit-logs the
-    // entry so safe-batch automation can grep one consistent `(audit)`
-    // prefix across the destructive setup surface. Direct callers of
-    // `execute_nu_impl` (e.g. `cmd::doctor::apply_repairs`) get the same
-    // guarantee because `execute_nu_impl` itself acquires the lock.
-    let what = setup_action_lock_label(args);
-    setup_subcommand_lock(root, what, || execute_nu_impl_locked(args, root))
+    execute_nu_impl(args, root)
 }
 
-/// Doctor repair entry point. On this branch [`execute_nu_impl`] already
-/// acquires `setup_subcommand_lock`, so this is an alias (unlike master #67,
-/// where `execute_nu_impl` was unlocked and this wrapper held the lock).
+/// Doctor repair entry point — same as [`execute_nu`].
 pub fn execute_nu_repair(args: &NuSetupArgs, root: &Path) -> Result<()> {
     execute_nu_impl(args, root)
 }
@@ -237,10 +248,8 @@ fn setup_action_lock_label(args: &NuSetupArgs) -> &'static str {
     }
 }
 
-/// Setup Nu under the root mutation lock. Public callers go through
-/// [`execute_nu`] (which audit-labels the lock); direct callers of this
-/// function are responsible for emitting their own audit prefix (e.g.
-/// `cmd::doctor::apply_repairs` already logs `(doctor)` repair records).
+/// Setup Nu under the root mutation lock. All public callers go through this
+/// function; it holds the lock for the full operation.
 pub(crate) fn execute_nu_impl(args: &NuSetupArgs, root: &Path) -> Result<()> {
     let what = setup_action_lock_label(args);
     setup_subcommand_lock(root, what, || execute_nu_impl_locked(args, root))
@@ -375,7 +384,8 @@ fn execute_use_path(yes: bool, root: &Path, force: bool, opts: ExecuteUseOpts<'_
     };
 
     let managed_dir = bootstrap::managed_nu_dir(root);
-    let managed_dir_was_present = managed_dir.is_dir();
+    // Empty shell dirs / deleted-binary partial state are not "present".
+    let managed_dir_was_present = managed_tree_has_install(root);
     if managed_dir_was_present && !force {
         bail!(
             "Refusing `numan setup nu path` while a managed Nushell install at '{}' exists.\n\n\
@@ -473,12 +483,13 @@ fn execute_use_existing(
 
     // Consolidate the destructive-removal confirm + the
     // register_existing_nu PATH-add prompt into one (mirrors
-    // `execute_use_path`'s gate). With a managed tree in place, the
+    // `execute_use_path`'s gate). With a real managed install in place, the
     // `--force` flag is required to *enter* this path at all — the
     // merged warn-and-confirm below is the second stage of the
-    // destructive two-step opt-in.
+    // destructive two-step opt-in. Empty shell dirs / deleted-binary
+    // partial state do not count (doctor --fix off-PATH repair).
     let managed_dir = bootstrap::managed_nu_dir(root);
-    let managed_dir_was_present = managed_dir.is_dir();
+    let managed_dir_was_present = managed_tree_has_install(root);
     if managed_dir_was_present && !force {
         bail!(
             "Refusing `numan setup nu use` while a managed Nushell install at '{}' exists.\n\n\
@@ -579,9 +590,43 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
 
     let managed_dir = bootstrap::managed_nu_dir(root);
     if !managed_dir.is_dir() {
-        // No tree to delete; still drop a stale marker so resolvers do not keep
-        // pointing at a missing binary.
-        version_manager::clear_active_version(root)?;
+        // No managed tree to delete. Only clear the active-version marker if
+        // the currently recorded binary is absent (dangling marker) or lives
+        // inside the now-absent managed tree. Preserve valid off-tree
+        // selections (e.g. from `numan setup nu use <path>`).
+        //
+        // Unreadable/malformed markers must not be silently deleted here —
+        // `numan doctor` owns that repair (`nu.active_version.invalid`, auto
+        // tier with `.corrupt` backup). Surface the condition and leave the
+        // file for doctor rather than pre-empting the finding.
+        let should_clear = match version_manager::read_active_version(root) {
+            Ok(None) => false, // no marker at all
+            Ok(Some(active)) => {
+                // Clear if the recorded binary is missing or within the managed tree.
+                let has_valid_off_tree = active
+                    .binary_path
+                    .as_ref()
+                    .map(|p| std::path::Path::new(p).is_file())
+                    .unwrap_or(false);
+                !has_valid_off_tree
+            }
+            Err(e) => {
+                return Err(e).context(format!(
+                    "Active-version marker is unreadable while no managed Nushell install \
+                     exists at '{}'; run `numan doctor --fix` to repair (keeps a .corrupt \
+                     backup) instead of discarding diagnostic state",
+                    managed_dir.display()
+                ));
+            }
+        };
+        if should_clear {
+            version_manager::clear_active_version(root).with_context(|| {
+                format!(
+                    "Failed to clear stale active-version marker (no managed Nushell tree at '{}')",
+                    managed_dir.display()
+                )
+            })?;
+        }
         println!(
             "No managed Nushell install found at '{}'.",
             managed_dir.display()
@@ -973,21 +1018,68 @@ mod tests {
     }
 
     #[test]
-    fn remove_managed_nu_clears_stale_marker_when_tree_absent() {
+    fn remove_managed_nu_errors_on_malformed_marker_without_clearing() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("numan-root");
-        version_manager::write_active_version(&root, "0.113.1").unwrap();
-        assert!(version_manager::read_active_version(&root)
-            .unwrap()
-            .is_some());
+        let marker = root.join("nu_state").join("active-version.json");
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, b"{ not valid json").unwrap();
+
+        let err = remove_managed_nu(&root, true).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("unreadable") || msg.contains("Malformed"),
+            "expected unreadable/malformed marker diagnostic, got: {msg}"
+        );
+        assert!(
+            msg.contains("doctor") || msg.contains("corrupt"),
+            "expected doctor repair hint, got: {msg}"
+        );
+        assert!(
+            marker.is_file(),
+            "malformed marker must remain for doctor; remove must not pre-empt the finding"
+        );
+        assert_eq!(
+            std::fs::read(&marker).unwrap(),
+            b"{ not valid json",
+            "marker bytes must be preserved for doctor .corrupt backup"
+        );
+    }
+
+    #[test]
+    fn remove_managed_nu_clears_dangling_marker_when_tree_absent() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        // Readable marker pointing at a missing on-tree selection — clear it.
+        version_manager::write_active_version(&root, "0.99.0").unwrap();
+        let marker = root.join("nu_state").join("active-version.json");
+        assert!(marker.is_file());
 
         remove_managed_nu(&root, true).unwrap();
-
         assert!(
-            version_manager::read_active_version(&root)
-                .unwrap()
-                .is_none(),
-            "absent managed tree must clear a stale on-tree active marker"
+            !marker.exists(),
+            "dangling on-tree marker must be cleared when managed tree is absent"
+        );
+    }
+
+    #[test]
+    fn remove_managed_nu_preserves_valid_off_tree_marker() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        let off_tree = dir.path().join("external-nu");
+        std::fs::write(&off_tree, b"fake-nu").unwrap();
+        version_manager::write_active_version_with_binary(&root, "0.99.0", &off_tree).unwrap();
+        let marker = root.join("nu_state").join("active-version.json");
+        assert!(marker.is_file());
+
+        remove_managed_nu(&root, true).unwrap();
+        let active = version_manager::read_active_version(&root)
+            .unwrap()
+            .expect("valid off-tree selection must be preserved");
+        assert_eq!(active.version, "0.99.0");
+        assert_eq!(
+            active.binary_path.as_deref(),
+            Some(off_tree.to_str().unwrap())
         );
     }
 
@@ -1197,28 +1289,10 @@ esac\n";
         bin
     }
 
-    /// Save/restore process-global PATH around a closure so `prepend_*`
-    /// calls don't leak across tests.
-    #[cfg_attr(not(unix), allow(dead_code))]
-    fn run_with_path_snapshot<F, T>(body: F) -> T
-    where
-        F: FnOnce() -> T + std::panic::UnwindSafe,
-    {
-        let saved = std::env::var("PATH").ok();
-        let result = std::panic::catch_unwind(body);
-        match saved {
-            Some(p) => std::env::set_var("PATH", p),
-            None => std::env::remove_var("PATH"),
-        }
-        match result {
-            Ok(v) => v,
-            Err(panic) => std::panic::resume_unwind(panic),
-        }
-    }
-
     #[cfg(unix)]
     #[test]
     fn execute_use_existing_passes_with_yes_and_drops_managed() {
+        use crate::util::test_paths::PathRestoreGuard;
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("numan-root");
         std::fs::create_dir_all(&root).unwrap();
@@ -1230,9 +1304,8 @@ esac\n";
 
         let fake_nu = write_fake_nu(dir.path());
 
-        run_with_path_snapshot(std::panic::AssertUnwindSafe(|| {
-            execute_use_existing(&fake_nu, true, &root, true, ExecuteUseOpts::default()).unwrap();
-        }));
+        let _path_guard = PathRestoreGuard::new();
+        execute_use_existing(&fake_nu, true, &root, true, ExecuteUseOpts::default()).unwrap();
 
         assert!(
             !managed.is_file(),
@@ -1248,6 +1321,7 @@ esac\n";
     #[cfg(unix)]
     #[test]
     fn execute_use_existing_no_prompts_above_when_no_managed_install() {
+        use crate::util::test_paths::PathRestoreGuard;
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("numan-root");
         std::fs::create_dir_all(&root).unwrap();
@@ -1257,18 +1331,69 @@ esac\n";
         // No managed tree, so the destructive-removal confirm prompt is
         // gated off (`managed_dir_was_present == false`). End-to-end
         // success via register_existing_nu is the assertion.
-        run_with_path_snapshot(std::panic::AssertUnwindSafe(|| {
-            execute_use_existing(&fake_nu, true, &root, false, ExecuteUseOpts::default()).unwrap();
-        }));
+        let _path_guard = PathRestoreGuard::new();
+        execute_use_existing(&fake_nu, true, &root, false, ExecuteUseOpts::default()).unwrap();
         assert!(
             !root.join("tools/nushell").exists(),
             "no managed tree initially -> nothing to remove"
         );
     }
 
+    /// Registering an off-tree binary persists the `binary_path` field in the
+    /// active marker, makes `active_nu_binary` return the off-tree path, and
+    /// keeps the version visible in `numan use list`.
+    #[cfg(unix)]
+    #[test]
+    fn execute_use_existing_sets_binary_path_and_off_tree_is_listed() {
+        use crate::util::test_paths::PathRestoreGuard;
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let fake_nu = write_fake_nu(dir.path());
+
+        let _path_guard = PathRestoreGuard::new();
+        execute_use_existing(&fake_nu, true, &root, false, ExecuteUseOpts::default()).unwrap();
+
+        // The active marker must record the off-tree binary path.
+        let active = version_manager::read_active_version(&root)
+            .unwrap()
+            .expect("active marker must be written");
+        assert!(
+            active.binary_path.is_some(),
+            "binary_path must be set for an off-tree registration"
+        );
+        let stored_path = std::path::Path::new(active.binary_path.as_ref().unwrap());
+        assert_eq!(
+            stored_path.canonicalize().unwrap(),
+            fake_nu.canonicalize().unwrap(),
+            "binary_path must point to the registered off-tree binary"
+        );
+
+        // `active_nu_binary` must resolve to the off-tree binary.
+        let resolved = version_manager::active_nu_binary(&root)
+            .unwrap()
+            .expect("active_nu_binary must return Some for a valid off-tree marker");
+        assert_eq!(
+            resolved.canonicalize().unwrap(),
+            fake_nu.canonicalize().unwrap(),
+            "active_nu_binary must resolve to the off-tree binary"
+        );
+
+        // `list_installed_versions` must include the registered version so
+        // `numan use list` shows the off-tree binary's version.
+        let versions = version_manager::list_installed_versions(&root).unwrap();
+        assert!(
+            versions.contains(&active.version),
+            "off-tree version '{}' must appear in list_installed_versions; got: {versions:?}",
+            active.version
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn execute_use_existing_decline_keeps_managed_intact_and_prompt_says_no_undo() {
+        use crate::util::test_paths::PathRestoreGuard;
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("numan-root");
         std::fs::create_dir_all(&root).unwrap();
@@ -1291,9 +1416,8 @@ esac\n";
             validate: None,
             confirm: Some(&mock_confirm),
         };
-        let result = run_with_path_snapshot(std::panic::AssertUnwindSafe(|| {
-            execute_use_existing(&fake_nu, false, &root, true, opts)
-        }));
+        let _path_guard = PathRestoreGuard::new();
+        let result = execute_use_existing(&fake_nu, false, &root, true, opts);
         let err_msg = match result {
             Ok(()) => panic!("expected Err from declined confirm"),
             Err(e) => format!("{e:#}"),

@@ -41,6 +41,7 @@ fn nu_setup_repair_test(
         panic!("expected NuAction::Use, got {:?}", args.action);
     };
     assert_eq!(Some(path.as_path()), expected.as_ref().map(|p| p.as_path()));
+    assert!(!force, "doctor must not set force=true on NuAction::Use");
     assert!(
         !*force,
         "doctor found_off_path repair must not pass --force"

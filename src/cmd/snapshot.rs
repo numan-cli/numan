@@ -108,6 +108,9 @@ fn inspect(root: &Path, id: &str) -> Result<()> {
     if let Some(h) = &m.sidecar_digests.imports_sha256 {
         println!("  imports:  {}", short_hash(h));
     }
+    if let Some(h) = &m.sidecar_digests.paths_sha256 {
+        println!("  paths:    {}", short_hash(h));
+    }
 
     println!(
         "\nPayload provenance ({} package(s)):",
@@ -156,6 +159,24 @@ fn inspect(root: &Path, id: &str) -> Result<()> {
                 "  {}  from {} (trust: {})",
                 pkg, rec.nupm_source_path, rec.trust_level
             );
+        }
+    }
+
+    match &snapshot.paths {
+        Some(crate::state::snapshot::SnapshotPaths::Present(p)) => {
+            println!(
+                "\nNu path cache: {} (executable sha256 {})",
+                p.nu_version,
+                short_hash(&p.nu_executable_hash)
+            );
+            println!("  executable: {}", p.nu_executable);
+            println!("  plugin registry: {}", p.plugin_registry_path);
+        }
+        Some(crate::state::snapshot::SnapshotPaths::Absent) => {
+            println!("\nNu path cache: absent at snapshot time");
+        }
+        None => {
+            println!("\nNu path cache: not captured (legacy snapshot)");
         }
     }
 
@@ -288,10 +309,14 @@ mod tests {
     fn delete_bypasses_guard_with_explicit_yes() {
         let dir = tempfile::tempdir().unwrap();
         // --yes must get past the destructive guard regardless of TTY; the
-        // downstream error proves the guard was the only blocker.
+        // downstream "does not exist" bail proves the guard was the only blocker.
         // Force non-TTY so this never depends on process stdin terminal status.
         let err = delete_with_tty(dir.path(), ID, true, false).unwrap_err();
         let msg = err.to_string();
+        assert!(
+            msg.contains("does not exist") || msg.contains("not a UUIDv7"),
+            "expected downstream snapshot ID/missing bail, got: {msg}"
+        );
         assert!(
             !msg.contains("Refusing destructive"),
             "--yes must bypass the guard, got: {msg}"
@@ -322,6 +347,10 @@ mod tests {
         assert!(
             !msg.contains("Refusing destructive"),
             "--yes must bypass the guard, got: {msg}"
+        );
+        assert!(
+            msg.contains("not initialized") || msg.contains("numan init"),
+            "--yes must fail at downstream init check (got: {msg})"
         );
     }
 }

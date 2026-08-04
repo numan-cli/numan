@@ -24,8 +24,8 @@ pub struct UseArgs {
 }
 
 pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
-    // Listing is read-only: `list_installed_versions` already surfaces a flat
-    // legacy install via the VERSION marker without migrating on disk.
+    // Listing is read-only: no lock, snapshot, or migrate. A flat legacy
+    // install is still surfaced via the VERSION marker without on-disk migrate.
     if args.version == "list" {
         return execute_list(root);
     }
@@ -81,27 +81,24 @@ fn execute_latest(root: &Path) -> Result<()> {
     let latest = version_manager::latest_installed_version(root)?;
     match latest {
         Some(version) => {
-            // Preserve off-tree `binary_path` only when it still resolves to a
-            // real file. An empty or stale path must not be rewritten; fall
-            // through to a clean on-tree active marker instead.
+            // Preserve off-tree `binary_path` when the existing marker already
+            // names this version with a valid off-tree entry. Without this,
+            // every successful `numan use latest` overwrites the marker with
+            // `None`, breaking resolution of `setup nu use <path>` choices.
             if let Some(existing) = version_manager::read_active_version(root)? {
-                if existing.version == version {
-                    if let Some(off_tree) = existing.binary_path.as_ref() {
-                        let off_tree_path = std::path::Path::new(off_tree);
-                        if !off_tree.is_empty() && off_tree_path.is_file() {
-                            version_manager::write_active_version_with_binary(
-                                root,
-                                &version,
-                                off_tree_path,
-                            )?;
-                            println!(
-                                "Switched to Nu {} (latest installed; off-tree path preserved).",
-                                version
-                            );
-                            refresh_cached_nu_paths_after_switch(root)?;
-                            return Ok(());
-                        }
-                    }
+                if existing.version == version
+                    && existing
+                        .binary_path
+                        .as_deref()
+                        .is_some_and(|path| std::path::Path::new(path).is_file())
+                {
+                    // Marker is already valid for this version; skip the write
+                    // to avoid clobbering the off-tree binary_path.
+                    println!(
+                        "Nu {} is already active (latest installed; off-tree path preserved).",
+                        version
+                    );
+                    return Ok(());
                 }
             }
             version_manager::write_active_version(root, &version)?;
@@ -201,6 +198,7 @@ fn refresh_cached_nu_paths_after_switch(root: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::state::snapshot::{list_snapshots, SnapshotReason, SnapshotTrigger};
+    use crate::util::fs_safety::acquire_mutation_lock;
     use tempfile::TempDir;
 
     fn create_fake_version(root: &Path, version: &str) {
@@ -383,15 +381,15 @@ mod tests {
     }
 
     #[test]
-    fn test_use_latest_drops_stale_offtree_binary_path() {
+    fn test_use_latest_self_heals_dangling_off_tree_binary_path() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         create_fake_version(root, "0.113.1");
-        // Marker names latest but points at a missing off-tree binary.
+        // Marker names latest version but points at a missing off-tree binary.
         version_manager::write_active_version_with_binary(
             root,
             "0.113.1",
-            std::path::Path::new("/nonexistent/opt-nu"),
+            std::path::Path::new("/nonexistent/nu"),
         )
         .unwrap();
 
@@ -407,7 +405,7 @@ mod tests {
         assert_eq!(active.version, "0.113.1");
         assert!(
             active.binary_path.is_none(),
-            "stale/empty off-tree path must not be preserved: {:?}",
+            "dangling off-tree path must be cleared; got {:?}",
             active.binary_path
         );
     }
@@ -514,5 +512,53 @@ mod tests {
         assert_pre_mutation_snapshot(root);
         let active = version_manager::read_active_version(root).unwrap().unwrap();
         assert_eq!(active.version, "0.113.1");
+    }
+
+    #[test]
+    fn execute_fails_while_mutation_lock_held() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.112.0");
+        create_fake_version(root, "0.113.1");
+        version_manager::write_active_version(root, "0.112.0").unwrap();
+
+        // Hold the root mutation lock — concurrent `numan use` must refuse.
+        let _lock = acquire_mutation_lock(root).unwrap();
+
+        let err = execute(
+            &UseArgs {
+                version: "0.113.1".to_string(),
+            },
+            root,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("lock")
+                || msg.contains("mutex")
+                || msg.contains("busy")
+                || msg.contains("mutation")
+                || msg.contains("progress"),
+            "error must mention lock contention: {msg}"
+        );
+    }
+
+    #[test]
+    fn list_succeeds_while_mutation_lock_held() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.113.1");
+        version_manager::write_active_version(root, "0.113.1").unwrap();
+
+        // Hold the lock — `numan use list` is read-only and must NOT acquire it.
+        let _lock = acquire_mutation_lock(root).unwrap();
+
+        execute(
+            &UseArgs {
+                version: "list".to_string(),
+            },
+            root,
+        )
+        .unwrap();
     }
 }

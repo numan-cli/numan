@@ -59,8 +59,6 @@ fn setup_nu_uses_injected_installer_without_network() {
     let platform = Platform::detect();
 
     let installer = |install_root: &std::path::Path, _platform: &Platform| {
-        // PR69 Srm: the injected installer must write the VERSIONED layout,
-        // exactly like the real network installer now does.
         let binary = version_manager::version_binary(install_root, "0.113.1");
         std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
         std::fs::write(&binary, b"fake nu").unwrap();
@@ -102,23 +100,24 @@ fn execute_nu_command_short_circuits_pinned_install_without_network() {
     let root = dir.path();
     let _path_guard = PathRestoreGuard::new();
 
-    // Pin-only short-circuit: when the exact requested version binary exists,
-    // `numan setup nu <version> --yes` must not hit the network installer and
-    // must still persist the active-version marker. Bare `setup nu` (latest)
-    // intentionally does NOT short-circuit on "any version present".
-    let binary = version_manager::version_binary(root, "0.113.1");
-    std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+    // Pin-only short-circuit at the versioned path (legacy flat path is not a
+    // gate). When the exact requested version binary exists, setup must not
+    // hit the network installer and must still persist the active-version marker.
+    let version = "0.113.1";
+    let bin_dir = version_manager::version_install_dir(root, version);
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let binary = version_manager::version_binary(root, version);
     std::fs::write(&binary, b"fake nu").unwrap();
 
     execute_nu(
-        &NuSetupArgs::install(Some("0.113.1".to_string()), false, true, true),
+        &NuSetupArgs::install(Some(version.to_string()), false, true, true),
         root,
     )
     .unwrap();
 
     let active = version_manager::read_active_version(root).unwrap().unwrap();
     assert_eq!(
-        active.version, "0.113.1",
+        active.version, version,
         "pinned short-circuit must still write the active-version marker"
     );
     assert_eq!(
@@ -246,7 +245,10 @@ fn cli_parse_remove_subcommand() {
 #[test]
 fn cli_parse_path_subcommand() {
     let args = parse_nu_args(&["path"]);
-    assert!(matches!(args.action, Some(NuAction::Path { .. })));
+    match &args.action {
+        Some(NuAction::Path { force: false }) => {}
+        other => panic!("expected Path {{ force: false }}, got {other:?}"),
+    }
 }
 
 #[test]

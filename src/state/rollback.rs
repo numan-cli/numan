@@ -2,9 +2,11 @@
 //!
 //! Rollback restores exactly the state captured in a snapshot: the lockfile,
 //! the managed module-autoload file (`numan.nu`), the autoload-state
-//! projection, and the nupm-import provenance sidecar. It never re-solves
-//! against a registry, never substitutes compatible versions, and never
-//! rewrites files Numan does not own.
+//! projection, the nupm-import provenance sidecar, and the Nu path cache
+//! (`nu_state/paths.json`) when the snapshot captured it. It never re-solves
+//! against a registry, never substitutes compatible versions, never moves Nu
+//! binaries or rewrites shell PATH, and never rewrites files Numan does not
+//! own.
 //!
 //! The operation is journaled through `PendingLifecycle` with dedicated
 //! rollback stages. Every commit step is an atomic file write, and re-running
@@ -20,7 +22,7 @@ use crate::state::autoload_state::AutoloadState;
 use crate::state::lifecycle_journal::{LifecycleOp, LifecycleStage, PendingLifecycle};
 use crate::state::snapshot::{
     create_snapshot, load_snapshot, verify_payloads, ManagedAutoloadProjection, Snapshot,
-    SnapshotReason, SnapshotRelation, SnapshotSidecar, SnapshotTrigger,
+    SnapshotPaths, SnapshotReason, SnapshotRelation, SnapshotSidecar, SnapshotTrigger,
 };
 
 /// Outcome summary of a completed rollback.
@@ -48,7 +50,10 @@ pub struct RollbackReport {
 /// - The snapshot was taken for this Numan root (autoload content embeds
 ///   absolute paths).
 /// - If the snapshot captured a managed autoload file, the current Nu identity
-///   must match the identity recorded in the snapshot.
+///   (from the live path cache) must match the identity recorded in the
+///   snapshot. Paths restore runs after this check and does not relax it:
+///   restoring `paths.json` does not move Nu binaries, so an autoload graph
+///   validated against a different Nu still cannot be restored.
 ///
 /// The caller must hold the root mutation lock.
 pub fn rollback_to_snapshot(
@@ -224,6 +229,31 @@ pub fn rollback_to_snapshot(
         }
     }
     journal.stage = LifecycleStage::ImportsCommitted;
+    journal.save(root)?;
+
+    // Commit 5: Nu path cache. Legacy snapshots (`paths == None`) leave the
+    // live cache untouched. Empty lockfiles / no activations are supported:
+    // paths restore does not depend on package state.
+    match &snapshot.paths {
+        None => {}
+        Some(SnapshotPaths::Present(paths)) => {
+            std::fs::create_dir_all(root.join("nu_state")).with_context(|| {
+                format!(
+                    "Failed to create nu_state directory under '{}'",
+                    root.display()
+                )
+            })?;
+            paths.save(root)?;
+        }
+        Some(SnapshotPaths::Absent) => {
+            let paths_path = root.join("nu_state/paths.json");
+            if paths_path.exists() {
+                std::fs::remove_file(&paths_path)
+                    .with_context(|| format!("Failed to remove '{}'", paths_path.display()))?;
+            }
+        }
+    }
+    journal.stage = LifecycleStage::PathsCommitted;
     journal.save(root)?;
 
     journal.stage = LifecycleStage::Completed;
@@ -776,5 +806,142 @@ mod tests {
         let runner = FakeCandidateRunner::success();
         let err = rollback_to_snapshot(root, &snap.id, &runner).unwrap_err();
         assert!(err.to_string().contains("current root"), "{err}");
+    }
+
+    fn save_fake_paths(root: &Path, hash: &str, version: &str) {
+        let nu_paths = crate::nu::paths::NuPaths {
+            nu_executable: root.join("fake-nu").to_string_lossy().to_string(),
+            nu_version: version.to_string(),
+            plugin_registry_path: root.join("plugin.msgpackz").to_string_lossy().to_string(),
+            nu_executable_hash: hash.to_string(),
+            platform: "x86_64-linux-gnu".to_string(),
+            data_dir: None,
+            vendor_autoload_dirs: Vec::new(),
+            vendor_autoload_dir: None,
+        };
+        nu_paths.save(root).unwrap();
+    }
+
+    #[test]
+    fn rollback_restores_paths_with_empty_lockfile() {
+        let dir = make_root();
+        let root = dir.path();
+
+        // No packages; only a Nu path cache.
+        save_fake_paths(root, "hash-before", "0.113.1");
+        let snap = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Install,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Simulate init --refresh rewriting paths.json while the activation
+        // graph stays empty.
+        save_fake_paths(root, "hash-after", "0.120.0");
+        let after = crate::nu::paths::NuPaths::load(root).unwrap();
+        assert_eq!(after.nu_executable_hash, "hash-after");
+
+        let runner = FakeCandidateRunner::success();
+        rollback_to_snapshot(root, &snap.id, &runner).unwrap();
+
+        let restored = crate::nu::paths::NuPaths::load(root).unwrap();
+        assert_eq!(restored.nu_executable_hash, "hash-before");
+        assert_eq!(restored.nu_version, "0.113.1");
+        assert!(Lockfile::load(root).unwrap().is_empty());
+        assert!(PendingLifecycle::load(root).unwrap().is_none());
+    }
+
+    #[test]
+    fn rollback_deletes_paths_when_snapshot_had_absent() {
+        let dir = make_root();
+        let root = dir.path();
+
+        // Snapshot while uninitialized (no paths.json).
+        let snap = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Install,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!root.join("nu_state/paths.json").exists());
+
+        // Paths appear later (e.g. numan init).
+        save_fake_paths(root, "hash-new", "0.113.1");
+        assert!(root.join("nu_state/paths.json").exists());
+
+        let runner = FakeCandidateRunner::success();
+        rollback_to_snapshot(root, &snap.id, &runner).unwrap();
+        assert!(
+            !root.join("nu_state/paths.json").exists(),
+            "rollback must remove paths.json when the snapshot recorded Absent"
+        );
+    }
+
+    #[test]
+    fn refresh_then_rollback_restores_pre_refresh_paths() {
+        // Mirrors `numan init --refresh` with no active packages: PreMutation
+        // Init snapshot, rewrite paths.json, then rollback.
+        let dir = make_root();
+        let root = dir.path();
+
+        save_fake_paths(root, "hash-before", "0.113.1");
+        let snap = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Init,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(snap.trigger, SnapshotTrigger::Init);
+
+        save_fake_paths(root, "hash-after", "0.120.0");
+        let runner = FakeCandidateRunner::success();
+        rollback_to_snapshot(root, &snap.id, &runner).unwrap();
+
+        let restored = crate::nu::paths::NuPaths::load(root).unwrap();
+        assert_eq!(restored.nu_executable_hash, "hash-before");
+        assert_eq!(restored.nu_version, "0.113.1");
+    }
+
+    #[test]
+    fn rollback_leaves_paths_alone_for_legacy_snapshots() {
+        let dir = make_root();
+        let root = dir.path();
+
+        save_fake_paths(root, "hash-original", "0.113.1");
+        let snap = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Install,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Strip paths capture to simulate a pre-sidecar snapshot.
+        let snap_dir = root.join(format!("state/snapshots/{}", snap.id));
+        let paths_sidecar = snap_dir.join("paths.json");
+        if paths_sidecar.exists() {
+            std::fs::remove_file(&paths_sidecar).unwrap();
+        }
+        let mut manifest = crate::state::snapshot::load_manifest(root, &snap.id).unwrap();
+        manifest.sidecar_digests.paths_sha256 = None;
+        crate::util::atomic::write_json_atomic(&snap_dir.join("snapshot.json"), &manifest).unwrap();
+
+        // Mutate live paths; legacy rollback must not touch them.
+        save_fake_paths(root, "hash-mutated", "0.120.0");
+
+        let runner = FakeCandidateRunner::success();
+        rollback_to_snapshot(root, &snap.id, &runner).unwrap();
+
+        let current = crate::nu::paths::NuPaths::load(root).unwrap();
+        assert_eq!(current.nu_executable_hash, "hash-mutated");
+        assert_eq!(current.nu_version, "0.120.0");
     }
 }
