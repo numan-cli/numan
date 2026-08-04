@@ -655,19 +655,69 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
     // fix hint is unambiguous.
     match PendingMigration::load(root) {
         Ok(Some(j)) => {
-            // Include the journaled version so the advertised repair is a
-            // runnable CLI (`numan use` alone requires <VERSION>).
-            let use_fix = format!("{CMD_USE} {}", j.version);
-            findings.push(finding(
-                "journal.migration_pending",
-                Severity::Warn,
-                format!(
-                    "Pending legacy-Nu migration journal (stage: {}, version: {})",
-                    j.stage, j.version
-                ),
-                Some(use_fix.as_str()),
-                RepairTier::Auto,
-            ));
+            let journal_path = PendingMigration::journal_path(root);
+            // Filesystem-inconsistent journals cannot be auto-reconciled:
+            // - unsafe version components (traversal) are refused by reconcile
+            // - Renamed without `<version>/<bin>` is rejected by reconcile
+            // Treating them as Warn/Auto leaves doctor --fix exiting 0 after a
+            // Failed repair while the corrupt journal remains. Escalate to
+            // Error/Manual so exit status surfaces the broken migration state.
+            let unsafe_version = !migration_journal::is_safe_version_component(&j.version);
+            let renamed_missing = matches!(
+                j.stage,
+                migration_journal::MigrationStage::Renamed
+            ) && !version_manager::version_binary(root, &j.version).is_file();
+
+            if unsafe_version || renamed_missing {
+                let (message, fix) = if unsafe_version {
+                    (
+                        format!(
+                            "Migration journal at '{}' has unsafe version component '{}'. \
+                             Delete the stale journal to recover.",
+                            journal_path.display(),
+                            j.version
+                        ),
+                        format!("Delete the stale journal at '{}'", journal_path.display()),
+                    )
+                } else {
+                    (
+                        format!(
+                            "Migration journal at '{}' is staged 'Renamed' but the versioned \
+                             binary for '{}' is missing. Run `numan setup nu {}` to repair, \
+                             or delete the stale journal.",
+                            journal_path.display(),
+                            j.version,
+                            j.version
+                        ),
+                        format!(
+                            "Run `{CMD_SETUP_NU} {}` to repair, or delete the stale journal at '{}'",
+                            j.version,
+                            journal_path.display()
+                        ),
+                    )
+                };
+                findings.push(finding(
+                    "journal.migration_invalid",
+                    Severity::Error,
+                    message,
+                    Some(&fix),
+                    RepairTier::Manual,
+                ));
+            } else {
+                // Include the journaled version so the advertised repair is a
+                // runnable CLI (`numan use` alone requires <VERSION>).
+                let use_fix = format!("{CMD_USE} {}", j.version);
+                findings.push(finding(
+                    "journal.migration_pending",
+                    Severity::Warn,
+                    format!(
+                        "Pending legacy-Nu migration journal (stage: {}, version: {})",
+                        j.stage, j.version
+                    ),
+                    Some(use_fix.as_str()),
+                    RepairTier::Auto,
+                ));
+            }
         }
         Ok(None) => {}
         Err(e) => {
@@ -2537,5 +2587,99 @@ mod tests {
                 .all(|f| f.id != "journal.migration_pending"),
             "invalid journal must NOT also produce a Pending finding"
         );
+    }
+
+    /// Renamed journal + missing versioned binary: reconcile refuses this
+    /// state, so doctor must report Error (not Warn/Auto) so `doctor --fix`
+    /// cannot exit 0 while leaving corrupt migration state masked.
+    #[test]
+    fn doctor_reports_renamed_missing_binary_as_migration_invalid() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        // Bypass `save`'s unsafe-version guard is not needed; use a valid
+        // version string but leave the binary absent so Renamed is inconsistent.
+        std::fs::write(
+            PendingMigration::journal_path(root),
+            format!(
+                r#"{{"schema_version":{},"version":"0.113.1","stage":"renamed"}}"#,
+                crate::state::migration_journal::SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_invalid")
+            .expect("journal.migration_invalid for Renamed+missing binary");
+        assert_eq!(f.severity, Severity::Error);
+        assert_eq!(f.repair, RepairTier::Manual);
+        assert!(
+            f.message.contains("Renamed") && f.message.contains("missing"),
+            "finding must name Renamed+missing: {}",
+            f.message
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.id != "journal.migration_pending"),
+            "inconsistent Renamed journal must not also be Warn/Auto pending"
+        );
+        // exit_code must be non-zero so safe-batch / CI do not treat this as healthy
+        assert_eq!(report.exit_code(), 1);
+    }
+
+    #[test]
+    fn doctor_reports_unsafe_migration_version_as_invalid() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        // Tampered journal: valid schema/stage, unsafe version component.
+        std::fs::write(
+            PendingMigration::journal_path(root),
+            format!(
+                r#"{{"schema_version":{},"version":"../etc","stage":"prepared"}}"#,
+                crate::state::migration_journal::SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_invalid")
+            .expect("journal.migration_invalid for unsafe version");
+        assert_eq!(f.severity, Severity::Error);
+        assert_eq!(f.repair, RepairTier::Manual);
+        assert!(
+            f.message.contains("unsafe"),
+            "finding must mention unsafe component: {}",
+            f.message
+        );
+        assert_eq!(report.exit_code(), 1);
     }
 }
