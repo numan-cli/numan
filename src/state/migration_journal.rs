@@ -384,6 +384,80 @@ mod tests {
         assert!(PendingMigration::load(tmp.path()).unwrap().is_none());
     }
 
+    /// Contract: unknown schema_version hard-fails (doctor journal.migration_invalid).
+    #[test]
+    fn load_rejects_unknown_schema_version() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        std::fs::write(
+            PendingMigration::journal_path(root),
+            br#"{"schema_version":999,"version":"0.113.1","stage":"prepared"}"#,
+        )
+        .unwrap();
+
+        let err = PendingMigration::load(root).unwrap_err().to_string();
+        assert!(
+            err.contains("schema_version"),
+            "err must name schema_version: {err}"
+        );
+        assert!(
+            err.contains("999"),
+            "err must surface the actual value: {err}"
+        );
+        assert!(
+            err.contains(&SCHEMA_VERSION.to_string()),
+            "err must name expected schema: {err}"
+        );
+    }
+
+    /// Path-traversal guard on save: refuse unsafe version components before write.
+    #[test]
+    fn save_refuses_unsafe_version_component() {
+        let tmp = TempDir::new().unwrap();
+        let j = PendingMigration {
+            schema_version: SCHEMA_VERSION,
+            version: "../etc".to_string(),
+            stage: MigrationStage::Prepared,
+        };
+        let err = j.save(tmp.path()).unwrap_err().to_string();
+        assert!(
+            err.contains("unsafe version component"),
+            "err must name the guard: {err}"
+        );
+        assert!(
+            !PendingMigration::journal_path(tmp.path()).exists(),
+            "unsafe save must not write a journal file"
+        );
+    }
+
+    /// Path-traversal guard on reconcile: tampered on-disk journal is retained
+    /// for manual repair (not deleted on refusal).
+    #[test]
+    fn reconcile_refuses_tampered_version_component() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        // Bypass `save`'s guard to simulate a tampered on-disk journal.
+        std::fs::write(
+            PendingMigration::journal_path(root),
+            format!(
+                r#"{{"schema_version":{SCHEMA_VERSION},"version":"../etc","stage":"prepared"}}"#
+            ),
+        )
+        .unwrap();
+
+        let err = reconcile(root).unwrap_err().to_string();
+        assert!(
+            err.contains("unsafe version component"),
+            "err must name the guard: {err}"
+        );
+        assert!(
+            PendingMigration::journal_path(root).exists(),
+            "tampered journal must be retained for manual repair"
+        );
+    }
+
     #[test]
     fn delete_removes_file() {
         let tmp = TempDir::new().unwrap();

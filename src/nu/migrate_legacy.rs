@@ -781,4 +781,43 @@ mod tests {
             "successful migration must clear the journal"
         );
     }
+
+    /// Symlink/reparse-point guard at the top of migrate_legacy_install_with_detector.
+    /// Unix-only so Windows symlink privilege requirements do not flake CI.
+    #[cfg(unix)]
+    #[test]
+    fn migrate_legacy_refuses_symlinked_managed_dir() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // Real directory holding a legacy binary, reached only via a symlink.
+        let real = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join(nu_binary_name()), b"fake legacy nu").unwrap();
+
+        std::fs::create_dir_all(root.join("tools")).unwrap();
+        std::os::unix::fs::symlink(&real, root.join("tools").join("nushell")).unwrap();
+
+        let err = migrate_legacy_install_with_detector(
+            root,
+            &|_| panic!("detector must not run behind a symlinked managed dir"),
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            err.contains("symlink or reparse point"),
+            "err must name the symlink guard: {err}"
+        );
+        assert!(
+            real.join(nu_binary_name()).is_file(),
+            "the target binary must be left untouched"
+        );
+        assert_eq!(
+            std::fs::read(real.join(nu_binary_name())).unwrap(),
+            b"fake legacy nu",
+            "target binary contents must not be modified"
+        );
+    }
 }
