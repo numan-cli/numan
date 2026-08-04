@@ -39,12 +39,9 @@ v1 fixes this by:
    `CONTRACT_SHA` (40-char freeze commit). CI first resolves the tag via the
    GitHub API, fails closed if the resolved commit is not exactly
    `CONTRACT_SHA`, then fetches the three frozen artifacts by
-   `CONTRACT_SHA`. The canonical workflow (`.github/workflows/ci.yml`) diffs
-   them against its working tree; sibling/mirror workflows materialize the
-   pinned artifacts and run the auditor against their local roadmap (they do
-   not perform the three working-tree diffs). Artifacts are never fetched by
-   tag alone, so a force-moved tag without a pin rewrite cannot silently
-   rewrite the guardrail.
+   `CONTRACT_SHA` from `raw.githubusercontent.com` and diffs them against the
+   working tree. Artifacts are never fetched by tag alone, so a force-moved
+   tag without a pin rewrite cannot silently rewrite the guardrail.
 3. **Bumping requires a coordinated PR set.** `scripts/bump-contract.sh`
    is the only sanctioned way to move to v2. It opens one PR per repo in
    merge order (numan first, then siblings) and refuses to continue until
@@ -163,22 +160,19 @@ hold:
 
 ### Reverting
 
-If a bump turns out to be wrong after merge, publish the rollback in this
-order (do not tag before merge, and do not tag the pin-rewrite commit):
+If a bump turns out to be wrong after merge:
 
 1. Open a "contract-rollback" PR on `numan` that restores the three
    frozen artifacts (`docs/plans/consolidated-multi-repo-roadmap.md`,
    `scripts/check-roadmap-drift.py`, `docs/contracts/roadmap-vN.md`)
-   to the pre-bump content, and **merge** that restore commit.
-2. Create and push the annotated tag `numan-roadmap-contract/vN-deleted`
-   at that exact merged restore commit.
-3. Land a **separate** pin-rewrite commit in `numan` and the sibling
-   mirrors that rewrites **both** `CONTRACT_TAG` and `CONTRACT_SHA` in
-   every pinning workflow to `numan-roadmap-contract/vN-deleted` and the
-   rollback commit SHA. Changing only the tag leaves workflows
-   fail-closed: the resolve step requires `CONTRACT_TAG` → commit to
-   equal `CONTRACT_SHA`.
-4. Land a fresh v(N+1) bump once the rollback is stable.
+   to the pre-bump content and creates annotated tag
+   `numan-roadmap-contract/vN-deleted` at that rollback commit.
+2. In the **same** PR (and the sibling mirror PRs), rewrite **both**
+   `CONTRACT_TAG` and `CONTRACT_SHA` in every pinning workflow to
+   `numan-roadmap-contract/vN-deleted` and the rollback commit SHA.
+   Changing only the tag leaves workflows fail-closed: the resolve step
+   requires `CONTRACT_TAG` → commit to equal `CONTRACT_SHA`.
+3. Land a fresh v(N+1) bump once the rollback is stable.
 
 ### Partial-bump recovery
 
