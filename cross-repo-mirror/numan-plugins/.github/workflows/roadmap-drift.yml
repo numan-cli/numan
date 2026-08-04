@@ -1,9 +1,10 @@
 name: Roadmap drift
 
 # Mirror of numan/scripts/check-roadmap-drift.py runner. Fetches the
-# canonical consolidated roadmap from numan@master so the sibling repo
-# never holds a stale copy. Pinned actions-commit SHA matches
-# numan/.github/workflows/ci.yml so future audit passes change in lockstep.
+# canonical consolidated roadmap + drift script from numan pinned to
+# the roadmap-contract v1 SHA so the guardrail cannot drift silently.
+# Bumping the contract is a coordinated operation across all three
+# repos; see scripts/bump-contract.sh in numan.
 
 on:
   pull_request:
@@ -16,37 +17,84 @@ permissions:
 
 jobs:
   roadmap-drift:
-    name: Roadmap drift against numan consolidated roadmap
+    name: Roadmap drift against numan consolidated roadmap (contract v1)
     runs-on: ubuntu-latest
+    env:
+      # Roadmap contract v1 pin. Bumping requires scripts/bump-contract.sh
+      # in tonythethompson/numan — never edit this in isolation.
+      CONTRACT_TAG: numan-roadmap-contract/v1
+      CONTRACT_SHA: 2cd6f5a4d5e831d1248d3fe3fd924944823510a1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Fetch consolidated roadmap from numan@master
+        with:
+          persist-credentials: false
+      - name: Verify pinned SHA still resolves to tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ref_file=$(mktemp)
+          status=$(curl --silent --show-error --output "$ref_file" --write-out "%{http_code}" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "User-Agent: numan-ci" \
+            "https://api.github.com/repos/tonythethompson/numan/git/refs/tags/${CONTRACT_TAG}")
+          if [ "$status" = "404" ]; then
+            echo "::warning::Tag $CONTRACT_TAG does not exist yet; skipping SHA resolution check."
+            exit 0
+          fi
+          if [ "$status" != "200" ]; then
+            echo "::error::GitHub API returned HTTP $status for tag $CONTRACT_TAG."
+            cat "$ref_file"
+            exit 1
+          fi
+          object_type=$(jq -r '.object.type' "$ref_file")
+          tagged_sha=$(jq -r '.object.sha' "$ref_file")
+          if [ "$object_type" = "tag" ]; then
+            tagged_sha=$(curl --fail-with-body --silent --show-error \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "User-Agent: numan-ci" \
+              "$(jq -r '.object.url' "$ref_file")" \
+              | jq -r '.object.sha')
+          fi
+          if [ "$tagged_sha" != "$CONTRACT_SHA" ]; then
+            echo "::error::Tag $CONTRACT_TAG resolves to $tagged_sha but CONTRACT_SHA=$CONTRACT_SHA."
+            echo "Run scripts/bump-contract.sh in numan to coordinate the bump across all three repos."
+            exit 1
+          fi
+          echo "OK: $CONTRACT_TAG pinned to $CONTRACT_SHA"
+      - name: Fetch consolidated roadmap from pin (numan@${{ env.CONTRACT_TAG }} -> ${{ env.CONTRACT_SHA }})
         run: |
           mkdir -p docs/plans
           curl --fail-with-body --silent --show-error --location \
-            https://raw.githubusercontent.com/tonythethompson/numan/master/docs/plans/consolidated-multi-repo-roadmap.md \
+            https://raw.githubusercontent.com/tonythethompson/numan/$CONTRACT_SHA/docs/plans/consolidated-multi-repo-roadmap.md \
             -o docs/plans/consolidated-multi-repo-roadmap.md
           # Sanity check: the file must not be empty AND must mention this
           # repo by path so we know we didn't grab a placeholder document.
           test -s docs/plans/consolidated-multi-repo-roadmap.md
           grep -q "numan-plugins/docs/roadmap.md" docs/plans/consolidated-multi-repo-roadmap.md
         env:
-          # Pin via tag once a roadmap release cadence exists; master is OK
-          # for the first cut because the consolidated doc is the canonical
-          # cross-repo authority referenced by all three repos.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pull check-roadmap-drift.py from numan@master
+      - name: Pull check-roadmap-drift.py from pin (numan@${{ env.CONTRACT_TAG }} -> ${{ env.CONTRACT_SHA }})
         run: |
           mkdir -p scripts
           curl --fail-with-body --silent --show-error --location \
-            https://raw.githubusercontent.com/tonythethompson/numan/master/scripts/check-roadmap-drift.py \
+            https://raw.githubusercontent.com/tonythethompson/numan/$CONTRACT_SHA/scripts/check-roadmap-drift.py \
             -o scripts/check-roadmap-drift.py
+          test -s scripts/check-roadmap-drift.py
           chmod +x scripts/check-roadmap-drift.py
+      - name: Pull contract doc from pin (numan@${{ env.CONTRACT_TAG }} -> ${{ env.CONTRACT_SHA }})
+        run: |
+          mkdir -p docs/contracts
+          curl --fail-with-body --silent --show-error --location \
+            https://raw.githubusercontent.com/tonythethompson/numan/$CONTRACT_SHA/docs/contracts/roadmap-v1.md \
+            -o docs/contracts/roadmap-v1.md
+          test -s docs/contracts/roadmap-v1.md
       - name: Run drift check
         env:
           CONSOLIDATED_ROADMAP: docs/plans/consolidated-multi-repo-roadmap.md
           LOCAL_ROADMAP: docs/roadmap.md
-        run: python scripts/check-roadmap-drift.py
+        run: python3 scripts/check-roadmap-drift.py
       - name: Verify repo-local roadmap cross-link (defense in depth)
         run: |
           test -f docs/roadmap.md
