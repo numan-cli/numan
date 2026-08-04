@@ -223,15 +223,30 @@ pub fn assert_contained(root: &Path, relative: &Path) -> Result<PathBuf> {
         .canonicalize()
         .with_context(|| format!("Failed to canonicalize root '{}'", root.display()))?;
 
-    // Canonicalize the joined path only if it exists; otherwise fall back
-    // to a normalized lexical check that does not require the path to exist yet.
+    // Canonicalize the joined path only if it exists; otherwise append the
+    // relative components onto the *canonical* root. Lexically normalizing
+    // `root.join(relative)` would keep pre-canonicalize prefixes (e.g. macOS
+    // `/var` vs `/private/var`) and spuriously fail the `starts_with` check
+    // for not-yet-created paths such as `tools/nushell/<version>/`.
     let canonical_joined = if joined.exists() {
         joined
             .canonicalize()
             .with_context(|| format!("Failed to canonicalize '{}'", joined.display()))?
     } else {
-        // Path does not yet exist — normalize lexically.
-        normalize_lexical(&joined)
+        let mut out = canonical_root.clone();
+        for component in relative.components() {
+            match component {
+                Component::CurDir => {}
+                Component::Normal(c) => out.push(c),
+                Component::ParentDir => {
+                    // Should not occur after is_safe_relative_path; defensive.
+                    out.pop();
+                }
+                // RootDir / Prefix already rejected by is_safe_relative_path.
+                _ => {}
+            }
+        }
+        out
     };
 
     if !canonical_joined.starts_with(&canonical_root) {
@@ -265,25 +280,6 @@ pub fn assert_managed_nushell_layout(root: &Path) -> Result<()> {
         let _ = assert_contained(root, Path::new("tools/nushell"))?;
     }
     Ok(())
-}
-
-/// Lexically normalize a path without requiring it to exist on disk.
-///
-/// Processes components sequentially, collapsing `.` and refusing `..`
-/// (which should have been caught by [`is_safe_relative_path`] already).
-fn normalize_lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                // Should not occur if is_safe_relative_path was enforced first.
-                out.pop();
-            }
-            other => out.push(other),
-        }
-    }
-    out
 }
 
 // ── Managed-file ownership guard ──────────────────────────────────────────────
@@ -384,6 +380,23 @@ mod tests {
 
         let result = assert_contained(root, Path::new("packages/mod.nu")).unwrap();
         assert!(result.starts_with(root.canonicalize().unwrap()));
+    }
+
+    #[test]
+    fn contained_nonexistent_path_uses_canonical_root_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Not-yet-created leaf must still pass under a (possibly
+        // symlink-prefixed) temp root — e.g. macOS /var → /private/var.
+        let result = assert_contained(root, Path::new("tools/nushell/0.113.1")).unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+        assert!(
+            result.starts_with(&canonical_root),
+            "expected {} under {}",
+            result.display(),
+            canonical_root.display()
+        );
+        assert!(result.ends_with(Path::new("tools/nushell/0.113.1")));
     }
 
     #[test]

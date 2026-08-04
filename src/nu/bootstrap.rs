@@ -317,12 +317,23 @@ fn install_release(root: &Path, platform: &Platform, version: Option<&str>) -> R
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .user_agent(USER_AGENT)
-        .build()?;
+        .build()
+        .context("Failed to build HTTP client for Nushell release download")?;
     let release = match version {
         Some(v) => fetch_release_by_tag(&client, v)?,
         None => fetch_latest_release(&client)?,
     };
-    let asset = select_release_asset(&release, platform)?;
+    install_from_github_release(root, platform, &release)
+}
+
+/// Install from an already-fetched GitHub release (avoids a second API call
+/// when the caller resolved the tag via `fetch_latest_release`).
+fn install_from_github_release(
+    root: &Path,
+    platform: &Platform,
+    release: &GitHubRelease,
+) -> Result<PathBuf> {
+    let asset = select_release_asset(release, platform)?;
 
     let cache_dir = root.join("tools/.cache");
     std::fs::create_dir_all(&cache_dir)?;
@@ -709,23 +720,31 @@ pub fn execute_nu_setup(
             install_version(r, p, &version)
         });
     }
-    // Unpinned (latest) flow: resolve the latest release tag first so the
-    // already-installed gate checks `dest.is_file()` against a real versioned
-    // path (`<root>/tools/nushell/<tag>/<bin>`) rather than the legacy
-    // placeholder. This also ensures freshly-installed latest releases are
-    // marked active like any pinned install.
+    // Unpinned (latest) flow:
+    // 1. Fail closed on non-TTY without `--yes` *before* any network so
+    //    non-interactive callers never hit GitHub when they will be refused.
+    // 2. Resolve the latest tag so the already-installed gate checks a real
+    //    versioned dest and the install path marks active like a pinned run.
+    // 3. Reuse the fetched release in the installer (no second API call).
+    let is_tty = options
+        .is_tty
+        .unwrap_or_else(|| std::io::stdin().is_terminal());
+    crate::util::confirm::require_tty_or_yes_with_tty(options.yes, "Nushell setup", is_tty)?;
+
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .user_agent(USER_AGENT)
-        .build()?;
-    let release = fetch_latest_release(&client)?;
+        .build()
+        .context("Failed to build HTTP client for latest Nushell release lookup")?;
+    let release = fetch_latest_release(&client)
+        .context("Failed to resolve latest Nushell release from GitHub")?;
     let tag = release.tag_name.clone();
     let pinned_opts = NuSetupOptions {
-        version: Some(tag.clone()),
+        version: Some(tag),
         ..options.clone()
     };
     execute_nu_setup_with_installer(root, platform, &pinned_opts, move |r, p| {
-        install_version(r, p, &tag)
+        install_from_github_release(r, p, &release)
     })
 }
 
@@ -1265,6 +1284,40 @@ mod tests {
         assert!(
             msg.contains("non-interactive") || msg.contains("Refusing destructive"),
             "expected non-TTY refusal, got: {msg}"
+        );
+    }
+
+    /// Unpinned (latest) setup must refuse non-TTY without `--yes` *before*
+    /// any GitHub request. A failure that mentions DNS/HTTP would mean the
+    /// network ran first.
+    #[test]
+    fn execute_nu_setup_unpinned_refuses_non_tty_without_yes_before_network() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let platform = Platform::detect();
+        let options = NuSetupOptions {
+            yes: false,
+            force: false,
+            skip_path: true,
+            version: None,
+            caller_consented_destructive: false,
+            is_tty: Some(false),
+        };
+
+        let err = execute_nu_setup(root, &platform, &options)
+            .expect_err("unpinned non-TTY without --yes must refuse before network");
+
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("non-interactive") || msg.contains("Refusing destructive"),
+            "expected non-TTY refusal (not a network error), got: {msg}"
+        );
+        assert!(
+            !msg.to_lowercase().contains("github")
+                && !msg.to_lowercase().contains("http")
+                && !msg.to_lowercase().contains("dns")
+                && !msg.to_lowercase().contains("connect"),
+            "refusal must not come from a network attempt: {msg}"
         );
     }
 

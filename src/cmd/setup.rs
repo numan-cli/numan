@@ -22,6 +22,26 @@ fn snapshot_before_setup_mutation(root: &Path, trigger: SnapshotTrigger) -> Resu
     Ok(())
 }
 
+/// True when the managed tree holds a real install (legacy binary or at least
+/// one versioned package). An empty `tools/nushell/` shell left after a
+/// partial migration / deleted binary must not trip the `--force` gate for
+/// `setup nu path|use` (including `doctor --fix` off-PATH repair).
+fn managed_tree_has_install(root: &Path) -> bool {
+    let managed_dir = bootstrap::managed_nu_dir(root);
+    if !managed_dir.is_dir() {
+        return false;
+    }
+    let legacy = bootstrap::managed_nu_binary(root);
+    if legacy.is_file() {
+        return true;
+    }
+    match version_manager::list_installed_versions(root) {
+        Ok(versions) => !versions.is_empty(),
+        // Unreadable tree: treat as present so we stay fail-closed on wipe.
+        Err(_) => true,
+    }
+}
+
 const VENDOR_LOADER: &str = include_str!("../../assets/nushell-loader/loader.nu");
 
 const CONFIG_SOURCE_LINE: &str = "source ($nu.config-path | path dirname | path join 'loader.nu')";
@@ -359,7 +379,8 @@ fn execute_use_path(yes: bool, root: &Path, force: bool, opts: ExecuteUseOpts<'_
     };
 
     let managed_dir = bootstrap::managed_nu_dir(root);
-    let managed_dir_was_present = managed_dir.is_dir();
+    // Empty shell dirs / deleted-binary partial state are not "present".
+    let managed_dir_was_present = managed_tree_has_install(root);
     if managed_dir_was_present && !force {
         bail!(
             "Refusing `numan setup nu path` while a managed Nushell install at '{}' exists.\n\n\
@@ -454,12 +475,13 @@ fn execute_use_existing(
 
     // Consolidate the destructive-removal confirm + the
     // register_existing_nu PATH-add prompt into one (mirrors
-    // `execute_use_path`'s gate). With a managed tree in place, the
+    // `execute_use_path`'s gate). With a real managed install in place, the
     // `--force` flag is required to *enter* this path at all — the
     // merged warn-and-confirm below is the second stage of the
-    // destructive two-step opt-in.
+    // destructive two-step opt-in. Empty shell dirs / deleted-binary
+    // partial state do not count (doctor --fix off-PATH repair).
     let managed_dir = bootstrap::managed_nu_dir(root);
-    let managed_dir_was_present = managed_dir.is_dir();
+    let managed_dir_was_present = managed_tree_has_install(root);
     if managed_dir_was_present && !force {
         bail!(
             "Refusing `numan setup nu use` while a managed Nushell install at '{}' exists.\n\n\
