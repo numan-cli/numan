@@ -1040,7 +1040,10 @@ mod tests {
             "preflight must create nu_state so marker write can succeed"
         );
         assert!(
-            !root.join("nu_state").join(".numan-active-marker-write-probe").exists(),
+            !root
+                .join("nu_state")
+                .join(".numan-active-marker-write-probe")
+                .exists(),
             "probe file must be cleaned up"
         );
     }

@@ -1037,7 +1037,8 @@ mod tests {
             !managed_nu_binary(root).exists(),
             "legacy single-binary path must not be produced by new installs"
         );
-        let version_marker = version_manager::version_install_dir(root, "0.0.0-test").join("VERSION");
+        let version_marker =
+            version_manager::version_install_dir(root, "0.0.0-test").join("VERSION");
         assert_eq!(
             std::fs::read_to_string(&version_marker).unwrap(),
             "0.0.0-test",

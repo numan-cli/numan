@@ -663,10 +663,8 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
             // Failed repair while the corrupt journal remains. Escalate to
             // Error/Manual so exit status surfaces the broken migration state.
             let unsafe_version = !migration_journal::is_safe_version_component(&j.version);
-            let renamed_missing = matches!(
-                j.stage,
-                migration_journal::MigrationStage::Renamed
-            ) && !version_manager::version_binary(root, &j.version).is_file();
+            let renamed_missing = matches!(j.stage, migration_journal::MigrationStage::Renamed)
+                && !version_manager::version_binary(root, &j.version).is_file();
 
             if unsafe_version || renamed_missing {
                 let (message, fix) = if unsafe_version {
