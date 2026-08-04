@@ -68,6 +68,8 @@ jobs:
       CONTRACT_SHA: 2cd6f5a4d5e831d1248d3fe3fd924944823510a1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Verify pinned SHA still resolves to tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -137,7 +139,8 @@ jobs:
           # Sibling repos (numan-plugins, numan-registry) run their own
           # roadmap-drift workflows against the same CONTRACT_SHA pin.
           # This step only documents those repositories; it does not
-          # invoke a cross-repo workflow_call.
+          # invoke a cross-repo workflow_call. Install drop-ins from
+          # cross-repo-mirror/ (see README.md) or scripts/bump-contract.sh.
           echo "see https://github.com/tonythethompson/numan-plugins and https://github.com/tonythethompson/numan-registry for mirrors"
 
   msrv:

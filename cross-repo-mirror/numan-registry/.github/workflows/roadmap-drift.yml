@@ -26,6 +26,8 @@ jobs:
       CONTRACT_SHA: 2cd6f5a4d5e831d1248d3fe3fd924944823510a1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Verify pinned SHA still resolves to tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
