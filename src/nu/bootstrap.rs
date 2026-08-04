@@ -256,8 +256,15 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
     make_executable(&dest)?;
     // Keep the legacy VERSION marker for backwards compat with tooling that
     // greps for it, but under the versioned dir so it never shadows a sibling
-    // version's marker.
-    std::fs::write(dest_dir.join("VERSION"), version.as_bytes())?;
+    // version's marker. Store the same normalized form as the directory name
+    // (e.g. strip a leading `v` from GitHub tag_name) so marker and layout agree.
+    let version_file = dest_dir.join("VERSION");
+    std::fs::write(&version_file, normalized.as_bytes()).with_context(|| {
+        format!(
+            "Failed to write Nu VERSION marker '{}'",
+            version_file.display()
+        )
+    })?;
     Ok(dest)
 }
 
@@ -1029,6 +1036,43 @@ mod tests {
         assert!(
             !managed_nu_binary(root).exists(),
             "legacy single-binary path must not be produced by new installs"
+        );
+        let version_marker = version_manager::version_install_dir(root, "0.0.0-test").join("VERSION");
+        assert_eq!(
+            std::fs::read_to_string(&version_marker).unwrap(),
+            "0.0.0-test",
+            "VERSION marker must match normalized directory name"
+        );
+    }
+
+    #[test]
+    fn install_from_archive_writes_normalized_version_marker() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let zip_path = root.join("nu-test.zip");
+
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zip = ZipWriter::new(file);
+            let options = SimpleFileOptions::default();
+            let inner = format!("nu-0.113.1/{}", nu_binary_name());
+            zip.start_file(&inner, options).unwrap();
+            zip.write_all(b"fake nu binary").unwrap();
+            zip.finish().unwrap();
+        }
+
+        // GitHub release tags often carry a `v` prefix; directory uses normalized form.
+        let installed = install_from_archive(&zip_path, root, "v0.113.1").unwrap();
+        assert_eq!(
+            installed,
+            version_manager::version_binary(root, "0.113.1"),
+            "install path must use stripped/normalized version"
+        );
+        let version_marker = version_manager::version_install_dir(root, "0.113.1").join("VERSION");
+        assert_eq!(
+            std::fs::read_to_string(&version_marker).unwrap(),
+            "0.113.1",
+            "VERSION file must store normalized version, not raw tag_name"
         );
     }
 
