@@ -40,3 +40,7 @@ desktop.ini
 .tmp/
 /.qoder
 /.freebuff
+
+# Python
+__pycache__/
+*.py[cod]

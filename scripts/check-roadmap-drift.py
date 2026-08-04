@@ -30,7 +30,7 @@ Modes
 
 Default (run from each repo's repo root):
 
-    python scripts/check-roadmap-drift.py
+    python3 scripts/check-roadmap-drift.py
 
 Override paths are rare; if you need them, env vars override:
 
@@ -44,10 +44,8 @@ from __future__ import annotations
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
-from typing import Iterable
-
-# --- Configuration ---------------------------------------------------------
 
 CONSOLIDATED_PATH = Path(
     os.environ.get(
@@ -76,8 +74,6 @@ FORBIDDEN_PHRASES: tuple[str, ...] = (
     r"\bexists as a stub\b",
     r"\bis a reserved\b",
 )
-
-# Section / line patterns ---------------------------------------------------
 
 # A heading whose presence starts a deferral context, so the forbidden
 # phrases inside are not flagged. Lower-case match.
@@ -118,6 +114,20 @@ SHIPPED_MARKERS = (
 
 BULLET_RE = re.compile(r"^\s*[-*]\s+", re.IGNORECASE)
 HEAD_RE = re.compile(r"^(#{1,6})\s+", re.IGNORECASE)
+# First top-level (`##`) section ends the preamble that must carry the
+# repo-local roadmap rule and remote roadmap links.
+TOP_LEVEL_SECTION_RE = re.compile(r"^##\s+")
+
+
+def _preamble_text(text: str) -> str:
+    """Return document content before the first top-level (`##`) section."""
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    for line in lines:
+        if TOP_LEVEL_SECTION_RE.match(line):
+            break
+        out.append(line)
+    return "".join(out)
 
 
 def _is_deferred_context(stack: list[str]) -> bool:
@@ -136,35 +146,32 @@ def audit_consolidated(path: Path) -> tuple[list[str], list[str]]:
 
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
+    preamble = _preamble_text(text)
 
-    # Preamble must name all remote roadmap links ("repo-local roadmaps keep
-    # operational detail and should link here: …").
-    if "repo-local" not in text.lower():
+    # Preamble checks only apply before the first top-level (`##`) section so
+    # a later body mention cannot satisfy the repo-local roadmap rule.
+    if "repo-local" not in preamble.lower():
         errors.append(
             f"{path}: preamble must declare the repo-local roadmap rule "
             "(phrase: 'repo-local roadmaps keep operational detail')."
         )
     for link in REMOTE_ROADMAP_LINKS:
-        if link not in text:
+        if link not in preamble:
             errors.append(
                 f"{path}: preamble must mention `{link}` so each repo's "
                 "docs/roadmap.md points back here."
             )
 
     # Forbidden phrases in shipped-feel bullets outside deferral scope.
+    # Heading depth is handled here (not via a continue-before-pop path) so a
+    # deferred section cannot leak into later non-deferred sections.
     heading_stack: list[str] = []
     for n, raw in enumerate(lines, start=1):
         line = raw.rstrip()
-        if HEAD_RE.match(line):
-            heading_stack.append(line)
-            continue
 
         # Pop headings as we leave their scope. The markdown is single-level
-        # for our purposes: if we see an H2, pop everything above H2; an H3
-        # pops H3+ above; H1 resets everything.
-        # Treat consecutive headings as a stack.
-        # Cheap implementation: drop trailing headings shorter (lower
-        # depth) than current heading level. We re-derive from raw line.
+        # for our purposes: if we see an H2, pop everything at H2+; an H3
+        # pops H3+; H1 resets everything.
         head_match = HEAD_RE.match(line)
         if head_match:
             depth = len(head_match.group(1))
@@ -248,6 +255,8 @@ def main(argv: list[str]) -> int:
     if argv[1:] and argv[1] in ("--help", "-h"):
         print(__doc__)
         return 0
+    if argv[1:] and argv[1] == "--self-test":
+        return _self_test()
     consolidated_path = (
         Path(argv[1]) if len(argv) > 1 else CONSOLIDATED_PATH
     )
@@ -269,6 +278,37 @@ def main(argv: list[str]) -> int:
         f"roadmap-drift check: {len(errors)} error(s), {len(warnings)} warning(s)"
     )
     return 1 if errors else 0
+
+
+def _self_test() -> int:
+    """Regression: remote links only after the first `##` must still fail."""
+    body = (
+        "# Title\n"
+        "\n"
+        "Intro without the required preamble phrases.\n"
+        "\n"
+        "## Later section\n"
+        "\n"
+        "repo-local roadmaps keep operational detail\n"
+        "- numan-plugins/docs/roadmap.md\n"
+        "- numan-registry/docs/roadmap.md\n"
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "roadmap.md"
+        path.write_text(body, encoding="utf-8")
+        errors, _warnings = audit_consolidated(path)
+    joined = "\n".join(errors)
+    if "repo-local" not in joined.lower():
+        print("self-test failed: expected missing repo-local preamble error")
+        print(joined)
+        return 1
+    for link in REMOTE_ROADMAP_LINKS:
+        if link not in joined:
+            print(f"self-test failed: expected missing preamble link error for {link}")
+            print(joined)
+            return 1
+    print("self-test ok: post-boundary preamble strings still fail")
+    return 0
 
 
 if __name__ == "__main__":

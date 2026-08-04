@@ -301,7 +301,7 @@ Nu version that has the plugins they need, and switching is instant.
 - Active marker: JSON file at `<root>/nu_state/active-version.json` (shape `{"version": "X.Y.Z"}`, written atomically by `version_manager::write_active_version`; cleared atomically before removing the versioned tree so the marker cannot dangle at a missing binary)
 - **PATH (Unix):** `numan setup nu` writes ``export PATH="$HOME/.local/bin:$PATH"`` to the user's shell profile (`ensure_local_bin_on_path`) AND creates/refreshes a ``~/.local/bin/nu`` symlink to the active managed binary via `persist_user_path_unix` (`std::os::unix::fs::symlink` on the resolved canonical binary; rejects the call if ``~/.local/bin/nu`` already points at a different managed install unless `--skip-path` is passed). Windows: appends the binary's parent directory to the user PATH via `persist_path_dir_windows` instead.
 - **PATH (process-only):** `numan setup nu` also calls `prepend_process_path` for the lifetime of the current process so the freshly-installed Nu wins over PATH-Nu until the next login.
-- **Active marker ownership:** `numan setup nu` calls `version_manager::write_active_version` after a successful install. `numan use <x.y.z>` / `latest` calls it too, under the root mutation lock and after a PreMutation snapshot (and after journaled legacy migration when needed). `numan use` does NOT touch PATH or the symlink — only the marker.
+- **Active marker ownership:** `numan setup nu` calls `version_manager::write_active_version` after a successful install (`:744`). `numan use <x.y.z>` / `latest` calls it too, under the root mutation lock and after a PreMutation snapshot (and after journaled legacy migration when needed). `numan use` does NOT touch PATH or the symlink — only the marker.
 
 **Per-version activation sets:**
 
@@ -316,14 +316,11 @@ Nu version that has the plugins they need, and switching is instant.
 - > **Vision only — not yet shipped.** Persisted in Numan config; survives shell changes.
 - > **Vision only — not yet shipped.** Shell-level aliases (`alias nu113 = numan use 0.113.1`) remain a user option — this is the recommended mechanism until `numan alias` ships.
 
-**Catalog implication:** > **Vision only — not yet shipped.** Backfilling older Nu versions (0.112, 0.113) becomes valuable because each version is a switchable "profile" rather than a dead end. Pre-0.112 plugins remain deferred unless product re-scopes.
+**Catalog implication:**
 
-**Backfill data:** `numan-plugins/docs/backlog.json` (schema v1; verified outside this repo) tracks ALL
-release versions per plugin with their Nu minor compatibility. The
-`backfill_targets` field lists Nu minors that have eligible plugin versions not
-yet in the registry. Use this to drive backfill waves once `numan use` ships.
-Source: awesome-nu + manual discovery. Entries marked `NEEDS_RESEARCH` need
-their version history filled in before promotion.
+> **Vision only — not yet shipped.** Backfilling older Nu versions (0.112, 0.113) becomes valuable because each version is a switchable "profile" rather than a dead end. Pre-0.112 plugins remain deferred unless product re-scopes.
+
+**Backfill data:** `numan-plugins/docs/backlog.json` (schema v1; verified outside this repo) tracks ALL release versions per plugin with their Nu minor compatibility. The `backfill_targets` field lists Nu minors that have eligible plugin versions not yet in the registry. Source: awesome-nu + manual discovery. Entries marked `NEEDS_RESEARCH` need their version history filled in before promotion.
 
 ### Explicitly NOT in scope for post-1.0 (requires Nu upstream)
 
