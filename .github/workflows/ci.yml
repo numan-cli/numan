@@ -65,7 +65,7 @@ jobs:
       # CONTRACT_SHA is the immutable fetch target. The verify step fails
       # closed if the tag moves away from this SHA. See scripts/bump-contract.sh.
       CONTRACT_TAG: numan-roadmap-contract/v1
-      CONTRACT_SHA: 2829230a7b34108f53ace6bb929867596d6055c0
+      CONTRACT_SHA: 2cd6f5a4d5e831d1248d3fe3fd924944823510a1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify pinned SHA still resolves to tag
