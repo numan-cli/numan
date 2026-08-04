@@ -16,7 +16,7 @@ pub struct RemoveArgs {
     /// Package to remove (owner/name)
     package: String,
 
-    /// Skip confirmation prompts (required in non-interactive sessions)
+    /// Skip interactive confirmation (required in non-interactive sessions)
     #[arg(long)]
     yes: bool,
 
@@ -33,7 +33,7 @@ pub fn execute(args: &RemoveArgs, root: &Path) -> Result<()> {
 fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> {
     // Destructive: permanently deletes the package payload and lockfile entry.
     // Refuse unattended (non-TTY) sessions without explicit --yes so safe-batch
-    // automation has to opt in; interactive sessions keep the existing flow.
+    // automation has to opt in; interactive TTY sessions still confirm below.
     crate::util::confirm::require_tty_or_yes_with_seam(args.yes, "package removal", is_tty)?;
 
     let _lock = acquire_mutation_lock(root)?;
@@ -54,6 +54,18 @@ fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> 
             args.package
         );
     }
+
+    // Interactive confirmation after validation so a typo'd package id fails
+    // fast, and so `--yes` truly means "skip confirmation" rather than only
+    // the non-TTY gate (review P1 on PR #82 / cubic).
+    crate::util::confirm::confirm_or_bail(
+        &format!(
+            "Remove package '{}' (payload will be deleted permanently)?",
+            args.package
+        ),
+        args.yes,
+        "Package removal cancelled.",
+    )?;
 
     let payload_path = entry.payload_path().to_string();
     let payload_dir = root.join(&payload_path);

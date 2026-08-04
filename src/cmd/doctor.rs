@@ -654,16 +654,21 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
     // state is unreadable. Each Err branch carries the journal path so the
     // fix hint is unambiguous.
     match PendingMigration::load(root) {
-        Ok(Some(j)) => findings.push(finding(
-            "journal.migration_pending",
-            Severity::Warn,
-            format!(
-                "Pending legacy-Nu migration journal (stage: {}, version: {})",
-                j.stage, j.version
-            ),
-            Some(CMD_USE),
-            RepairTier::Auto,
-        )),
+        Ok(Some(j)) => {
+            // Include the journaled version so the advertised repair is a
+            // runnable CLI (`numan use` alone requires <VERSION>).
+            let use_fix = format!("{CMD_USE} {}", j.version);
+            findings.push(finding(
+                "journal.migration_pending",
+                Severity::Warn,
+                format!(
+                    "Pending legacy-Nu migration journal (stage: {}, version: {})",
+                    j.stage, j.version
+                ),
+                Some(use_fix.as_str()),
+                RepairTier::Auto,
+            ));
+        }
         Ok(None) => {}
         Err(e) => {
             let journal_path = PendingMigration::journal_path(root);
@@ -2378,7 +2383,14 @@ mod tests {
             f.message
         );
         assert!(f.message.contains("0.113.1"));
-        assert_eq!(f.fix.as_deref(), Some(crate::util::hints::CMD_USE));
+        assert!(
+            f.fix
+                .as_deref()
+                .is_some_and(|s| s.starts_with(crate::util::hints::CMD_USE)
+                    && s.contains("0.113.1")),
+            "fix hint must include journaled version so `numan use <v>` is runnable, got {:?}",
+            f.fix
+        );
     }
 
     #[test]
