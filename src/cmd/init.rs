@@ -170,8 +170,9 @@ where
     let new_paths = detect()?;
 
     // Always serialize refresh writes (lockfile, autoload-state, paths), even
-    // when no packages are active. Skipping the lock left a race window against
-    // concurrent mutators.
+    // when no packages are active. The snapshot below captures all pre-refresh
+    // state before any of those files are mutated. Skipping the lock left a
+    // race window against concurrent mutators.
     let _lock = acquire_mutation_lock(root)?;
     create_snapshot(
         root,
@@ -198,6 +199,7 @@ where
             runner_factory,
         )?;
     }
+
     refresh_activation_records(&mut lockfile, &new_paths)?;
     lockfile.nu_version = new_paths.nu_version.clone();
     lockfile.platform = new_paths.platform.clone();
@@ -446,6 +448,9 @@ mod tests {
         paths_v1.save(root).unwrap();
 
         let hash_v1 = paths_v1.nu_executable_hash.clone();
+        let payload_rel = "packages/plugins/owner/plugin/1.0.0-abc";
+        std::fs::create_dir_all(root.join(payload_rel)).unwrap();
+        std::fs::write(root.join(payload_rel).join("nu_plugin_test"), b"bin").unwrap();
         let mut lockfile = Lockfile::empty();
         let payload_rel = "packages/plugins/owner/plugin/1.0.0-abc";
         let payload_dir = root.join(payload_rel);

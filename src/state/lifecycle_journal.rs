@@ -57,6 +57,8 @@ pub enum LifecycleStage {
     AutoloadStateCommitted,
     /// Rollback: nupm-imports sidecar committed.
     ImportsCommitted,
+    /// Rollback: Nu path cache (`nu_state/paths.json`) committed or cleared.
+    PathsCommitted,
     /// Rollback: all owned state committed; journal clear pending.
     Completed,
 }

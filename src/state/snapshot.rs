@@ -3,8 +3,9 @@
 //! Snapshots are stored under `<root>/state/snapshots/<uuid-v7>/` and are
 //! immutable after creation. Each snapshot captures the authoritative lockfile,
 //! the managed module-autoload projection (including exact `numan.nu` content),
-//! and nupm-import provenance. Payloads are never duplicated; snapshots
-//! reference immutable payload directories by path and a computed revision hash.
+//! nupm-import provenance, and the Nu path cache (`nu_state/paths.json`).
+//! Payloads are never duplicated; snapshots reference immutable payload
+//! directories by path and a computed revision hash.
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -92,6 +93,25 @@ pub struct SidecarDigests {
     pub autoload_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imports_sha256: Option<String>,
+    /// Digest of the `paths.json` sidecar (`SnapshotPaths`). `None` on legacy
+    /// snapshots that predate paths capture; those must not mutate live paths
+    /// on rollback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paths_sha256: Option<String>,
+}
+
+/// Captured Nu path-cache sidecar (`nu_state/paths.json`).
+///
+/// Distinguished from "not captured" (legacy snapshots with no `paths.json`
+/// sidecar): `Absent` means the root was uninitialized at snapshot time and
+/// rollback should delete a later-created cache. `nu_identity` on the manifest
+/// remains a convenience field (hash + version only); this sidecar is
+/// authoritative for cache restore.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotPaths {
+    Absent,
+    Present(NuPaths),
 }
 
 /// Captured module-autoload projection.
@@ -131,12 +151,17 @@ pub enum SnapshotSidecar<T> {
 }
 
 /// Loaded snapshot with all sidecars verified.
+///
+/// `paths` is `None` for legacy snapshots that never captured the Nu path
+/// cache. New snapshots always record [`SnapshotPaths::Absent`] or
+/// [`SnapshotPaths::Present`].
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     pub manifest: SnapshotManifest,
     pub lockfile: Lockfile,
     pub autoload: SnapshotAutoload,
     pub imports: Option<NupmImportsFile>,
+    pub paths: Option<SnapshotPaths>,
 }
 
 /// A legacy timestamp-only snapshot directory.
@@ -198,12 +223,14 @@ pub fn create_snapshot(
     let nu_identity = load_nu_identity(root).ok();
     let autoload = capture_autoload(root, &nu_identity)?;
     let imports = load_imports_sidecar(root);
+    let paths = capture_paths_sidecar(root)?;
     let payload_revisions = compute_payload_revisions(root, &lockfile)?;
 
     let sidecar_digests = SidecarDigests {
         lockfile_sha256: sha256_json(&lockfile)?,
         autoload_sha256: Some(sha256_json(&autoload)?),
         imports_sha256: imports.as_ref().and_then(|i| sha256_json(i).ok()),
+        paths_sha256: Some(sha256_json(&paths)?),
     };
 
     let manifest = SnapshotManifest {
@@ -235,6 +262,7 @@ pub fn create_snapshot(
     if let Some(ref imports) = imports {
         write_json_atomic(&stage.join("imports.json"), imports)?;
     }
+    write_json_atomic(&stage.join("paths.json"), &paths)?;
 
     let dest = snapshot_dir(root, &id);
     std::fs::rename(&stage, &dest).with_context(|| {
@@ -291,11 +319,32 @@ pub fn load_snapshot(root: &Path, id: &str) -> Result<Snapshot> {
         None
     };
 
+    // Legacy snapshots omit the paths digest; treat them as NotCaptured (`None`)
+    // so rollback leaves the live Nu path cache alone. When a digest is present,
+    // the paths.json sidecar is required; do not silently degrade to legacy.
+    let paths = if let Some(expected) = manifest.sidecar_digests.paths_sha256.as_deref() {
+        let paths_path = dir.join("paths.json");
+        if !paths_path.exists() {
+            bail!(
+                "Snapshot '{}' declares a paths sidecar digest but paths.json is missing. \
+                 Refuse to load an incomplete snapshot; re-create the snapshot or restore \
+                 the sidecar file.",
+                id
+            );
+        }
+        let paths: SnapshotPaths = read_json(&paths_path)?;
+        verify_digest(&paths, expected, "paths")?;
+        Some(paths)
+    } else {
+        None
+    };
+
     Ok(Snapshot {
         manifest,
         lockfile,
         autoload,
         imports,
+        paths,
     })
 }
 
@@ -577,6 +626,21 @@ fn load_imports_sidecar(root: &Path) -> Option<NupmImportsFile> {
         return None;
     }
     NupmImportsFile::load(root).ok()
+}
+
+fn capture_paths_sidecar(root: &Path) -> Result<SnapshotPaths> {
+    let paths_path = root.join("nu_state/paths.json");
+    if !paths_path.exists() {
+        return Ok(SnapshotPaths::Absent);
+    }
+
+    let paths = NuPaths::load(root).with_context(|| {
+        format!(
+            "Failed to load paths sidecar '{}'; refusing to create snapshot",
+            paths_path.display()
+        )
+    })?;
+    Ok(SnapshotPaths::Present(paths))
 }
 
 fn compute_payload_revisions(root: &Path, lockfile: &Lockfile) -> Result<BTreeMap<String, String>> {
@@ -873,5 +937,162 @@ mod tests {
         std::os::windows::fs::symlink_dir(&real, &link).unwrap();
 
         assert!(delete_snapshot(root, "018ff000-0000-7fff-0000-000000000001").is_err());
+    }
+
+    fn fake_nu_paths(root: &Path, hash: &str, version: &str) -> NuPaths {
+        NuPaths {
+            nu_executable: root.join("fake-nu").to_string_lossy().to_string(),
+            nu_version: version.to_string(),
+            plugin_registry_path: root.join("plugin.msgpackz").to_string_lossy().to_string(),
+            nu_executable_hash: hash.to_string(),
+            platform: "x86_64-linux-gnu".to_string(),
+            data_dir: None,
+            vendor_autoload_dirs: Vec::new(),
+            vendor_autoload_dir: None,
+        }
+    }
+
+    #[test]
+    fn create_snapshot_captures_paths_sidecar_and_verifies_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+
+        let paths = fake_nu_paths(root, "hash-aaa", "0.113.1");
+        paths.save(root).unwrap();
+
+        let manifest = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Install,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(
+            manifest.sidecar_digests.paths_sha256.is_some(),
+            "paths digest must be recorded when paths.json exists"
+        );
+
+        let loaded = load_snapshot(root, &manifest.id).unwrap();
+        match &loaded.paths {
+            Some(SnapshotPaths::Present(p)) => {
+                assert_eq!(p.nu_executable_hash, "hash-aaa");
+                assert_eq!(p.nu_version, "0.113.1");
+            }
+            other => panic!("expected Present paths sidecar, got {other:?}"),
+        }
+        assert_eq!(
+            loaded.manifest.sidecar_digests.paths_sha256,
+            manifest.sidecar_digests.paths_sha256
+        );
+    }
+
+    #[test]
+    fn create_snapshot_records_paths_absent_when_uninitialized() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+
+        let manifest = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Install,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(
+            manifest.sidecar_digests.paths_sha256.is_some(),
+            "new snapshots must record an explicit paths capture (Absent)"
+        );
+        let loaded = load_snapshot(root, &manifest.id).unwrap();
+        assert!(matches!(loaded.paths, Some(SnapshotPaths::Absent)));
+    }
+
+    #[test]
+    fn create_snapshot_fails_when_existing_paths_json_is_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        std::fs::create_dir_all(root.join("nu_state")).unwrap();
+        // Present but unreadable as NuPaths: must not be recorded as Absent.
+        std::fs::write(root.join("nu_state/paths.json"), "{ not-json").unwrap();
+
+        let err = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Install,
+            None,
+            None,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Failed to load paths sidecar") || msg.contains("paths"),
+            "expected paths load failure, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn load_snapshot_rejects_missing_paths_sidecar_when_digest_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+
+        let manifest = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Install,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(manifest.sidecar_digests.paths_sha256.is_some());
+
+        let snap_dir = root.join(format!("state/snapshots/{}", manifest.id));
+        std::fs::remove_file(snap_dir.join("paths.json")).unwrap();
+
+        let err = load_snapshot(root, &manifest.id).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("incomplete snapshot") || msg.contains("paths.json is missing"),
+            "expected missing sidecar rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn old_snapshot_without_paths_sidecar_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+
+        let manifest = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Install,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Simulate a pre-paths-sidecar snapshot: drop the sidecar file and clear
+        // the digest field (as #[serde(default)] would yield on old manifests).
+        let snap_dir = root.join(format!("state/snapshots/{}", manifest.id));
+        let paths_sidecar = snap_dir.join("paths.json");
+        if paths_sidecar.exists() {
+            std::fs::remove_file(&paths_sidecar).unwrap();
+        }
+        let mut manifest = load_manifest(root, &manifest.id).unwrap();
+        manifest.sidecar_digests.paths_sha256 = None;
+        write_json_atomic(&snap_dir.join("snapshot.json"), &manifest).unwrap();
+
+        let loaded = load_snapshot(root, &manifest.id).unwrap();
+        assert!(
+            loaded.paths.is_none(),
+            "legacy snapshots without paths.json must load as NotCaptured (None)"
+        );
     }
 }
