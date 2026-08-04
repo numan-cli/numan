@@ -58,7 +58,7 @@ fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> 
 
     // Interactive confirmation after validation so a typo'd package id fails
     // fast, and so `--yes` truly means "skip confirmation" rather than only
-    // the non-TTY gate (review P1 on PR #82 / cubic).
+    // the non-TTY gate.
     crate::util::confirm::confirm_or_bail(
         &format!(
             "Remove package '{}' (payload will be deleted permanently)?",

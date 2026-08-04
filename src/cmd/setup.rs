@@ -431,11 +431,10 @@ fn execute_use_path(yes: bool, root: &Path, force: bool, opts: ExecuteUseOpts<'_
         }
     }
 
-    // Preflight before any destructive step: marker write must be possible
-    // after registration. Otherwise delete+PATH succeed and the command
-    // fails with incomplete Nu selection state.
-    preflight_active_marker_writable(root)?;
+    // Snapshot true pre-operation state before preflight creates nu_state /
+    // probe files or any destructive managed-tree removal.
     snapshot_before_setup_mutation(root, SnapshotTrigger::Update)?;
+    preflight_active_marker_writable(root)?;
     remove_managed_nu_if_present(root)?;
     let options = NuSetupOptions {
         yes,
@@ -449,8 +448,8 @@ fn execute_use_path(yes: bool, root: &Path, force: bool, opts: ExecuteUseOpts<'_
         is_tty: None,
     };
     let registered = bootstrap::register_existing_nu(Path::new(&path_nu), &options)?;
-    // chatgpt PR69 S08: persist the registered binary as the active version
-    // marker so `numan use list` reports it as the selection.
+    // Persist the registered binary as the active version marker so
+    // `numan use list` reports it as the selection.
     version_manager::write_active_version_with_binary(root, &normalized_version, &registered)?;
     Ok(())
 }
@@ -525,11 +524,10 @@ fn execute_use_existing(
         version_manager::normalize_version(&detected.version)?
     };
 
-    // Preflight before any destructive step: marker write must be possible
-    // after registration. Otherwise delete+PATH succeed and the command
-    // fails with incomplete Nu selection state.
-    preflight_active_marker_writable(root)?;
+    // Snapshot true pre-operation state before preflight creates nu_state /
+    // probe files or any destructive managed-tree removal.
     snapshot_before_setup_mutation(root, SnapshotTrigger::Update)?;
+    preflight_active_marker_writable(root)?;
     remove_managed_nu_if_present(root)?;
     let options = NuSetupOptions {
         yes,
@@ -543,8 +541,8 @@ fn execute_use_existing(
         is_tty: None,
     };
     let registered = bootstrap::register_existing_nu(path, &options)?;
-    // chatgpt PR69 S08: persist the registered binary as the active version
-    // marker so `numan use list` reports it as the selection.
+    // Persist the registered binary as the active version marker so
+    // `numan use list` reports it as the selection.
     version_manager::write_active_version_with_binary(root, &normalized_version, &registered)?;
     Ok(())
 }
@@ -1061,6 +1059,42 @@ mod tests {
                 .join(".numan-active-marker-write-probe")
                 .exists(),
             "probe file must be cleaned up"
+        );
+    }
+
+    /// Production PATH/off-path flows call snapshot before preflight so a
+    /// preflight failure still leaves a PreMutation snapshot of the true
+    /// pre-operation root (without the nu_state/probe side effects).
+    #[test]
+    fn snapshot_occurs_before_preflight_nu_state_creation() {
+        use crate::state::snapshot::list_snapshots;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        std::fs::create_dir_all(&root).unwrap();
+        // Block preflight's create_dir_all(nu_state) by planting a file.
+        std::fs::write(root.join("nu_state"), b"blocked").unwrap();
+
+        snapshot_before_setup_mutation(&root, SnapshotTrigger::Update).unwrap();
+        assert!(
+            !list_snapshots(&root).unwrap().is_empty(),
+            "snapshot must be recorded before preflight runs"
+        );
+
+        let err = preflight_active_marker_writable(&root)
+            .expect_err("preflight must fail when nu_state is a blocking file");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nu_state") || msg.contains("Failed"),
+            "preflight error should mention nu_state, got: {msg}"
+        );
+        assert!(
+            root.join("nu_state").is_file(),
+            "blocked nu_state file must remain (preflight must not replace it)"
+        );
+        assert!(
+            !list_snapshots(&root).unwrap().is_empty(),
+            "snapshot from before preflight must remain after preflight failure"
         );
     }
 

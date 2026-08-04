@@ -24,18 +24,10 @@ pub struct UseArgs {
 }
 
 pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
-    // Listing reconciles the legacy single-binary layout first so a flat
-    // `tools/nushell/nu` install is not invisible. Migration is a no-op when
-    // already versioned, and preserves any existing active selection.
-    // Route through `setup_subcommand_lock` so audit lines and the single
-    // lock source of truth match the fs_safety contract (same root lock as
-    // `numan setup nu` / `numan setup loader`).
+    // Listing is read-only: `list_installed_versions` already surfaces a flat
+    // legacy install via the VERSION marker without migrating on disk.
     if args.version == "list" {
-        return setup_subcommand_lock(root, "Nu version list", || {
-            crate::nu::migrate_legacy::migrate_legacy_install(root)
-                .with_context(|| "Failed to migrate legacy Nu installation before list")?;
-            execute_list(root)
-        });
+        return execute_list(root);
     }
 
     // Hold the mutation lock for the entire operation to prevent races
@@ -273,14 +265,13 @@ mod tests {
             list_snapshots(root).unwrap().is_empty(),
             "`numan use list` must not create a PreMutation snapshot"
         );
-        // Active selection unchanged (list may migrate legacy layout but must
-        // not flip the active-version marker when one already exists).
+        // Active selection unchanged.
         let active = version_manager::read_active_version(root).unwrap().unwrap();
         assert_eq!(active.version, "0.113.1");
     }
 
     #[test]
-    fn test_use_list_migrates_legacy_without_snapshot() {
+    fn test_use_list_discovers_legacy_via_version_marker_without_mutation() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let tools = version_manager::versioned_nu_dir(root);
@@ -299,15 +290,22 @@ mod tests {
 
         assert!(
             list_snapshots(root).unwrap().is_empty(),
-            "list must not create a PreMutation snapshot even when it migrates"
+            "list must not create a PreMutation snapshot"
         );
         assert!(
-            !tools.join(bin).is_file(),
-            "list must migrate the flat legacy binary into the versioned layout"
+            tools.join(bin).is_file(),
+            "list must leave the flat legacy binary in place"
         );
         assert!(
-            version_manager::version_binary(root, "0.113.1").is_file(),
-            "migrated binary must land under tools/nushell/<version>/"
+            !version_manager::version_binary(root, "0.113.1").is_file(),
+            "list must not migrate into tools/nushell/<version>/"
+        );
+        assert!(
+            version_manager::list_installed_versions(root)
+                .unwrap()
+                .iter()
+                .any(|v| v == "0.113.1"),
+            "VERSION marker must still surface the legacy install to list"
         );
     }
 

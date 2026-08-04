@@ -198,6 +198,78 @@ fn versioned_binary_present(root: &Path, version: &str) -> bool {
         .is_file()
 }
 
+/// Non-mutating preflight for [`reconcile`].
+///
+/// Returns `Ok(())` only when Auto-tier repair can proceed without failing
+/// mid-flight. Doctor uses this to classify journals as
+/// `journal.migration_pending` (Auto) vs `journal.migration_invalid` (Manual)
+/// without mutating the root.
+pub fn validate_reconcile(root: &Path, journal: &PendingMigration) -> Result<()> {
+    if !is_safe_version_component(&journal.version) {
+        bail!(
+            "Migration journal at '{}' has unsafe version component '{}'. \
+             Refusing to reconcile to avoid escaping the managed tree. \
+             Delete the stale journal to recover.",
+            PendingMigration::journal_path(root).display(),
+            journal.version
+        );
+    }
+
+    let version = normalize_version(&journal.version).map_err(|_| {
+        anyhow::anyhow!(
+            "Migration journal at '{}' has non-normalizable version '{}'. \
+             Refusing to reconcile. Delete the stale journal to recover.",
+            PendingMigration::journal_path(root).display(),
+            journal.version
+        )
+    })?;
+
+    let managed_dir = versioned_nu_dir(root);
+    assert_not_symlink(&managed_dir, "managed Nushell directory")?;
+
+    match journal.stage {
+        MigrationStage::Prepared => {
+            if versioned_binary_present(root, &version) {
+                return Ok(());
+            }
+            // Orphan `<version>/` must be empty so `remove_dir` can succeed.
+            let version_dir = version_install_dir(root, &version);
+            if version_dir.is_dir() && !dir_is_empty(&version_dir)? {
+                bail!(
+                    "Migration journal at '{}' has '{}' as Prepared-but-orphan, \
+                     but the version directory '{}' is not empty and cannot be \
+                     removed by reconcile. Resolve the directory contents or \
+                     delete the stale journal.",
+                    PendingMigration::journal_path(root).display(),
+                    version,
+                    version_dir.display(),
+                );
+            }
+            Ok(())
+        }
+        MigrationStage::Renamed => {
+            if !versioned_binary_present(root, &version) {
+                bail!(
+                    "Migration journal at '{}' is staged 'Renamed' but the versioned binary \
+                     for '{}' is missing. Run `numan setup nu {}` to repair, or delete the \
+                     stale journal.",
+                    PendingMigration::journal_path(root).display(),
+                    version,
+                    version,
+                );
+            }
+            Ok(())
+        }
+        MigrationStage::Active => Ok(()),
+    }
+}
+
+fn dir_is_empty(dir: &Path) -> Result<bool> {
+    let mut entries = std::fs::read_dir(dir)
+        .with_context(|| format!("Failed to read directory '{}'", dir.display()))?;
+    Ok(entries.next().is_none())
+}
+
 /// Reconcile any in-flight migration journal.
 ///
 /// Recovery actions:
@@ -223,36 +295,16 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
         return Ok(None);
     };
 
-    // Refuse to act on a tampered or corrupted journal whose version
-    // contains path-traversal segments. `version_install_dir(<root>, v)`
-    // appends v as a directory name; if v is `../etc` we would otherwise
-    // scrub a directory outside `<root>/tools/nushell`.
-    if !is_safe_version_component(&journal.version) {
-        bail!(
-            "Migration journal at '{}' has unsafe version component '{}'. \
-             Refusing to reconcile to avoid escaping the managed tree. \
-             Run `numan doctor --fix` to discard the journal.",
-            PendingMigration::journal_path(root).display(),
-            journal.version
-        );
-    }
+    validate_reconcile(root, &journal)?;
 
-    // Canonicalize to the same directory name migrate_legacy writes
-    // (`0.113.1`, not `v0.113.1`) before any path probe or scrub.
-    let version = normalize_version(&journal.version).map_err(|_| {
+    // Safe after validate_reconcile: version is path-safe and normalizable.
+    let version = normalize_version(&journal.version).map_err(|e| {
         anyhow::anyhow!(
-            "Migration journal at '{}' has non-normalizable version '{}'. \
-             Refusing to reconcile. Delete the stale journal to recover.",
-            PendingMigration::journal_path(root).display(),
+            "internal: validate_reconcile accepted version '{}' but normalize failed: {e}",
             journal.version
         )
     })?;
-
-    // Validate once before any stage-specific recovery. Active-version writes,
-    // orphan scrubbing, and journal deletion must not run when the managed
-    // tree has been replaced by a symlink or reparse point.
     let managed_dir = versioned_nu_dir(root);
-    assert_not_symlink(&managed_dir, "managed Nushell directory")?;
 
     match journal.stage {
         MigrationStage::Prepared => {
@@ -306,18 +358,8 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
             Ok(Some(journal))
         }
         MigrationStage::Renamed => {
-            // File-system truth: the versioned binary should exist.
-            if !versioned_binary_present(root, &version) {
-                anyhow::bail!(
-                    "Migration journal at '{}' is staged 'Renamed' but the versioned binary is missing.\n\
-                     Run `numan setup nu {}` to repair.",
-                    PendingMigration::journal_path(root).display(),
-                    version,
-                );
-            }
-            // Complete the transaction — write active-version if no selection
-            // exists. (If a user has already chosen a different active
-            // version, that user-controlled choice takes precedence.)
+            // Presence already validated; complete the active-version write
+            // unless a user-controlled selection already exists.
             if read_active_version(root)?.is_none() {
                 write_active_version(root, &version).with_context(|| {
                     format!(

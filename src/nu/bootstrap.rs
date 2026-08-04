@@ -724,7 +724,7 @@ where
     // Already-installed gate is pin-only: short-circuit when the exact
     // requested `<version>/nu` exists. Bare `numan setup nu` (latest) must
     // still call `install_latest` so a user with only 0.113 can land a newly
-    // released 0.114 without discovering `--force` (review P1 on PR #82).
+    // released 0.114 without discovering `--force`.
     let version_label = options
         .version
         .as_deref()
@@ -1162,7 +1162,7 @@ mod tests {
         let platform = Platform::detect();
         let _path_guard = PathRestoreGuard::new();
         // Older on-tree install must not block bare `setup nu` from fetching
-        // the resolved latest release (P1: no any-version short-circuit).
+        // the resolved latest release (no any-version short-circuit).
         let old_dir = version_manager::version_install_dir(root, "0.112.0");
         std::fs::create_dir_all(&old_dir).unwrap();
         let old_bin = version_manager::version_binary(root, "0.112.0");
@@ -1266,6 +1266,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(result, bin);
+        assert_eq!(
+            std::fs::read(&bin).unwrap(),
+            b"fake nu",
+            "short-circuit must not replace the on-disk pinned binary"
+        );
         let active = version_manager::read_active_version(root).unwrap().unwrap();
         assert_eq!(active.version, "0.113.1");
     }

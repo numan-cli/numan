@@ -656,87 +656,60 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
     match PendingMigration::load(root) {
         Ok(Some(j)) => {
             let journal_path = PendingMigration::journal_path(root);
-            // Filesystem-inconsistent journals cannot be auto-reconciled:
-            // - unsafe version components (traversal) are refused by reconcile
-            // - Renamed without `<version>/<bin>` is rejected by reconcile
-            // Treating them as Warn/Auto leaves doctor --fix exiting 0 after a
-            // Failed repair while the corrupt journal remains. Escalate to
-            // Error/Manual so exit status surfaces the broken migration state.
-            let unsafe_version = !migration_journal::is_safe_version_component(&j.version);
-            // Probe the normalized layout path. Journals are written with a
-            // normalized version, but a hand-edited safe-but-prefixed value
-            // like "v0.113.1" must still resolve to tools/nushell/0.113.1/nu
-            // (matching migrate_legacy / reconcile), not tools/nushell/v0.113.1/nu.
-            let renamed_missing = matches!(j.stage, migration_journal::MigrationStage::Renamed)
-                && !match version_manager::normalize_version(&j.version) {
-                    Ok(normalized) => version_manager::version_binary(root, &normalized).is_file(),
-                    // Unparseable versions cannot map onto the versioned layout.
-                    Err(_) => false,
-                };
-
-            if unsafe_version || renamed_missing {
-                let (message, fix) = if unsafe_version {
-                    (
-                        format!(
-                            "Migration journal at '{}' has unsafe version component '{}'. \
-                             Delete the stale journal to recover.",
-                            journal_path.display(),
-                            j.version
-                        ),
-                        format!("Delete the stale journal at '{}'", journal_path.display()),
-                    )
-                } else {
-                    (
-                        format!(
-                            "Migration journal at '{}' is staged 'Renamed' but the versioned \
-                             binary for '{}' is missing. Run `numan setup nu {}` to repair, \
-                             or delete the stale journal.",
-                            journal_path.display(),
-                            j.version,
-                            j.version
-                        ),
+            // Only Auto when validate_reconcile says repair can succeed
+            // (normalization, symlink safety, Renamed binary presence, and
+            // Prepared orphan emptiness). Otherwise Manual so doctor --fix
+            // does not exit 0 after a Failed reconcile.
+            match migration_journal::validate_reconcile(root, &j) {
+                Err(e) => {
+                    let message = e.to_string();
+                    let fix = if message.contains("Renamed") && message.contains("missing") {
                         format!(
                             "Run `{CMD_SETUP_NU} {}` to repair, or delete the stale journal at '{}'",
                             j.version,
                             journal_path.display()
+                        )
+                    } else {
+                        format!("Delete the stale journal at '{}'", journal_path.display())
+                    };
+                    findings.push(finding(
+                        "journal.migration_invalid",
+                        Severity::Error,
+                        message,
+                        Some(&fix),
+                        RepairTier::Manual,
+                    ));
+                }
+                Ok(()) => {
+                    // Hint `numan use <v>` when the versioned binary is present
+                    // (switch can succeed after reconcile). Otherwise prefer
+                    // doctor --fix / setup nu — Prepared without a binary only
+                    // clears the journal.
+                    let binary_present = match version_manager::normalize_version(&j.version) {
+                        Ok(normalized) => {
+                            version_manager::version_binary(root, &normalized).is_file()
+                        }
+                        Err(_) => false,
+                    };
+                    let fix = if binary_present {
+                        format!("{CMD_USE} {}", j.version)
+                    } else {
+                        format!(
+                            "{CMD_DOCTOR_FIX} (or `{CMD_SETUP_NU} {}` to install)",
+                            j.version
+                        )
+                    };
+                    findings.push(finding(
+                        "journal.migration_pending",
+                        Severity::Warn,
+                        format!(
+                            "Pending legacy-Nu migration journal (stage: {}, version: {})",
+                            j.stage, j.version
                         ),
-                    )
-                };
-                findings.push(finding(
-                    "journal.migration_invalid",
-                    Severity::Error,
-                    message,
-                    Some(&fix),
-                    RepairTier::Manual,
-                ));
-            } else {
-                // Auto repair runs `migration_journal::reconcile`, not `numan use`.
-                // Hint `numan use <v>` only when the versioned binary is already
-                // present (switch can succeed after reconcile). For Prepared
-                // without a binary, reconcile just clears the journal —
-                // `numan use <v>` would then fail on a missing install.
-                let binary_present = match version_manager::normalize_version(&j.version) {
-                    Ok(normalized) => version_manager::version_binary(root, &normalized).is_file(),
-                    Err(_) => false,
-                };
-                let fix = if binary_present {
-                    format!("{CMD_USE} {}", j.version)
-                } else {
-                    format!(
-                        "{CMD_DOCTOR_FIX} (or `{CMD_SETUP_NU} {}` to install)",
-                        j.version
-                    )
-                };
-                findings.push(finding(
-                    "journal.migration_pending",
-                    Severity::Warn,
-                    format!(
-                        "Pending legacy-Nu migration journal (stage: {}, version: {})",
-                        j.stage, j.version
-                    ),
-                    Some(fix.as_str()),
-                    RepairTier::Auto,
-                ));
+                        Some(fix.as_str()),
+                        RepairTier::Auto,
+                    ));
+                }
             }
         }
         Ok(None) => {}
@@ -2794,5 +2767,158 @@ mod tests {
             f.message
         );
         assert_eq!(report.exit_code(), 1);
+    }
+
+    fn assert_migration_invalid_manual(report: &DoctorReport) {
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_invalid")
+            .expect("journal.migration_invalid");
+        assert_eq!(f.severity, Severity::Error);
+        assert_eq!(f.repair, RepairTier::Manual);
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|x| x.id != "journal.migration_pending"),
+            "invalid journal must not also produce pending"
+        );
+        assert_eq!(report.exit_code(), 1);
+    }
+
+    /// Path-safe but non-semver journal versions fail validate_reconcile.
+    #[test]
+    fn doctor_reports_non_normalizable_migration_version_as_invalid() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        std::fs::write(
+            PendingMigration::journal_path(root),
+            format!(
+                r#"{{"schema_version":{},"version":"not-a-semver","stage":"prepared"}}"#,
+                crate::state::migration_journal::SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        assert_migration_invalid_manual(&report);
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_invalid")
+            .unwrap();
+        assert!(
+            f.message.contains("non-normalizable") || f.message.contains("not-a-semver"),
+            "finding must name non-normalizable version: {}",
+            f.message
+        );
+    }
+
+    /// Symlinked managed tree is refused by validate_reconcile.
+    #[test]
+    fn doctor_reports_symlinked_managed_dir_migration_as_invalid() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+
+        let real_managed = dir.path().join("real-nushell");
+        let version_dir = real_managed.join("0.113.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        let bin = if cfg!(windows) { "nu.exe" } else { "nu" };
+        std::fs::write(version_dir.join(bin), b"binary").unwrap();
+
+        let tools = root.join("tools");
+        std::fs::create_dir_all(&tools).unwrap();
+        let managed_link = tools.join("nushell");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real_managed, &managed_link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&real_managed, &managed_link).unwrap();
+
+        std::fs::write(
+            PendingMigration::journal_path(root),
+            format!(
+                r#"{{"schema_version":{},"version":"0.113.1","stage":"renamed"}}"#,
+                crate::state::migration_journal::SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        assert_migration_invalid_manual(&report);
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_invalid")
+            .unwrap();
+        assert!(
+            f.message.contains("symlink") || f.message.contains("reparse"),
+            "finding must name symlink/reparse guard: {}",
+            f.message
+        );
+    }
+
+    /// Non-empty Prepared orphan cannot be remove_dir'd by reconcile.
+    #[test]
+    fn doctor_reports_nonempty_prepared_orphan_as_invalid() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        let version_dir = version_manager::version_install_dir(root, "0.113.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::fs::write(version_dir.join("stray.dat"), b"foreign").unwrap();
+        std::fs::write(
+            PendingMigration::journal_path(root),
+            format!(
+                r#"{{"schema_version":{},"version":"0.113.1","stage":"prepared"}}"#,
+                crate::state::migration_journal::SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        assert_migration_invalid_manual(&report);
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_invalid")
+            .unwrap();
+        assert!(
+            f.message.contains("Prepared-but-orphan") || f.message.contains("not empty"),
+            "finding must name non-empty Prepared orphan: {}",
+            f.message
+        );
     }
 }

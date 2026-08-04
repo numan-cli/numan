@@ -105,7 +105,7 @@ fn execute_nu_command_short_circuits_pinned_install_without_network() {
     // Pin-only short-circuit: when the exact requested version binary exists,
     // `numan setup nu <version> --yes` must not hit the network installer and
     // must still persist the active-version marker. Bare `setup nu` (latest)
-    // intentionally does NOT short-circuit on "any version present" (PR #82).
+    // intentionally does NOT short-circuit on "any version present".
     let binary = version_manager::version_binary(root, "0.113.1");
     std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
     std::fs::write(&binary, b"fake nu").unwrap();
@@ -121,9 +121,10 @@ fn execute_nu_command_short_circuits_pinned_install_without_network() {
         active.version, "0.113.1",
         "pinned short-circuit must still write the active-version marker"
     );
-    assert!(
-        binary.is_file(),
-        "existing pinned binary must remain after short-circuit"
+    assert_eq!(
+        std::fs::read(&binary).unwrap(),
+        b"fake nu",
+        "existing pinned binary must not be replaced or reinstalled"
     );
 }
 
