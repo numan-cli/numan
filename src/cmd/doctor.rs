@@ -662,8 +662,18 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
             // does not exit 0 after a Failed reconcile.
             match migration_journal::validate_reconcile(root, &j) {
                 Err(e) => {
-                    let message = e.to_string();
-                    let fix = if message.contains("Renamed") && message.contains("missing") {
+                    // Hint from journal stage + binary probe, not error-string wording.
+                    let binary_present = match version_manager::normalize_version(&j.version) {
+                        Ok(normalized) => {
+                            version_manager::version_binary(root, &normalized).is_file()
+                        }
+                        Err(_) => false,
+                    };
+                    let fix = if matches!(
+                        j.stage,
+                        migration_journal::MigrationStage::Renamed
+                    ) && !binary_present
+                    {
                         format!(
                             "Run `{CMD_SETUP_NU} {}` to repair, or delete the stale journal at '{}'",
                             j.version,
@@ -675,22 +685,18 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
                     findings.push(finding(
                         "journal.migration_invalid",
                         Severity::Error,
-                        message,
+                        e.to_string(),
                         Some(&fix),
                         RepairTier::Manual,
                     ));
                 }
-                Ok(()) => {
+                Ok(normalized) => {
                     // Hint `numan use <v>` when the versioned binary is present
                     // (switch can succeed after reconcile). Otherwise prefer
                     // doctor --fix / setup nu — Prepared without a binary only
                     // clears the journal.
-                    let binary_present = match version_manager::normalize_version(&j.version) {
-                        Ok(normalized) => {
-                            version_manager::version_binary(root, &normalized).is_file()
-                        }
-                        Err(_) => false,
-                    };
+                    let binary_present =
+                        version_manager::version_binary(root, &normalized).is_file();
                     let fix = if binary_present {
                         format!("{CMD_USE} {}", j.version)
                     } else {
@@ -2845,7 +2851,14 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&real_managed, &managed_link).unwrap();
         #[cfg(windows)]
-        std::os::windows::fs::symlink_dir(&real_managed, &managed_link).unwrap();
+        {
+            // Symlink creation needs Developer Mode or elevation on Windows.
+            // Skip rather than unwrap-fail when privileges are missing; Unix
+            // plus mock-platform coverage elsewhere still exercise reparse logic.
+            if std::os::windows::fs::symlink_dir(&real_managed, &managed_link).is_err() {
+                return;
+            }
+        }
 
         std::fs::write(
             PendingMigration::journal_path(root),

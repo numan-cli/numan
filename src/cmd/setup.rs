@@ -604,19 +604,18 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
 
     snapshot_before_setup_mutation(root, SnapshotTrigger::Remove)?;
 
-    // Clear after confirmation so decline leaves selection intact. Fail loud if
-    // the marker cannot be cleared; do not proceed to delete with a stale marker.
-    version_manager::clear_active_version(root).with_context(|| {
-        format!(
-            "Failed to clear active-version marker before removing managed Nu at '{}'",
-            managed_dir.display()
-        )
-    })?;
-
+    // Symlink refusal and delete must succeed before clearing the marker so a
+    // rejected managed tree leaves the active selection intact.
     assert_not_symlink(&managed_dir, "managed Nushell directory")?;
     std::fs::remove_dir_all(&managed_dir).with_context(|| {
         format!(
             "Failed to remove managed Nushell directory '{}'",
+            managed_dir.display()
+        )
+    })?;
+    version_manager::clear_active_version(root).with_context(|| {
+        format!(
+            "Failed to clear active-version marker after removing managed Nu at '{}'",
             managed_dir.display()
         )
     })?;
@@ -636,16 +635,18 @@ fn remove_managed_nu_if_present(root: &Path) -> Result<()> {
     // no-op path cannot wipe a still-valid off-tree selection. Propagate clear
     // failures so deletion does not proceed with a stale marker.
     if managed_dir.is_dir() {
-        version_manager::clear_active_version(root).with_context(|| {
-            format!(
-                "Failed to clear active-version marker before removing managed Nu at '{}'",
-                managed_dir.display()
-            )
-        })?;
+        // Symlink refusal and delete must succeed before clearing the marker so a
+        // rejected managed tree leaves the active selection intact.
         assert_not_symlink(&managed_dir, "managed Nushell directory")?;
         std::fs::remove_dir_all(&managed_dir).with_context(|| {
             format!(
                 "Failed to remove managed Nushell directory '{}'",
+                managed_dir.display()
+            )
+        })?;
+        version_manager::clear_active_version(root).with_context(|| {
+            format!(
+                "Failed to clear active-version marker after removing managed Nu at '{}'",
                 managed_dir.display()
             )
         })?;
@@ -1019,6 +1020,49 @@ mod tests {
         assert_eq!(
             active.binary_path.as_deref(),
             Some(off_tree.to_string_lossy().as_ref())
+        );
+    }
+
+    /// Symlink refusal must not clear the active marker (marker is cleared only
+    /// after successful delete).
+    #[test]
+    fn remove_managed_nu_symlink_refusal_preserves_active_marker() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        let real_managed = dir.path().join("real-nushell");
+        std::fs::create_dir_all(&real_managed).unwrap();
+        let bin = if cfg!(windows) { "nu.exe" } else { "nu" };
+        std::fs::write(real_managed.join(bin), b"fake").unwrap();
+
+        let tools = root.join("tools");
+        std::fs::create_dir_all(&tools).unwrap();
+        let managed_link = tools.join("nushell");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real_managed, &managed_link).unwrap();
+        #[cfg(windows)]
+        {
+            if std::os::windows::fs::symlink_dir(&real_managed, &managed_link).is_err() {
+                return;
+            }
+        }
+
+        version_manager::write_active_version(&root, "0.113.1").unwrap();
+
+        let err = remove_managed_nu_if_present(&root).expect_err("symlink must refuse");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("symlink") || msg.contains("reparse"),
+            "expected symlink/reparse refusal, got: {msg}"
+        );
+        assert!(
+            version_manager::read_active_version(&root)
+                .unwrap()
+                .is_some(),
+            "active marker must survive symlink refusal"
+        );
+        assert!(
+            managed_link.exists(),
+            "symlinked managed tree must remain after refusal"
         );
     }
 

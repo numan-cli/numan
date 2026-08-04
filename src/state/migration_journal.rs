@@ -200,11 +200,12 @@ fn versioned_binary_present(root: &Path, version: &str) -> bool {
 
 /// Non-mutating preflight for [`reconcile`].
 ///
-/// Returns `Ok(())` only when Auto-tier repair can proceed without failing
-/// mid-flight. Doctor uses this to classify journals as
+/// Returns `Ok(normalized_version)` only when Auto-tier repair can proceed
+/// without failing mid-flight. Doctor uses this to classify journals as
 /// `journal.migration_pending` (Auto) vs `journal.migration_invalid` (Manual)
-/// without mutating the root.
-pub fn validate_reconcile(root: &Path, journal: &PendingMigration) -> Result<()> {
+/// without mutating the root, and reuses the normalized version for binary
+/// presence probes.
+pub fn validate_reconcile(root: &Path, journal: &PendingMigration) -> Result<String> {
     if !is_safe_version_component(&journal.version) {
         bail!(
             "Migration journal at '{}' has unsafe version component '{}'. \
@@ -230,7 +231,7 @@ pub fn validate_reconcile(root: &Path, journal: &PendingMigration) -> Result<()>
     match journal.stage {
         MigrationStage::Prepared => {
             if versioned_binary_present(root, &version) {
-                return Ok(());
+                return Ok(version);
             }
             // Orphan `<version>/` must be empty so `remove_dir` can succeed.
             let version_dir = version_install_dir(root, &version);
@@ -245,7 +246,7 @@ pub fn validate_reconcile(root: &Path, journal: &PendingMigration) -> Result<()>
                     version_dir.display(),
                 );
             }
-            Ok(())
+            Ok(version)
         }
         MigrationStage::Renamed => {
             if !versioned_binary_present(root, &version) {
@@ -258,9 +259,9 @@ pub fn validate_reconcile(root: &Path, journal: &PendingMigration) -> Result<()>
                     version,
                 );
             }
-            Ok(())
+            Ok(version)
         }
-        MigrationStage::Active => Ok(()),
+        MigrationStage::Active => Ok(version),
     }
 }
 
@@ -295,15 +296,7 @@ pub fn reconcile(root: &Path) -> Result<Option<PendingMigration>> {
         return Ok(None);
     };
 
-    validate_reconcile(root, &journal)?;
-
-    // Safe after validate_reconcile: version is path-safe and normalizable.
-    let version = normalize_version(&journal.version).map_err(|e| {
-        anyhow::anyhow!(
-            "internal: validate_reconcile accepted version '{}' but normalize failed: {e}",
-            journal.version
-        )
-    })?;
+    let version = validate_reconcile(root, &journal)?;
     let managed_dir = versioned_nu_dir(root);
 
     match journal.stage {
