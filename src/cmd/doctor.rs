@@ -669,10 +669,8 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
                         }
                         Err(_) => false,
                     };
-                    let fix = if matches!(
-                        j.stage,
-                        migration_journal::MigrationStage::Renamed
-                    ) && !binary_present
+                    let fix = if matches!(j.stage, migration_journal::MigrationStage::Renamed)
+                        && !binary_present
                     {
                         format!(
                             "Run `{CMD_SETUP_NU} {}` to repair, or delete the stale journal at '{}'",
