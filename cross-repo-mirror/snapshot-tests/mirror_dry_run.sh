@@ -27,11 +27,10 @@ for sibling in numan-plugins numan-registry; do
     cp "$local_roadmap" "$TMP/local.md"
     cp "$ROOT/scripts/check-roadmap-drift.py" "$TMP/check.py"
 
-    # Capture the status explicitly: under `set -e` a bare invocation would
-    # abort the script before we could report the failing exit code.
     if CONSOLIDATED_ROADMAP="$TMP/consolidated.md" \
         LOCAL_ROADMAP="$TMP/local.md" \
-        python "$TMP/check.py"; then
+        python3 "$TMP/check.py"
+    then
         echo "    pass: drift check exits 0"
     else
         rc=$?

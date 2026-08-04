@@ -83,7 +83,8 @@ pub fn require_tty_or_yes_with_tty(yes: bool, what: &str, is_tty: bool) -> Resul
 pub fn require_tty_or_yes_with_seam(yes: bool, what: &str, is_tty: bool) -> Result<()> {
     if yes {
         eprintln!(
-            "(audit) explicit --yes accepted for {what}; proceeding without interactive prompt."
+            "(audit) explicit --yes accepted for {}; proceeding without interactive prompt.",
+            what
         );
         return Ok(());
     }
