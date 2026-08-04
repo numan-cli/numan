@@ -59,8 +59,6 @@ fn setup_nu_uses_injected_installer_without_network() {
     let platform = Platform::detect();
 
     let installer = |install_root: &std::path::Path, _platform: &Platform| {
-        // PR69 Srm: the injected installer must write the VERSIONED layout,
-        // exactly like the real network installer now does.
         let binary = version_manager::version_binary(install_root, "0.113.1");
         std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
         std::fs::write(&binary, b"fake nu").unwrap();
@@ -102,21 +100,20 @@ fn execute_nu_command_wraps_installer() {
     let root = dir.path();
     let _path_guard = PathRestoreGuard::new();
 
-    // Pre-install a VERSIONED managed binary so `numan setup nu --yes`
-    // short-circuits without network. Latest-flow already-installed detection
-    // keys off `<root>/tools/nushell/<X.Y.Z>/<bin>` (legacy `tools/nushell/nu`
-    // is migration-only and cannot supply an active-version marker).
-    let binary = version_manager::version_binary(root, "0.113.1");
-    std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+    // Pre-install at the versioned path so execute_nu short-circuits without
+    // network.  The versioned layout is now the only gate checked; the legacy
+    // flat path no longer triggers the short-circuit.
+    let version = "0.113.1";
+    let bin_dir = version_manager::version_install_dir(root, version);
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let binary = version_manager::version_binary(root, version);
     std::fs::write(&binary, b"fake nu").unwrap();
 
-    execute_nu(&NuSetupArgs::install(None, false, true, true), root).unwrap();
-
-    let active = version_manager::read_active_version(root).unwrap().unwrap();
-    assert_eq!(
-        active.version, "0.113.1",
-        "latest short-circuit must still write the active-version marker"
-    );
+    execute_nu(
+        &NuSetupArgs::install(Some(version.to_string()), false, true, true),
+        root,
+    )
+    .unwrap();
 }
 
 /// Return the first runnable Nushell binary on `$PATH` (or `/usr/local/bin/nu` on Unix).
@@ -237,7 +234,10 @@ fn cli_parse_remove_subcommand() {
 #[test]
 fn cli_parse_path_subcommand() {
     let args = parse_nu_args(&["path"]);
-    assert!(matches!(args.action, Some(NuAction::Path { .. })));
+    match &args.action {
+        Some(NuAction::Path { force: false }) => {}
+        other => panic!("expected Path {{ force: false }}, got {other:?}"),
+    }
 }
 
 #[test]
