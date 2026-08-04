@@ -325,15 +325,22 @@ else
     fi
 
     # Stage freeze artifacts so CONTENT_SHA includes the contract doc (and any
-    # author edits to the consolidated roadmap / drift script already present).
+    # intended freeze content already committed or newly created above).
     # Refuse a dirty index so unrelated staged paths cannot enter CONTENT_SHA.
+    # Refuse unstaged edits to freeze artifacts so `git add` cannot silently
+    # pull WIP into the freeze commit — commit or discard those edits first.
+    FREEZE_ROADMAP="$REPO_ROOT/docs/plans/consolidated-multi-repo-roadmap.md"
     if ! git diff --cached --quiet; then
         err "index contains staged changes; commit or unstage them before bumping"
         exit 4
     fi
+    if ! git diff --quiet -- "$CONTRACT_DOC" "$FREEZE_ROADMAP" "$DRIFT_SCRIPT"; then
+        err "freeze artifacts have unstaged changes; commit or discard them before bumping so CONTENT_SHA is intentional"
+        exit 4
+    fi
     git add \
         "$CONTRACT_DOC" \
-        "$REPO_ROOT/docs/plans/consolidated-multi-repo-roadmap.md" \
+        "$FREEZE_ROADMAP" \
         "$DRIFT_SCRIPT" || {
             err "failed to stage contract freeze artifacts"
             exit 3
