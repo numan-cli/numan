@@ -559,6 +559,11 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
         // the currently recorded binary is absent (dangling marker) or lives
         // inside the now-absent managed tree. Preserve valid off-tree
         // selections (e.g. from `numan setup nu use <path>`).
+        //
+        // Unreadable/malformed markers must not be silently deleted here —
+        // `numan doctor` owns that repair (`nu.active_version.invalid`, auto
+        // tier with `.corrupt` backup). Surface the condition and leave the
+        // file for doctor rather than pre-empting the finding.
         let should_clear = match version_manager::read_active_version(root) {
             Ok(None) => false, // no marker at all
             Ok(Some(active)) => {
@@ -570,10 +575,22 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
                     .unwrap_or(false);
                 !has_valid_off_tree
             }
-            Err(_) => true, // unreadable marker: clear it
+            Err(e) => {
+                return Err(e).context(format!(
+                    "Active-version marker is unreadable while no managed Nushell install \
+                     exists at '{}'; run `numan doctor --fix` to repair (keeps a .corrupt \
+                     backup) instead of discarding diagnostic state",
+                    managed_dir.display()
+                ));
+            }
         };
         if should_clear {
-            let _ = version_manager::clear_active_version(root);
+            version_manager::clear_active_version(root).with_context(|| {
+                format!(
+                    "Failed to clear stale active-version marker (no managed Nushell tree at '{}')",
+                    managed_dir.display()
+                )
+            })?;
         }
         println!(
             "No managed Nushell install found at '{}'.",
@@ -947,6 +964,72 @@ mod tests {
         let root = dir.path().join("numan-root");
         // Should succeed without error when nothing is installed.
         remove_managed_nu(&root, true).unwrap();
+    }
+
+    #[test]
+    fn remove_managed_nu_errors_on_malformed_marker_without_clearing() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        let marker = root.join("nu_state").join("active-version.json");
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, b"{ not valid json").unwrap();
+
+        let err = remove_managed_nu(&root, true).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("unreadable") || msg.contains("Malformed"),
+            "expected unreadable/malformed marker diagnostic, got: {msg}"
+        );
+        assert!(
+            msg.contains("doctor") || msg.contains("corrupt"),
+            "expected doctor repair hint, got: {msg}"
+        );
+        assert!(
+            marker.is_file(),
+            "malformed marker must remain for doctor; remove must not pre-empt the finding"
+        );
+        assert_eq!(
+            std::fs::read(&marker).unwrap(),
+            b"{ not valid json",
+            "marker bytes must be preserved for doctor .corrupt backup"
+        );
+    }
+
+    #[test]
+    fn remove_managed_nu_clears_dangling_marker_when_tree_absent() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        // Readable marker pointing at a missing on-tree selection — clear it.
+        version_manager::write_active_version(&root, "0.99.0").unwrap();
+        let marker = root.join("nu_state").join("active-version.json");
+        assert!(marker.is_file());
+
+        remove_managed_nu(&root, true).unwrap();
+        assert!(
+            !marker.exists(),
+            "dangling on-tree marker must be cleared when managed tree is absent"
+        );
+    }
+
+    #[test]
+    fn remove_managed_nu_preserves_valid_off_tree_marker() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        let off_tree = dir.path().join("external-nu");
+        std::fs::write(&off_tree, b"fake-nu").unwrap();
+        version_manager::write_active_version_with_binary(&root, "0.99.0", &off_tree).unwrap();
+        let marker = root.join("nu_state").join("active-version.json");
+        assert!(marker.is_file());
+
+        remove_managed_nu(&root, true).unwrap();
+        let active = version_manager::read_active_version(&root)
+            .unwrap()
+            .expect("valid off-tree selection must be preserved");
+        assert_eq!(active.version, "0.99.0");
+        assert_eq!(
+            active.binary_path.as_deref(),
+            Some(off_tree.to_str().unwrap())
+        );
     }
 
     #[test]
