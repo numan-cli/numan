@@ -91,7 +91,7 @@ jobs:
         env:
           CONSOLIDATED_ROADMAP: docs/plans/consolidated-multi-repo-roadmap.md
           LOCAL_ROADMAP: docs/roadmap.md
-        run: python scripts/check-roadmap-drift.py
+        run: python3 scripts/check-roadmap-drift.py
       - name: Verify repo-local roadmap cross-link (defense in depth)
         run: |
           test -f docs/roadmap.md

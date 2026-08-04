@@ -83,7 +83,7 @@ curl -sSfL \
 cd "$SIBLING_ROOT"
 CONSOLIDATED_ROADMAP=docs/plans/consolidated-multi-repo-roadmap.md \
   LOCAL_ROADMAP=docs/roadmap.md \
-  python scripts/check-roadmap-drift.py
+  python3 scripts/check-roadmap-drift.py
 # expect: 0 errors
 ```
 

@@ -30,7 +30,7 @@ Modes
 
 Default (run from each repo's repo root):
 
-    python scripts/check-roadmap-drift.py
+    python3 scripts/check-roadmap-drift.py
 
 Override paths are rare; if you need them, env vars override:
 
