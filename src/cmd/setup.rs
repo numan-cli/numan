@@ -615,6 +615,7 @@ fn remove_managed_nu(root: &Path, yes: bool) -> Result<()> {
         )
     })?;
 
+    assert_not_symlink(&managed_dir, "managed Nushell directory")?;
     std::fs::remove_dir_all(&managed_dir).with_context(|| {
         format!(
             "Failed to remove managed Nushell directory '{}'",
@@ -643,6 +644,7 @@ fn remove_managed_nu_if_present(root: &Path) -> Result<()> {
                 managed_dir.display()
             )
         })?;
+        assert_not_symlink(&managed_dir, "managed Nushell directory")?;
         std::fs::remove_dir_all(&managed_dir).with_context(|| {
             format!(
                 "Failed to remove managed Nushell directory '{}'",

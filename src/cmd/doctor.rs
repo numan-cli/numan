@@ -710,9 +710,23 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
                     RepairTier::Manual,
                 ));
             } else {
-                // Include the journaled version so the advertised repair is a
-                // runnable CLI (`numan use` alone requires <VERSION>).
-                let use_fix = format!("{CMD_USE} {}", j.version);
+                // Auto repair runs `migration_journal::reconcile`, not `numan use`.
+                // Hint `numan use <v>` only when the versioned binary is already
+                // present (switch can succeed after reconcile). For Prepared
+                // without a binary, reconcile just clears the journal —
+                // `numan use <v>` would then fail on a missing install.
+                let binary_present = match version_manager::normalize_version(&j.version) {
+                    Ok(normalized) => version_manager::version_binary(root, &normalized).is_file(),
+                    Err(_) => false,
+                };
+                let fix = if binary_present {
+                    format!("{CMD_USE} {}", j.version)
+                } else {
+                    format!(
+                        "{CMD_DOCTOR_FIX} (or `{CMD_SETUP_NU} {}` to install)",
+                        j.version
+                    )
+                };
                 findings.push(finding(
                     "journal.migration_pending",
                     Severity::Warn,
@@ -720,7 +734,7 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
                         "Pending legacy-Nu migration journal (stage: {}, version: {})",
                         j.stage, j.version
                     ),
-                    Some(use_fix.as_str()),
+                    Some(fix.as_str()),
                     RepairTier::Auto,
                 ));
             }
@@ -2440,10 +2454,12 @@ mod tests {
         );
         assert!(f.message.contains("0.113.1"));
         assert!(
-            f.fix.as_deref().is_some_and(
-                |s| s.starts_with(crate::util::hints::CMD_USE) && s.contains("0.113.1")
-            ),
-            "fix hint must include journaled version so `numan use <v>` is runnable, got {:?}",
+            f.fix.as_deref().is_some_and(|s| {
+                s.contains(crate::util::hints::CMD_DOCTOR_FIX)
+                    && s.contains(crate::util::hints::CMD_SETUP_NU)
+                    && s.contains("0.113.1")
+            }),
+            "Prepared-without-binary hint must prefer doctor --fix / setup nu, got {:?}",
             f.fix
         );
     }
@@ -2694,6 +2710,49 @@ mod tests {
             .expect("journal.migration_pending for recoverable Renamed");
         assert_eq!(f.severity, Severity::Warn);
         assert_eq!(f.repair, RepairTier::Auto);
+    }
+
+    #[test]
+    fn doctor_pending_renamed_with_binary_hints_numan_use() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        let version_dir = version_manager::version_install_dir(root, "0.113.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        let bin = if cfg!(windows) { "nu.exe" } else { "nu" };
+        std::fs::write(version_dir.join(bin), b"binary").unwrap();
+        std::fs::write(
+            PendingMigration::journal_path(root),
+            format!(
+                r#"{{"schema_version":{},"version":"0.113.1","stage":"renamed"}}"#,
+                crate::state::migration_journal::SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_pending")
+            .expect("journal.migration_pending when Renamed binary present");
+        assert!(
+            f.fix.as_deref().is_some_and(|s| {
+                s.starts_with(crate::util::hints::CMD_USE) && s.contains("0.113.1")
+            }),
+            "recoverable Renamed with binary should hint numan use, got {:?}",
+            f.fix
+        );
     }
 
     #[test]

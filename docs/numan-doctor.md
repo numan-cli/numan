@@ -149,7 +149,7 @@ Checks run in order below. Implementation should call existing validators (`NuPa
 | `journal.autoload_stale` | `error` | Journal identity mismatch | **confirm:** `init --refresh` then `activate` |
 | `journal.lifecycle_pending` | `warn` | `state/pending-lifecycle.json` exists | **manual:** re-run or clear per op |
 | `journal.lifecycle_stale` | `error` | Stale lifecycle journal | **manual** |
-| `journal.migration_pending` | `warn` | `state/migration-journal.json` exists, parses, and is filesystem-consistent (stage `Prepared` \| recoverable `Renamed` \| `Active`) | **auto:** `migration_journal::reconcile` under the mutation lock, after a PreMutation snapshot; hint `numan use` |
+| `journal.migration_pending` | `warn` | `state/migration-journal.json` exists, parses, and is filesystem-consistent (stage `Prepared` \| recoverable `Renamed` \| `Active`) | **auto:** `migration_journal::reconcile` under the mutation lock, after a PreMutation snapshot; hint `numan doctor --fix` (or `numan setup nu <version>` to install) when the versioned binary is absent, else `numan use <version>` |
 | `journal.migration_invalid` | `error` | journal unreadable/unparseable/unsupported `schema_version`, or filesystem-inconsistent (`Renamed` with missing `<version>/<bin>`, unsafe version component) | **manual:** `numan setup nu <version>` when the binary is missing, or delete the stale journal; auto-reconcile refuses these states |
 
 ### 4. Lockfile and activation identity

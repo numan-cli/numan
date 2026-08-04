@@ -36,9 +36,10 @@ fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> 
     // automation has to opt in; interactive TTY sessions still confirm below.
     crate::util::confirm::require_tty_or_yes_with_seam(args.yes, "package removal", is_tty)?;
 
-    let _lock = acquire_mutation_lock(root)?;
-
-    let mut lockfile = Lockfile::load(root)?;
+    // Validate before taking the mutation lock so a typo'd package id fails
+    // fast, and so an idle interactive prompt does not block other destructive
+    // ops on the same root (mirrors snapshot delete/rollback ordering).
+    let lockfile = Lockfile::load(root)?;
 
     let entry = match lockfile.packages.get(&args.package) {
         Some(e) => e.clone(),
@@ -66,6 +67,28 @@ fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> 
         args.yes,
         "Package removal cancelled.",
     )?;
+
+    let _lock = acquire_mutation_lock(root)?;
+
+    // Reload under the lock so the confirm-time view cannot race a concurrent
+    // install/activate that landed while the user was at the prompt.
+    let mut lockfile = Lockfile::load(root)?;
+    let entry = match lockfile.packages.get(&args.package) {
+        Some(e) => e.clone(),
+        None => bail!(
+            "Package '{}' is no longer installed (removed while confirmation was pending).",
+            args.package
+        ),
+    };
+    ensure_plugin_not_active(&entry, &args.package)?;
+    if !args.force && entry.module_activation.is_some() {
+        bail!(
+            "Package '{}' is currently active as a module. \
+             Run `numan deactivate {}` first or use --force.",
+            args.package,
+            args.package
+        );
+    }
 
     let payload_path = entry.payload_path().to_string();
     let payload_dir = root.join(&payload_path);
