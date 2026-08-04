@@ -77,6 +77,7 @@ jobs:
           curl --fail-with-body --silent --show-error --location \
             https://raw.githubusercontent.com/tonythethompson/numan/$CONTRACT_SHA/scripts/check-roadmap-drift.py \
             -o scripts/check-roadmap-drift.py
+          test -s scripts/check-roadmap-drift.py
           chmod +x scripts/check-roadmap-drift.py
       - name: Pull contract doc from pin (numan@${{ env.CONTRACT_TAG }} -> ${{ env.CONTRACT_SHA }})
         run: |
