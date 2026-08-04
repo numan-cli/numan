@@ -251,35 +251,6 @@ def audit_local(path: Path, name: str) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
-def main(argv: list[str]) -> int:
-    if argv[1:] and argv[1] in ("--help", "-h"):
-        print(__doc__)
-        return 0
-    if argv[1:] and argv[1] == "--self-test":
-        return _self_test()
-    consolidated_path = (
-        Path(argv[1]) if len(argv) > 1 else CONSOLIDATED_PATH
-    )
-
-    errors, warnings = [], []
-    e, w = audit_consolidated(consolidated_path)
-    errors += e
-    warnings += w
-
-    e, w = audit_local(LOCAL_PATH, name="consolidated")
-    errors += e
-    warnings += w
-
-    for w in warnings:
-        print(f"warning: {w}")
-    for e in errors:
-        print(f"error: {e}")
-    print(
-        f"roadmap-drift check: {len(errors)} error(s), {len(warnings)} warning(s)"
-    )
-    return 1 if errors else 0
-
-
 def _self_test() -> int:
     """Regression: remote links only after the first `##` must still fail."""
     body = (
@@ -309,6 +280,35 @@ def _self_test() -> int:
             return 1
     print("self-test ok: post-boundary preamble strings still fail")
     return 0
+
+
+def main(argv: list[str]) -> int:
+    if argv[1:] and argv[1] in ("--help", "-h"):
+        print(__doc__)
+        return 0
+    if argv[1:] and argv[1] == "--self-test":
+        return _self_test()
+    consolidated_path = (
+        Path(argv[1]) if len(argv) > 1 else CONSOLIDATED_PATH
+    )
+
+    errors, warnings = [], []
+    e, w = audit_consolidated(consolidated_path)
+    errors += e
+    warnings += w
+
+    e, w = audit_local(LOCAL_PATH, name="consolidated")
+    errors += e
+    warnings += w
+
+    for w in warnings:
+        print(f"warning: {w}")
+    for e in errors:
+        print(f"error: {e}")
+    print(
+        f"roadmap-drift check: {len(errors)} error(s), {len(warnings)} warning(s)"
+    )
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":
