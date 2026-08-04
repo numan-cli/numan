@@ -103,7 +103,7 @@ jobs:
             exit 1
           fi
           echo "OK: $CONTRACT_TAG pinned to $CONTRACT_SHA"
-      - name: Fetch consolidated roadmap from pin (numan@$CONTRACT_SHA)
+      - name: Fetch consolidated roadmap from pin (numan@${{ env.CONTRACT_SHA }})
         run: |
           curl --fail-with-body --silent --show-error --location \
             https://raw.githubusercontent.com/tonythethompson/numan/$CONTRACT_SHA/docs/plans/consolidated-multi-repo-roadmap.md \
@@ -112,7 +112,7 @@ jobs:
             || (echo "::error::Local consolidated roadmap diverges from $CONTRACT_SHA."; \
                 echo "Run scripts/bump-contract.sh and ship a coordinated bump PR."; \
                 exit 1)
-      - name: Fetch drift script from pin (numan@$CONTRACT_SHA)
+      - name: Fetch drift script from pin (numan@${{ env.CONTRACT_SHA }})
         run: |
           curl --fail-with-body --silent --show-error --location \
             https://raw.githubusercontent.com/tonythethompson/numan/$CONTRACT_SHA/scripts/check-roadmap-drift.py \
@@ -121,7 +121,7 @@ jobs:
             || (echo "::error::Local drift script diverges from $CONTRACT_SHA."; \
                 echo "Bump the contract before changing the drift script."; \
                 exit 1)
-      - name: Fetch contract doc from pin (numan@$CONTRACT_SHA)
+      - name: Fetch contract doc from pin (numan@${{ env.CONTRACT_SHA }})
         run: |
           curl --fail-with-body --silent --show-error --location \
             https://raw.githubusercontent.com/tonythethompson/numan/$CONTRACT_SHA/docs/contracts/roadmap-v1.md \
