@@ -426,6 +426,10 @@ fn execute_use_path(yes: bool, root: &Path, force: bool, opts: ExecuteUseOpts<'_
         }
     }
 
+    // Preflight before any destructive step: marker write must be possible
+    // after registration. Otherwise delete+PATH succeed and the command
+    // fails with incomplete Nu selection state.
+    preflight_active_marker_writable(root)?;
     snapshot_before_setup_mutation(root, SnapshotTrigger::Update)?;
     remove_managed_nu_if_present(root)?;
     let options = NuSetupOptions {
@@ -516,6 +520,10 @@ fn execute_use_existing(
         version_manager::normalize_version(&detected.version)?
     };
 
+    // Preflight before any destructive step: marker write must be possible
+    // after registration. Otherwise delete+PATH succeed and the command
+    // fails with incomplete Nu selection state.
+    preflight_active_marker_writable(root)?;
     snapshot_before_setup_mutation(root, SnapshotTrigger::Update)?;
     remove_managed_nu_if_present(root)?;
     let options = NuSetupOptions {
@@ -533,6 +541,30 @@ fn execute_use_existing(
     // chatgpt PR69 S08: persist the registered binary as the active version
     // marker so `numan use list` reports it as the selection.
     version_manager::write_active_version_with_binary(root, &normalized_version, &registered)?;
+    Ok(())
+}
+
+/// Ensure `nu_state/` is creatable/writable before destructive PATH/off-path
+/// registration. A later active-marker write failure after managed-tree
+/// deletion + PATH mutation leaves Nu selection incomplete; refuse early.
+fn preflight_active_marker_writable(root: &Path) -> Result<()> {
+    let nu_state = root.join("nu_state");
+    std::fs::create_dir_all(&nu_state).with_context(|| {
+        format!(
+            "Failed to create nu_state directory '{}' before PATH/off-path Nu registration; \
+             refusing destructive switch while the active-version marker cannot be written",
+            nu_state.display()
+        )
+    })?;
+    let probe = nu_state.join(".numan-active-marker-write-probe");
+    std::fs::write(&probe, b"ok").with_context(|| {
+        format!(
+            "Failed to write probe file in '{}' before PATH/off-path Nu registration; \
+             refusing destructive switch while the active-version marker cannot be written",
+            nu_state.display()
+        )
+    })?;
+    let _ = std::fs::remove_file(&probe);
     Ok(())
 }
 
@@ -995,6 +1027,21 @@ mod tests {
         assert!(
             marker.exists(),
             "managed Nu must remain intact when off-PATH binary fails validation"
+        );
+    }
+
+    #[test]
+    fn preflight_active_marker_writable_creates_nu_state() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        preflight_active_marker_writable(&root).unwrap();
+        assert!(
+            root.join("nu_state").is_dir(),
+            "preflight must create nu_state so marker write can succeed"
+        );
+        assert!(
+            !root.join("nu_state").join(".numan-active-marker-write-probe").exists(),
+            "probe file must be cleaned up"
         );
     }
 
