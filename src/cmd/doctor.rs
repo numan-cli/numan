@@ -2384,10 +2384,9 @@ mod tests {
         );
         assert!(f.message.contains("0.113.1"));
         assert!(
-            f.fix
-                .as_deref()
-                .is_some_and(|s| s.starts_with(crate::util::hints::CMD_USE)
-                    && s.contains("0.113.1")),
+            f.fix.as_deref().is_some_and(
+                |s| s.starts_with(crate::util::hints::CMD_USE) && s.contains("0.113.1")
+            ),
             "fix hint must include journaled version so `numan use <v>` is runnable, got {:?}",
             f.fix
         );
