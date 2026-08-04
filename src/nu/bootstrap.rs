@@ -809,6 +809,12 @@ where
                 .unwrap_or_else(|| dest.clone())
         };
         if options.yes && effective.is_file() {
+            // PATH/marker mutation on the short-circuit path still needs a
+            // PreMutation snapshot (same AGENTS.md boundary as install).
+            snapshot_before_nu_setup(
+                root,
+                "Failed to create pre-mutation snapshot for existing `numan setup nu`",
+            )?;
             let tools_dir = match effective.parent() {
                 Some(parent) => parent.to_path_buf(),
                 None => managed_nu_dir(root),

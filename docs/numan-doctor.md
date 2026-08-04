@@ -149,8 +149,8 @@ Checks run in order below. Implementation should call existing validators (`NuPa
 | `journal.autoload_stale` | `error` | Journal identity mismatch | **confirm:** `init --refresh` then `activate` |
 | `journal.lifecycle_pending` | `warn` | `state/pending-lifecycle.json` exists | **manual:** re-run or clear per op |
 | `journal.lifecycle_stale` | `error` | Stale lifecycle journal | **manual** |
-| `journal.migration_pending` | `warn` | `state/migration-journal.json` exists and parses (stage `Prepared` \| `Renamed` \| `Active`) | **auto:** `migration_journal::reconcile` under the mutation lock, after a PreMutation snapshot; hint `numan use` |
-| `journal.migration_invalid` | `error` | `state/migration-journal.json` is present but unreadable, unparseable, or carries an unsupported `schema_version` | **manual:** delete the journal file; `numan use` cannot reconcile an unreadable journal |
+| `journal.migration_pending` | `warn` | `state/migration-journal.json` exists, parses, and [`validate_reconcile`](../src/state/migration_journal.rs) accepts it (normalized version, non-symlink managed tree, Renamed binary present or Prepared orphan empty/absent) | **auto:** `migration_journal::reconcile` under the mutation lock, after a PreMutation snapshot; hint `numan use <version>` when the versioned binary is present, else `numan doctor --fix` (or `numan setup nu <version>` to install) |
+| `journal.migration_invalid` | `error` | journal unreadable/unparseable/unsupported `schema_version`, or `validate_reconcile` refuses (unsafe/non-normalizable version, symlink managed tree, Renamed missing binary, non-empty Prepared orphan) | **manual:** `numan setup nu <version>` when the binary is missing, or delete the stale journal; auto-reconcile refuses these states |
 
 ### 4. Lockfile and activation identity
 

@@ -95,14 +95,14 @@ fn setup_nu_uses_injected_installer_without_network() {
 }
 
 #[test]
-fn execute_nu_command_wraps_installer() {
+fn execute_nu_command_short_circuits_pinned_install_without_network() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let _path_guard = PathRestoreGuard::new();
 
-    // Pre-install at the versioned path so execute_nu short-circuits without
-    // network.  The versioned layout is now the only gate checked; the legacy
-    // flat path no longer triggers the short-circuit.
+    // Pin-only short-circuit at the versioned path (legacy flat path is not a
+    // gate). When the exact requested version binary exists, setup must not
+    // hit the network installer and must still persist the active-version marker.
     let version = "0.113.1";
     let bin_dir = version_manager::version_install_dir(root, version);
     std::fs::create_dir_all(&bin_dir).unwrap();
@@ -114,6 +114,17 @@ fn execute_nu_command_wraps_installer() {
         root,
     )
     .unwrap();
+
+    let active = version_manager::read_active_version(root).unwrap().unwrap();
+    assert_eq!(
+        active.version, version,
+        "pinned short-circuit must still write the active-version marker"
+    );
+    assert_eq!(
+        std::fs::read(&binary).unwrap(),
+        b"fake nu",
+        "existing pinned binary must not be replaced or reinstalled"
+    );
 }
 
 /// Return the first runnable Nushell binary on `$PATH` (or `/usr/local/bin/nu` on Unix).

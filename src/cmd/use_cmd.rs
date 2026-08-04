@@ -13,7 +13,7 @@ use std::path::Path;
 use crate::nu::paths::NuPaths;
 use crate::nu::version_manager;
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
-use crate::util::fs_safety::acquire_mutation_lock;
+use crate::util::fs_safety::setup_subcommand_lock;
 use crate::util::hints::CMD_INIT_REFRESH;
 
 #[derive(Args, Debug)]
@@ -24,34 +24,35 @@ pub struct UseArgs {
 }
 
 pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
-    // Listing is read-only: do not lock, snapshot, or migrate the install.
+    // Listing is read-only: no lock, snapshot, or migrate. A flat legacy
+    // install is still surfaced via the VERSION marker without on-disk migrate.
     if args.version == "list" {
         return execute_list(root);
     }
 
     // Hold the mutation lock for the entire operation to prevent races
     // between concurrent `numan setup nu` and `numan use` invocations.
-    let _lock = acquire_mutation_lock(root)?;
+    setup_subcommand_lock(root, "Nu version switch", || {
+        // Snapshot established state before any mutation. This covers both the
+        // legacy-migration step (rename + active-version write) and the version
+        // switch below.
+        create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Update,
+            None,
+            None,
+        )
+        .with_context(|| "Failed to create pre-mutation snapshot for `numan use`")?;
 
-    // Snapshot established state before any mutation. This covers both the
-    // legacy-migration step (rename + active-version write) and the version
-    // switch below.
-    create_snapshot(
-        root,
-        SnapshotReason::PreMutation,
-        SnapshotTrigger::Update,
-        None,
-        None,
-    )
-    .with_context(|| "Failed to create pre-mutation snapshot for `numan use`")?;
+        crate::nu::migrate_legacy::migrate_legacy_install(root)
+            .with_context(|| "Failed to migrate legacy Nu installation")?;
 
-    crate::nu::migrate_legacy::migrate_legacy_install(root)
-        .with_context(|| "Failed to migrate legacy Nu installation")?;
-
-    match args.version.as_str() {
-        "latest" => execute_latest(root),
-        version => execute_switch(root, version),
-    }
+        match args.version.as_str() {
+            "latest" => execute_latest(root),
+            version => execute_switch(root, version),
+        }
+    })
 }
 
 /// List all installed Nu versions, marking the active one.
@@ -197,6 +198,7 @@ fn refresh_cached_nu_paths_after_switch(root: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::state::snapshot::{list_snapshots, SnapshotReason, SnapshotTrigger};
+    use crate::util::fs_safety::acquire_mutation_lock;
     use tempfile::TempDir;
 
     fn create_fake_version(root: &Path, version: &str) {
@@ -259,11 +261,50 @@ mod tests {
 
         assert!(
             list_snapshots(root).unwrap().is_empty(),
-            "`numan use list` is read-only and must not create a snapshot"
+            "`numan use list` must not create a PreMutation snapshot"
         );
-        // Active selection unchanged (no mutation / no rollback side effects).
+        // Active selection unchanged.
         let active = version_manager::read_active_version(root).unwrap().unwrap();
         assert_eq!(active.version, "0.113.1");
+    }
+
+    #[test]
+    fn test_use_list_discovers_legacy_via_version_marker_without_mutation() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let tools = version_manager::versioned_nu_dir(root);
+        std::fs::create_dir_all(&tools).unwrap();
+        let bin = if cfg!(windows) { "nu.exe" } else { "nu" };
+        std::fs::write(tools.join(bin), b"legacy").unwrap();
+        std::fs::write(tools.join("VERSION"), "0.113.1\n").unwrap();
+
+        execute(
+            &UseArgs {
+                version: "list".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        assert!(
+            list_snapshots(root).unwrap().is_empty(),
+            "list must not create a PreMutation snapshot"
+        );
+        assert!(
+            tools.join(bin).is_file(),
+            "list must leave the flat legacy binary in place"
+        );
+        assert!(
+            !version_manager::version_binary(root, "0.113.1").is_file(),
+            "list must not migrate into tools/nushell/<version>/"
+        );
+        assert!(
+            version_manager::list_installed_versions(root)
+                .unwrap()
+                .iter()
+                .any(|v| v == "0.113.1"),
+            "VERSION marker must still surface the legacy install to list"
+        );
     }
 
     #[test]

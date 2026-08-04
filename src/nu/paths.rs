@@ -334,18 +334,13 @@ pub fn find_nu_executable_with_root(root: &Path) -> Result<String> {
                 {
                     None
                 }
-                VersionManagerError::ReadMarker { source, .. } => {
-                    return Err(anyhow::anyhow!(
-                        "Failed to read active-version marker (io: {source}); \
-                         a torn marker must not silently fall back to PATH Nu. \
-                         Run `numan doctor --fix` to reconcile."
-                    ));
-                }
+                // Preserve VersionManagerError as the cause so `{:#}` / `{:?}`
+                // still surface the underlying io::Error or serde_json::Error.
                 other => {
-                    return Err(anyhow::anyhow!(
-                        "Failed to parse active-version marker: {other}. \
-                         A malformed marker must not silently fall back to PATH Nu. \
-                         Run `numan doctor --fix` to reconcile."
+                    return Err(anyhow::Error::new(other).context(
+                        "Active-version marker is unreadable or malformed; \
+                         a torn marker must not silently fall back to PATH Nu. \
+                         Run `numan doctor --fix` to reconcile.",
                     ));
                 }
             }

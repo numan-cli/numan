@@ -478,7 +478,9 @@ pub(crate) fn nu_binary_name() -> &'static str {
 /// Legacy single-binary path that older installs wrote:
 /// `<root>/tools/nushell/${bin}`.
 pub(crate) fn legacy_managed_binary_with_bin(root: &Path, bin: &str) -> PathBuf {
-    root.join("tools").join("nushell").join(bin)
+    // Own layout via versioned_nu_dir so migration cannot drift from the
+    // versioned managed-tree helper if tools/nushell ever moves.
+    versioned_nu_dir(root).join(bin)
 }
 
 #[cfg(test)]
@@ -531,6 +533,56 @@ mod tests {
         let versions = list_installed_versions(root).unwrap();
         // Should be sorted descending.
         assert_eq!(versions, vec!["0.114.0", "0.113.1", "0.112.0"]);
+    }
+
+    #[test]
+    fn list_installed_versions_includes_legacy_binary_with_version_file() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let tools = versioned_nu_dir(root);
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::write(tools.join(nu_binary_name()), b"legacy").unwrap();
+        std::fs::write(tools.join("VERSION"), "0.113.1\n").unwrap();
+
+        let versions = list_installed_versions(root).unwrap();
+        assert_eq!(versions, vec!["0.113.1"]);
+    }
+
+    #[test]
+    fn list_installed_versions_omits_legacy_when_version_file_missing() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let tools = versioned_nu_dir(root);
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::write(tools.join(nu_binary_name()), b"legacy").unwrap();
+
+        let versions = list_installed_versions(root).unwrap();
+        assert!(
+            versions.is_empty(),
+            "legacy binary without VERSION must not invent a version: {versions:?}"
+        );
+    }
+
+    #[test]
+    fn list_installed_versions_omits_legacy_when_versioned_installs_exist() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let binary_name = nu_binary_name();
+        let tools = versioned_nu_dir(root);
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::write(tools.join(binary_name), b"legacy").unwrap();
+        std::fs::write(tools.join("VERSION"), "0.112.0\n").unwrap();
+
+        let versioned = version_install_dir(root, "0.113.1");
+        std::fs::create_dir_all(&versioned).unwrap();
+        std::fs::write(versioned.join(binary_name), b"versioned").unwrap();
+
+        let versions = list_installed_versions(root).unwrap();
+        assert_eq!(
+            versions,
+            vec!["0.113.1"],
+            "flat VERSION must be suppressed once any versioned install exists"
+        );
     }
 
     #[test]
