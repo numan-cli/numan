@@ -807,5 +807,7 @@ pub(crate) fn legacy_managed_binary_with_bin(
     root: &std::path::Path,
     bin: &str,
 ) -> std::path::PathBuf {
-    root.join("tools").join("nushell").join(bin)
+    // Own layout via versioned_nu_dir so migration cannot drift from the
+    // versioned managed-tree helper if tools/nushell ever moves.
+    versioned_nu_dir(root).join(bin)
 }
