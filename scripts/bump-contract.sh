@@ -13,8 +13,12 @@
 #     - It refuses to issue the PR set unless the maintainer is recognized
 #       on all three sibling repos.
 #
-# The script preserves the previous contract as a `.bak` tag for one cycle
-# so a faulty bump can be reverted without breaking CI on the sibling repos.
+# Local safety: after creating NEW_TAG, the script also creates a local-only
+# `$OLD_TAG.bak` pointer so a botched local bump can be recovered without a
+# force-push. That `.bak` tag is never published and never written into
+# workflow pins. Published rollbacks use the documented
+# `numan-roadmap-contract/vN-deleted` protocol in docs/contracts/roadmap-v1.md
+# (which rewrites BOTH CONTRACT_TAG and CONTRACT_SHA).
 #
 # USAGE
 #   scripts/bump-contract.sh <NEW_VERSION> [-r "reason for the bump"]
@@ -199,6 +203,34 @@ require_yml_has_pins "$NUMAN_CI"
 require_yml_has_pins "$PLUGINS_YML"
 require_yml_has_pins "$REGISTRY_YML"
 
+# Resolve the current remote contract and require every pin SHA to match it.
+# A missing tag or tag/SHA drift is fatal before any commits or tags are created.
+if [ "$INIT" -eq 0 ]; then
+    log "validating current contract pin against origin tag $OLD_TAG"
+    if ! git fetch origin "refs/tags/${OLD_TAG}:refs/tags/${OLD_TAG}" 2>/dev/null; then
+        err "cannot fetch $OLD_TAG from origin; refuse to bump without validating current pin"
+        exit 4
+    fi
+    if ! git rev-parse "$OLD_TAG" >/dev/null 2>&1; then
+        err "tag $OLD_TAG is not available after fetch; refuse to bump"
+        exit 4
+    fi
+    OLD_SHA="$(git rev-parse "${OLD_TAG}^{}")"
+    if ! [[ "$OLD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+        err "could not resolve $OLD_TAG to a commit SHA (got '$OLD_SHA')"
+        exit 4
+    fi
+    for yml in "$NUMAN_CI" "$PLUGINS_YML" "$REGISTRY_YML"; do
+        pin_sha="$(grep -E '^[[:space:]]*CONTRACT_SHA:[[:space:]]*[0-9a-f]{40,}' "$yml" | head -1 | awk '{print $2}')"
+        if [ "$pin_sha" != "$OLD_SHA" ]; then
+            err "$yml CONTRACT_SHA=$pin_sha does not match $OLD_TAG -> $OLD_SHA"
+            err "align pins (or retarget the tag) before bumping; do not overwrite tag/SHA drift"
+            exit 4
+        fi
+    done
+    log "current contract validated: $OLD_TAG -> $OLD_SHA"
+fi
+
 rewrite_yml_pins() {
     local yml="$1"
     local tmp
@@ -294,10 +326,18 @@ else
 
     # Stage freeze artifacts so CONTENT_SHA includes the contract doc (and any
     # author edits to the consolidated roadmap / drift script already present).
+    # Refuse a dirty index so unrelated staged paths cannot enter CONTENT_SHA.
+    if ! git diff --cached --quiet; then
+        err "index contains staged changes; commit or unstage them before bumping"
+        exit 4
+    fi
     git add \
         "$CONTRACT_DOC" \
         "$REPO_ROOT/docs/plans/consolidated-multi-repo-roadmap.md" \
-        "$DRIFT_SCRIPT" 2>/dev/null || true
+        "$DRIFT_SCRIPT" || {
+            err "failed to stage contract freeze artifacts"
+            exit 3
+        }
     if ! git diff --cached --quiet; then
         log "committing contract content before deriving CONTENT_SHA"
         git commit -m "chore: freeze roadmap contract content for ${NEW_TAG}
@@ -310,23 +350,35 @@ Reason: ${REASON}"
     log "content SHA (freeze target) = $CONTENT_SHA"
     log "new contract TAG = $NEW_TAG"
 
-    git fetch origin --tags --prune 2>/dev/null || warn "tag fetch failed (offline?)"
-    if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
-        err "tag $NEW_TAG already exists locally — refusing to clobber"
+    git fetch origin --tags --prune 2>/dev/null || {
+        err "tag fetch failed; refuse to create tags without validating against origin"
         exit 4
-    fi
-
-    log "creating annotated tag $NEW_TAG at content SHA $CONTENT_SHA (local only)"
-    git tag -a "$NEW_TAG" "$CONTENT_SHA" -m "Roadmap contract v${VERSION_LABEL}.
+    }
+    if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
+        existing_sha="$(git rev-parse "${NEW_TAG}^{}")"
+        if [ "$existing_sha" = "$CONTENT_SHA" ]; then
+            log "tag $NEW_TAG already points at CONTENT_SHA $CONTENT_SHA; treating tag phase as complete (resume)"
+        else
+            err "tag $NEW_TAG already exists at $existing_sha but CONTENT_SHA is $CONTENT_SHA"
+            err "recovery: if the freeze commit is correct, keep the tag and continue manually from pin rewrite;"
+            err "if the tag is wrong, delete only the local tag (git tag -d $NEW_TAG) and re-run — do not force-move a published origin tag without a coordinated rollback"
+            exit 4
+        fi
+    else
+        log "creating annotated tag $NEW_TAG at content SHA $CONTENT_SHA (local only)"
+        git tag -a "$NEW_TAG" "$CONTENT_SHA" -m "Roadmap contract v${VERSION_LABEL}.
 
 Frozen at commit: ${CONTENT_SHA}
 Reason: ${REASON}
 
 See docs/contracts/roadmap-v${VERSION_LABEL}.md for what this version freezes."
+    fi
 
-    log "backing up old tag $OLD_TAG -> $OLD_TAG.bak"
+    # Local-only safety pointer (never published; see header). Published rollbacks
+    # use numan-roadmap-contract/vN-deleted + dual TAG/SHA pin rewrite.
+    log "local safety pointer $OLD_TAG -> $OLD_TAG.bak (not published)"
     if git rev-parse "$OLD_TAG" >/dev/null 2>&1; then
-        git tag "$OLD_TAG.bak" "$OLD_TAG" 2>/dev/null || true
+        git tag -f "$OLD_TAG.bak" "$OLD_TAG" 2>/dev/null || true
     fi
 
     # --- 3. Separate pin-rewrite commit (not included in NEW_TAG) --------

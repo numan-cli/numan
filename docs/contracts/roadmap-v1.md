@@ -3,7 +3,7 @@
 > **Status:** Active. The cross-repo guardrail is frozen at this version.
 > **Tag:** `numan-roadmap-contract/v1`
 > **Authoritative repo:** [`tonythethompson/numan`](https://github.com/tonythethompson/numan)
-> **Frozen at commit:** *recorded by `bump-contract.sh` when v1 was minted*
+> **Frozen at commit:** see `CONTRACT_SHA` in `.github/workflows/ci.yml` (must equal the peeled `numan-roadmap-contract/v1` tag)
 
 This document is the single source of truth for what is "shipped" vs
 "aspirational" across the three Numan repos — `numan`, `numan-plugins`,
@@ -34,10 +34,14 @@ v1 fixes this by:
 1. **Naming a single authority.** `numan-roadmap-contract/v1` in
    [`tonythethompson/numan`](https://github.com/tonythethompson/numan)
    is the only document the sibling repos treat as truth.
-2. **Pinning the authority via a versioned tag.** Sibling CI workflows
-   `curl` `tonythethompson/numan@numan-roadmap-contract/v1:docs/plans/consolidated-multi-repo-roadmap.md`.
-   `git fetch` resolves the tag to a SHA at fetch time, so a force-push
-   to `master` doesn't quietly change the cross-repo guardrail.
+2. **Pinning the authority via tag + immutable SHA.** Workflows pin both
+   `CONTRACT_TAG` (human handle, e.g. `numan-roadmap-contract/v1`) and
+   `CONTRACT_SHA` (40-char freeze commit). CI first resolves the tag via the
+   GitHub API, fails closed if the resolved commit is not exactly
+   `CONTRACT_SHA`, then fetches the three frozen artifacts by
+   `CONTRACT_SHA` from `raw.githubusercontent.com` and diffs them against the
+   working tree. Artifacts are never fetched by tag alone, so a force-moved
+   tag without a pin rewrite cannot silently rewrite the guardrail.
 3. **Bumping requires a coordinated PR set.** `scripts/bump-contract.sh`
    is the only sanctioned way to move to v2. It opens one PR per repo in
    merge order (numan first, then siblings) and refuses to continue until
@@ -158,12 +162,36 @@ hold:
 
 If a bump turns out to be wrong after merge:
 
-1. Open a "contract-rollback" PR on `numan` that restores the
-   `docs/plans/consolidated-multi-repo-roadmap.md` to the v(N-1)
-   tag's content and re-tags the contract as `numan-roadmap-contract/vN-deleted`.
-2. Update the three sibling repos' workflow yml to fetch the
-   `vN-deleted` tag for one CI cycle.
+1. Open a "contract-rollback" PR on `numan` that restores the three
+   frozen artifacts (`docs/plans/consolidated-multi-repo-roadmap.md`,
+   `scripts/check-roadmap-drift.py`, `docs/contracts/roadmap-vN.md`)
+   to the pre-bump content and creates annotated tag
+   `numan-roadmap-contract/vN-deleted` at that rollback commit.
+2. In the **same** PR (and the sibling mirror PRs), rewrite **both**
+   `CONTRACT_TAG` and `CONTRACT_SHA` in every pinning workflow to
+   `numan-roadmap-contract/vN-deleted` and the rollback commit SHA.
+   Changing only the tag leaves workflows fail-closed: the resolve step
+   requires `CONTRACT_TAG` → commit to equal `CONTRACT_SHA`.
 3. Land a fresh v(N+1) bump once the rollback is stable.
+
+### Partial-bump recovery
+
+`scripts/bump-contract.sh` is not fully transactional across the three
+repos. If it stops mid-way:
+
+* **Local tag exists and points at the intended content SHA** — re-run
+  is safe for the tag phase (the script treats that as resume). Finish
+  pin rewrites / sibling materialization manually if needed.
+* **Local tag exists but points at the wrong SHA** — do not force-move
+  a tag already published on origin. Delete only the *local* tag
+  (`git tag -d …`) if it was never pushed, fix the freeze content, and
+  re-run.
+* **Numan PR open, sibling PRs missing** — re-run sibling materialization
+  (or copy `cross-repo-mirror/` artifacts) and `gh pr create` for the
+  missing repos; do not re-freeze content.
+* **Published tag wrong after merge** — use the Reverting procedure
+  above (`vN-deleted` + dual TAG/SHA pin rewrite), not an ad-hoc
+  force-move.
 
 ## What v1 does NOT promise
 
