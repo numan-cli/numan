@@ -7,9 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-05
+
 ### Added
 
 - Homebrew tap packaging restored: `brew tap tonythethompson/numan && brew install numan`, with `Publish to Homebrew tap` updating [`homebrew-numan`](https://github.com/tonythethompson/homebrew-numan) from release `SHA256SUMS` (requires `HOMEBREW_TAP_TOKEN`)
+- **Side-by-side Nu version management** via `numan use <version>|latest|list`:
+  - Switches the active managed Nushell install without re-downloading (errors with `numan setup nu <version>` hint when the requested version isn't installed yet)
+  - Writes `<root>/nu_state/active-version.json` so `numan use list` and downstream activation can resolve the selected Nu
+  - Acquires the root mutation lock and creates a PreMutation snapshot before any state change, matching `install`/`update`/`activate`/`deactivate`
+- **`numan setup nu` versioned layout**: binaries now install under `<root>/tools/nushell/<version>/nu` instead of the previous single-binary `<root>/tools/nushell/nu`. Re-installing one version no longer clobbers another. `numan doctor` reports markers whose on-tree binary is missing.
+- Journaled legacy managed-Nu migration from the single-binary layout into the versioned tree, with `numan doctor` auto-tier reconciliation
+- Strict version-path validation (`<root>/tools/nushell/<version>/...`): rejects components containing `/`, `\\`, `..`, or anything `semver` won't parse, so `numan setup nu ../../path` cannot escape `$NUMAN_ROOT`.
+- Shared confirmation utility (`src/util/confirm.rs`): consistent prompt/auto-confirm behavior across all commands
+- Snapshots capture and restore `nu_state/paths.json` when present
 
 ### Removed
 
@@ -25,16 +36,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `numan setup nu use <path>` — register a specific binary (was `--use-existing <path>`)
   - Hidden backward-compat flags (`--remove`, `--use-path`, `--use-existing`) still work but emit deprecation warnings. They will be removed in v0.3.0.
 - **Non-TTY auto-confirm**: all confirmation prompts now auto-confirm on non-TTY (CI, scripts) instead of requiring `--yes`. A `(non-interactive: auto-confirming)` notice is printed to stderr. `--yes` remains available to skip prompts on TTY.
-
-### Added
-
-- **Side-by-side Nu version management** via `numan use <version>|latest|list`:
-  - Switches the active managed Nushell install without re-downloading (errors with `numan setup nu <version>` hint when the requested version isn't installed yet)
-  - Writes `<root>/nu_state/active-version.json` so `numan use list` and downstream activation can resolve the selected Nu
-  - Acquires the root mutation lock and creates a PreMutation snapshot before any state change, matching `install`/`update`/`activate`/`deactivate`
-- **`numan setup nu` versioned layout**: binaries now install under `<root>/tools/nushell/<version>/nu` instead of the previous single-binary `<root>/tools/nushell/nu`. Re-installing one version no longer clobbers another. `numan doctor` reports markers whose on-tree binary is missing.
-- Strict version-path validation (`<root>/tools/nushell/<version>/...`): rejects components containing `/`, `\\`, `..`, or anything `semver` won't parse, so `numan setup nu ../../path` cannot escape `$NUMAN_ROOT`.
-- Shared confirmation utility (`src/util/confirm.rs`): consistent prompt/auto-confirm behavior across all commands
 
 ## [0.1.5] - 2026-07-29
 
@@ -135,7 +136,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Release binaries for Linux, Windows, and macOS
 - Real-Nu acceptance CI job
 
-[Unreleased]: https://github.com/tonythethompson/numan/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/tonythethompson/numan/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/tonythethompson/numan/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/tonythethompson/numan/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/tonythethompson/numan/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/tonythethompson/numan/compare/v0.1.2...v0.1.3
