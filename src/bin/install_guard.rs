@@ -1,7 +1,7 @@
 use std::env;
 use std::process::ExitCode;
 
-use numan_install_guard::{
+use numan_cli::util::install_channel::{
     run_cargo_install_guard, run_homebrew_install_guard, run_winget_install_guard,
 };
 

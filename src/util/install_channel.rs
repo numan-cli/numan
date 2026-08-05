@@ -1,5 +1,5 @@
-//! Detect Numan binaries installed via different package managers and gate
-//! cross-channel installs behind an interactive uninstall prompt.
+// Detect Numan binaries installed via different package managers and gate
+// cross-channel installs behind an interactive uninstall prompt.
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -47,11 +47,12 @@ pub struct DiscoveredInstall {
 
 /// Classify a binary path by install channel heuristics.
 pub fn classify_binary_path(path: &Path) -> InstallChannel {
-    let normalized = path.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+    let normalized = path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
 
-    if normalized.contains("/.cargo/bin/numan")
-        || normalized.ends_with("/.cargo/bin/numan.exe")
-    {
+    if normalized.contains("/.cargo/bin/numan") || normalized.ends_with("/.cargo/bin/numan.exe") {
         return InstallChannel::Cargo;
     }
 
@@ -110,10 +111,7 @@ pub fn discover_installations() -> Vec<DiscoveredInstall> {
 }
 
 fn push_if_numan(dir: &Path, seen: &mut HashSet<PathBuf>, out: &mut Vec<DiscoveredInstall>) {
-    let candidates = [
-        dir.join("numan"),
-        dir.join("numan.exe"),
-    ];
+    let candidates = [dir.join("numan"), dir.join("numan.exe")];
     for candidate in candidates {
         if candidate.is_file() {
             push_install(candidate, seen, out);
@@ -152,7 +150,10 @@ fn known_install_candidates() -> Vec<PathBuf> {
 
     if cfg!(windows) {
         if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            let winget_packages = PathBuf::from(local).join("Microsoft").join("WinGet").join("Packages");
+            let winget_packages = PathBuf::from(local)
+                .join("Microsoft")
+                .join("WinGet")
+                .join("Packages");
             candidates.extend(find_numan_under(&winget_packages, 4));
         }
     }
@@ -160,8 +161,14 @@ fn known_install_candidates() -> Vec<PathBuf> {
     if cfg!(target_os = "macos") {
         candidates.push(PathBuf::from("/opt/homebrew/Cellar/numan"));
         candidates.push(PathBuf::from("/usr/local/Cellar/numan"));
-        candidates.extend(find_numan_under(&PathBuf::from("/opt/homebrew/Cellar/numan"), 3));
-        candidates.extend(find_numan_under(&PathBuf::from("/usr/local/Cellar/numan"), 3));
+        candidates.extend(find_numan_under(
+            &PathBuf::from("/opt/homebrew/Cellar/numan"),
+            3,
+        ));
+        candidates.extend(find_numan_under(
+            &PathBuf::from("/usr/local/Cellar/numan"),
+            3,
+        ));
     }
 
     if cfg!(target_os = "linux") {
@@ -169,7 +176,10 @@ fn known_install_candidates() -> Vec<PathBuf> {
             let linuxbrew = home.join(".linuxbrew/Cellar/numan");
             candidates.extend(find_numan_under(&linuxbrew, 3));
         }
-        candidates.extend(find_numan_under(&PathBuf::from("/home/linuxbrew/.linuxbrew/Cellar/numan"), 3));
+        candidates.extend(find_numan_under(
+            &PathBuf::from("/home/linuxbrew/.linuxbrew/Cellar/numan"),
+            3,
+        ));
     }
 
     candidates
@@ -203,10 +213,10 @@ fn walk_for_numan(dir: &Path, depth: usize, max_depth: usize, found: &mut Vec<Pa
 }
 
 fn is_numan_binary(path: &Path) -> bool {
-    match path.file_name().and_then(OsStr::to_str) {
-        Some("numan") | Some("numan.exe") => true,
-        _ => false,
-    }
+    matches!(
+        path.file_name().and_then(OsStr::to_str),
+        Some("numan") | Some("numan.exe")
+    )
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -237,11 +247,9 @@ pub fn run_cargo_install_guard() -> ExitCode {
     let install_root = std::env::var("CARGO_INSTALL_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|_| default_cargo_install_root());
-    let target = install_root.join("bin").join(if cfg!(windows) {
-        "numan.exe"
-    } else {
-        "numan"
-    });
+    let target = install_root
+        .join("bin")
+        .join(if cfg!(windows) { "numan.exe" } else { "numan" });
 
     run_install_guard(InstallChannel::Cargo, &[target])
 }
@@ -264,6 +272,10 @@ fn default_cargo_install_root() -> PathBuf {
 }
 
 fn run_install_guard(channel: InstallChannel, exclude_paths: &[PathBuf]) -> ExitCode {
+    if should_skip_guard() {
+        return ExitCode::SUCCESS;
+    }
+
     let conflicts = conflicting_installs(channel, exclude_paths);
     if conflicts.is_empty() {
         return ExitCode::SUCCESS;
@@ -330,6 +342,14 @@ fn run_install_guard(channel: InstallChannel, exclude_paths: &[PathBuf]) -> Exit
     ExitCode::SUCCESS
 }
 
+fn should_skip_guard() -> bool {
+    std::env::var("NUMAN_SKIP_INSTALL_GUARD")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+        || std::env::var("CI").ok().as_deref() == Some("true")
+        || std::env::var("GITHUB_ACTIONS").ok().as_deref() == Some("true")
+}
+
 fn print_conflict_banner(channel: InstallChannel, conflicts: &[DiscoveredInstall]) {
     eprintln!();
     eprintln!(
@@ -390,9 +410,7 @@ mod tests {
 
     #[test]
     fn classify_winget_path() {
-        let path = Path::new(
-            "C:/Users/x/AppData/Local/Microsoft/WinGet/Packages/foo/numan.exe",
-        );
+        let path = Path::new("C:/Users/x/AppData/Local/Microsoft/WinGet/Packages/foo/numan.exe");
         assert_eq!(classify_binary_path(path), InstallChannel::Winget);
     }
 

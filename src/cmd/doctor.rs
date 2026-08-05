@@ -33,11 +33,13 @@ use crate::state::nupm_import::NupmImportsFile;
 use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::fs_safety::{acquire_mutation_lock, assert_managed_file_owned};
-use numan_install_guard::{classify_binary_path, discover_path_installations, InstallChannel};
 use crate::util::hints::{
     self, active_plugin_mutation_gated_doctor_message, registry_none_fix, setup_nu_use_existing,
     ACTIVE_PLUGIN_MUTATION_GATED_FIX, CMD_ACTIVATE, CMD_DEACTIVATE, CMD_DOCTOR_FIX, CMD_INIT,
     CMD_INIT_REFRESH, CMD_REGISTRY_SYNC, CMD_SETUP_NU, CMD_USE,
+};
+use crate::util::install_channel::{
+    classify_binary_path, discover_path_installations, InstallChannel,
 };
 use crate::util::stdio_redirect::StdoutToStderr;
 
@@ -343,9 +345,8 @@ fn check_install_channels(findings: &mut Vec<Finding>) {
         .map(|path| classify_binary_path(path))
         .unwrap_or(InstallChannel::Unknown);
 
-    let mut lines = vec![
-        "Multiple numan installs from different package managers were detected:".to_string(),
-    ];
+    let mut lines =
+        vec!["Multiple numan installs from different package managers were detected:".to_string()];
     for install in &installs {
         lines.push(format!(
             "  {} ({})",
@@ -373,7 +374,11 @@ fn check_install_channels(findings: &mut Vec<Finding>) {
         "install.multiple_channels",
         Severity::Warn,
         lines.join("\n"),
-        if fix.is_empty() { None } else { Some(fix.as_str()) },
+        if fix.is_empty() {
+            None
+        } else {
+            Some(fix.as_str())
+        },
         RepairTier::Manual,
     ));
 }

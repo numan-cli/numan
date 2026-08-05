@@ -34,8 +34,8 @@ CI runs `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check`, and a 
 
 ## Project Structure
 ```
-build.rs               — cargo-install guard (cross-channel install detection via install-guard)
-install-guard/         — shared install-channel detection + interactive uninstall prompt
+build.rs                 — cargo-install guard (cross-channel install detection)
+src/util/install_channel.rs — install-channel detection + interactive uninstall prompt
 src/
   main.rs              — CLI entry point (clap-based)
   config.rs            — Config load/save, root resolution
