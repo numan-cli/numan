@@ -71,8 +71,10 @@ Then:
 
 - Package name: **`numan-cli`** (install with `cargo install numan-cli`).
 - Binary name: **`numan`**.
-- Set `CRATES_IO_TOKEN` in GitHub repository secrets before the first publish.
-- Dry-run locally: `cargo publish --dry-run`.
+- Publishes via **Trusted Publishing** (OIDC) from `.github/workflows/release.yml`. Configure the trusted publisher on crates.io for repository `tonythethompson/numan`, workflow `release.yml`, no environment.
+- Do **not** put `CRATES_IO_TOKEN` / crates API tokens on `homebrew-numan`; that tap only needs `HOMEBREW_TAP_TOKEN`.
+- To retry crate publish for an already-cut tag: Actions → Release → Run workflow → set tag + enable **crates_only**.
+- Dry-run locally: `cargo publish --dry-run` (still requires a normal token or owner account; CI uses Trusted Publishing).
 
 ## Install paths users should see
 
