@@ -419,17 +419,19 @@ PR reviewers should follow [`REVIEW.md`](REVIEW.md).
 
 ## Roadmap
 
-**Releases:** see the [latest GitHub Release](https://github.com/tonythethompson/numan/releases/latest) — feature-complete core on **0.1.x** while dogfooding the official registry.
+**Releases:** see the [latest GitHub Release](https://github.com/tonythethompson/numan/releases/latest) — feature-complete core on **0.1.x** while dogfooding the official registry (~36 packages; [catalog × Nu matrix](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md)).
 
-For the cross-repository plan snapshot (as of 2026-07-29) across `numan`,
-`numan-registry`, and `numan-plugins`, see
-[docs/plans/2026-07-29-remaining-roadmap.md](docs/plans/2026-07-29-remaining-roadmap.md).
+For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
+`numan-plugins`, see
+[docs/plans/consolidated-multi-repo-roadmap.md](docs/plans/consolidated-multi-repo-roadmap.md)
+(contract-pinned). The 2026-07-29 snapshot is
+[superseded](docs/plans/2026-07-29-remaining-roadmap.md).
 
 | Phase | Scope | Status |
 |-------|--------|--------|
 | **1–2** | Types, platform, lockfile, signed registry, install transaction | ✅ |
 | **3–4** | Plugin + module activation, journals, managed autoloads | ✅ |
-| **5** | `update` / `remove` / `gc`, lockfile v2, [snapshots + rollback](docs/snapshots-and-rollback.md) | ✅ (source builds deferred) |
+| **5** | `update` / `remove` / `gc`, lockfile v2, [snapshots + rollback](docs/snapshots-and-rollback.md) | ✅ (source builds deferred; active-plugin update opt-in) |
 | **6** | [nupm](docs/nupm-compatibility.md) status, inspect, import, drift | ✅ |
 | **7** | Doctor, completions, onboarding, CI hardening, [winget packaging](docs/PACKAGING.md) | ✅ — [plan](docs/plans/Phase7Plan.md) |
 | **Post-7.6** | Production [official registry](https://tonythethompson.github.io/numan-registry/) cutover; `numan init` and `numan doctor` auto-configure `official` | ✅ (v0.1.4) |
@@ -439,18 +441,19 @@ For the cross-repository plan snapshot (as of 2026-07-29) across `numan`,
 | Item | Tracking |
 |------|----------|
 | Community **winget** install (`winget install tonythethompson.numan`) | ✅ [winget-pkgs PR #400470](https://github.com/microsoft/winget-pkgs/pull/400470); updates automated |
-| Curated **official registry** packages + trust/bootstrap policy | 🔄 [#18](https://github.com/tonythethompson/numan/issues/18), [intake roadmap](docs/registry-intake-roadmap.md) stage 1 |
-| Cross-platform **fresh-install** dogfooding | 🔄 `init` → `registry sync` → `search` → `install` → `activate` → `doctor` on Linux, macOS, Windows |
+| Curated **official registry** depth + multi-OS first-use demos | 🔄 [#18](https://github.com/tonythethompson/numan/issues/18), [catalog-compat](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md), [intake roadmap](docs/registry-intake-roadmap.md) |
+| Cross-platform **fresh-install** dogfooding + lifecycle evidence | 🔄 `init` → `registry sync` → `search` → `install` → `activate` → `doctor` on Linux, macOS, Windows |
+| Ship Unreleased client cut (**0.2.0**: `setup nu` redesign + `numan use`) | 🔄 [CHANGELOG](CHANGELOG.md) Unreleased |
 
-**1.0** when the rows above are done and there are no open P0/P1 issues on the core install/activate/update/remove lifecycle.
+**1.0** when the [unified gate](docs/plans/consolidated-multi-repo-roadmap.md#unified-10-gate) is green and there are no open P0/P1 issues on the core install/activate/update/remove lifecycle.
 
 ### Later
 
 | Item | Tracking |
 |------|----------|
 | Source builds (clone/build with consent) | [#20](https://github.com/tonythethompson/numan/issues/20) / Phase 5.2 |
-| Plugin lifecycle gate before mutation | [#22](https://github.com/tonythethompson/numan/issues/22) / Phase 5.5 |
-| Registry intake automation (lint, discovery, validation reports) | [docs/registry-intake-roadmap.md](docs/registry-intake-roadmap.md) stages 2–4 |
+| Active-plugin **update** default-on (today: exact `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` opt-in) | [#22](https://github.com/tonythethompson/numan/issues/22) / [active-plugin-gate.md](docs/active-plugin-gate.md) |
+| Completions/scripts activation contracts | [docs/registry-intake-roadmap.md](docs/registry-intake-roadmap.md) |
 | Scoop manifest | Deferred (low demand) |
 
 <details>
@@ -479,3 +482,5 @@ MIT — see [LICENSE](LICENSE).
 
 - [Nushell](https://www.nushell.sh/) — the shell Numan packages for
 - [nupm](https://github.com/nushell/nupm) — Nushell’s built-in package manager; Numan interoperates via import and drift detection
+- [numan-registry](https://github.com/tonythethompson/numan-registry) — signed official catalog ([catalog × Nu matrix](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md))
+- [numan-plugins](https://github.com/tonythethompson/numan-plugins) — CI-built plugin binaries for source-only upstreams ([backlog](https://github.com/tonythethompson/numan-plugins/blob/main/docs/backlog.json))

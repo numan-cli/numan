@@ -2,7 +2,15 @@
 
 ## Context
 
-Numan's official registry has **25 packages** but only **3** work on Nu 0.114.x (the current stable): `nu_plugin_skim`, `nu_plugin_desktop_notifications`, `nu_plugin_prometheus`. Catalog depth is the #1 adoption bottleneck. This task grows the 0.114-compatible set by 2–3 plugins through the full pipeline.
+> **Status (2026-08-05):** Wave 1 and Wave 2 Nu 0.114 intakes are in production.
+> The official registry has **~36** packages; about **18** latest versions target
+> Nu **0.114.x** (see
+> [`catalog-compat.md`](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md)).
+> Use this handoff as the **pipeline playbook** for the next 1–2 promotions, not
+> as live catalog counts.
+
+Catalog depth remains the #1 adoption bottleneck toward 1.0. Grow the
+0.114-compatible set through the full pipeline below.
 
 ## Repos (all local)
 
@@ -20,7 +28,8 @@ Research → Promote to manifest → Build dispatch → Spec download → Regist
 
 ## Step 1: Find Candidates
 
-**Source of truth:** `d:\Dev\numan-plugins\docs\backlog.json` (45 entries, demand-ranked).
+**Source of truth for candidates:** `numan-plugins/docs/backlog.json` (~69 entries, demand-ranked).
+**Source of truth for the live catalog:** `numan-registry/registry/index.json` (human overview: `docs/catalog-compat.md`).
 
 **Eligibility filter:**
 - `nu-plugin` / `nu-protocol` dependency **>= 0.114.0** on a tagged release
@@ -30,7 +39,7 @@ Research → Promote to manifest → Build dispatch → Spec download → Regist
 
 **Already researched and blocked (skip these):**
 - `PRE_0_112`: clipboard (0.110), dbus (0.101), audio_hook (0.110), vec (0.105), from_beancount (0.76), nuts (0.110)
-- `PROMOTED`: skim, highlight, desktop_notifications, image, port_extension, prometheus
+- `PROMOTED`: skim, highlight, desktop_notifications, image, port_extension, prometheus, and Wave 2 names in `backlog.json` / `manifest.json` `active[]`
 - `nu_plugin_bigquery`: nu-plugin 0.112.2 (eligible minor) but needs Google creds for lifecycle proof — skip unless you can prove without credentials
 
 **What to do:**
