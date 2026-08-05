@@ -157,7 +157,7 @@ Lifecycle-prove runs: `init → registry sync → search → info → install �
 
 - Update `backlog.json`: set `blocker: "PROMOTED"`, add `c1_note` with date and details
 - Update `docs/intake-state.json` in numan-registry
-- Update `d:\Dev\numan\docs\plans\consolidated-multi-repo-roadmap.md` Wave 2 research queue checkboxes
+- Update plugins `docs/roadmap.md` / backlog for PROMOTED. Do **not** edit `docs/plans/consolidated-multi-repo-roadmap.md` casually (CI `roadmap-drift` contract pin); coordinate a contract bump if needed.
 
 ## Constraints & Gotchas
 
@@ -180,7 +180,7 @@ Wave 1 (5) and wave 2 (5) completed through production. Prove ran on **Linux** x
 - [x] Production dispatched and live
 - [x] Lifecycle-prove passes on Linux x86_64 / Nu 0.114.1 for each plugin (Windows optional follow-up)
 - [x] `numan search` on Nu 0.114.1 shows the new plugins as compatible
-- [x] Backlog + roadmap docs updated (numan-plugins bookkeeping PR; this file)
+- [x] Backlog + plugins roadmap updated ([numan-plugins#42](https://github.com/tonythethompson/numan-plugins/pull/42)); handoff criteria in this PR. Consolidated multi-repo roadmap is contract-pinned (bump separately).
 
 
 ## Time Estimate
