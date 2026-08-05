@@ -222,6 +222,20 @@ jobs:
           path: winget-marker/
           retention-days: 3
 
+      # Stable producer/consumer contract for homebrew.yml (do not rename this artifact).
+      - name: Emit Homebrew release marker
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          mkdir -p homebrew-marker
+          printf '%s\n' "$RELEASE_TAG" > homebrew-marker/release-tag.txt
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: homebrew-release-ready
+          path: homebrew-marker/
+          retention-days: 3
+
   publish-crate:
     name: Publish to crates.io
     needs: [preflight, release]

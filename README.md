@@ -115,6 +115,15 @@ cargo install --git https://github.com/tonythethompson/numan
 
 Tracks the default branch. For a reproducible install, choose a published tag from [GitHub Releases](https://github.com/tonythethompson/numan/releases) and pass `--tag vX.Y.Z`.
 
+### Homebrew (macOS / Linux)
+
+```bash
+brew tap tonythethompson/numan
+brew install numan
+```
+
+Uses the public [`homebrew-numan`](https://github.com/tonythethompson/homebrew-numan) tap. Formula digests update automatically after each GitHub Release (see [docs/PACKAGING.md](docs/PACKAGING.md)).
+
 ### winget (Windows)
 
 ```powershell
@@ -440,7 +449,6 @@ For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 
 | Item | Tracking |
 |------|----------|
-| Community **winget** install (`winget install tonythethompson.numan`) | ✅ [winget-pkgs PR #400470](https://github.com/microsoft/winget-pkgs/pull/400470); updates automated |
 | Curated **official registry** depth + multi-OS first-use demos | 🔄 [#18](https://github.com/tonythethompson/numan/issues/18), [catalog-compat](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md), [intake roadmap](docs/registry-intake-roadmap.md) |
 | Cross-platform **fresh-install** dogfooding + lifecycle evidence | 🔄 `init` → `registry sync` → `search` → `install` → `activate` → `doctor` on Linux, macOS, Windows |
 | Ship Unreleased client cut (**0.2.0**: `setup nu` redesign + `numan use`) | 🔄 [CHANGELOG](CHANGELOG.md) Unreleased |
