@@ -47,12 +47,12 @@ Release archives extract to `numan-<version>-<target>/` containing the `numan`
 
 ## Installation coverage
 
-| Installation channel | Linux x86_64 | macOS Apple Silicon | macOS Intel | Windows x86_64 | Windows ARM64 |
-|-----------------------|---------------|---------------------|-------------|----------------|---------------|
-| GitHub release archive | yes | yes | yes | yes | no |
-| `cargo install numan-cli` | source build | source build | source build | source build | not validated |
-| Homebrew tap | yes | yes | yes | — | — |
-| winget | — | — | — | yes | — |
+| Installation channel | Linux x86_64 | macOS Apple Silicon | Windows x86_64 | Windows ARM64 |
+|-----------------------|---------------|---------------------|----------------|---------------|
+| GitHub release archive | yes | yes | yes | no |
+| `cargo install numan-cli` | source build | source build | source build | not validated |
+| Homebrew tap | yes | yes | — | — |
+| winget | — | — | yes | — |
 
 ## Secrets
 

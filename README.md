@@ -1,13 +1,14 @@
-# Numan
+# numan
 
 [![CI](https://github.com/tonythethompson/numan/actions/workflows/ci.yml/badge.svg)](https://github.com/tonythethompson/numan/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-<img alt="Crates.io Version" src="https://img.shields.io/crates/v/numan-cli"> 
+<a href="https://github.com/tonythethompson/homebrew-numan"><img alt="Homebrew Package Version" src="https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Ftonythethompson%2Fhomebrew-numan%2Fmaster%2FFormula%2Fnuman.rb&search=version%20%22(%5B%5E%22%5D%2B)%22&replace=%241&label=homebrew&logo=homebrew&color=fbb040"></a>
 ![WinGet Package Version](https://img.shields.io/winget/v/tonythethompson.numan)
+<img alt="Crates.io Version" src="https://img.shields.io/crates/v/numan-cli"> 
 <img alt="Crates.io Version" src="https://img.shields.io/crates/d/numan-cli"> 
-[![Homebrew](https://img.shields.io/homebrew/v/numan?logo=homebrew&label=homebrew)](https://github.com/tonythethompson/homebrew-numan)
 
-**Numan** is a cross-platform package manager for [Nushell](https://www.nushell.sh/). It installs registry plugins, modules, scripts, and completion payloads from signed registries, pins immutable artifacts in a lockfile, and activates plugins and modules with Nu only when you ask — keeping installs inert until you run `numan activate`.
+**numan** is a cross-platform package manager for [Nushell](https://www.nushell.sh/). It installs plugins, modules, scripts, and completion packages from signed registries, verifies downloaded artifacts, and records immutable install state in a lockfile.
+Packages remain inert after installation. Plugins and modules are only registered with Nushell when you explicitly run `numan activate`.
 
 Built in Rust for Linux, macOS, and Windows.
 
@@ -15,36 +16,42 @@ Built in Rust for Linux, macOS, and Windows.
 
 ## About
 
-Nushell’s ecosystem has grown around community packages, but managing them across machines, Nu versions, and platforms is still painful. **nupm** covers local installs well; registry-based workflows need verified artifacts, reproducible lockfiles, and safe activation that survives Nu upgrades.
+Nushell has a growing ecosystem of community packages, but managing them across machines, Nu versions, and operating systems remains difficult.
 
-Numan fills that gap:
+nupm handles local package installation well. Registry-based workflows also need artifact verification, reproducible lockfiles, platform-aware resolution, and activation that remains safe across Nushell upgrades.
 
-| Concern | How Numan handles it |
+numan provides those guarantees:
+
+| Concern | How numan handles it |
 |--------|----------------------|
-| **Trust** | Ed25519 signatures over registry indexes; built-in production trust root for `official`; SHA256 verification of plugin binaries |
+| **Trust** | Verifies registry indexes with Ed25519 signatures, includes a built-in trust root for the `official` registry, and validates plugin binaries with SHA-256 |
 | **Reproducibility** | Lockfile v2 pins version, payload hash, and install origin |
-| **Platform safety** | Artifacts resolved for the compile-time OS/arch/libc triple |
-| **Nu version matching** | Resolver respects per-package Nu constraints |
-| **Activation isolation** | `install` never touches Nu; only `activate` registers plugins or writes autoloads |
-| **Crash recovery** | Journals for activation, autoload, lifecycle, and nupm import operations |
-| **nupm coexistence** | Read-only discovery, one-way import, and drift detection for existing nupm installs |
+| **Platform safety** | Resolves artifacts for the current compile-time OS, architecture, and libc target |
+| **Nu compatibility** | Respects the Nushell version constraints declared by each package |
+| **Activation isolation** | `install` never modifies Nushell state. Only `activate` registers plugins or writes managed autoload files |
+| **Crash recovery** | Uses journals to recover interrupted activation, autoload, lifecycle, and nupm import operations |
+| **nupm coexistence** | Provides read-only discovery, one-way import, and drift detection for existing nupm installations |
 
-Numan is **early-stage**. Core install, activate, update, remove, gc, registry, doctor, snapshots, nupm interoperability, and shell completions are implemented and covered by unit and hermetic integration tests, plus real-Nu acceptance on Linux, macOS, and Windows in CI. Pre-built release binaries are published via GitHub Releases.
+numan is **early-stage**. The core install, activate, update, remove, garbage collection, registry, doctor, snapshot, nupm interoperability, and shell completion workflows are implemented.
+
+These workflows are covered by unit tests, hermetic integration tests, and real-Nushell acceptance tests on Linux, macOS, and Windows in CI. Prebuilt binaries are published through GitHub Releases.
 
 ---
 
 ## Features
 
-- **Registry-backed installs** — search, inspect versions, and install `owner/name` or `owner/name@version`
-- **Official registry** — production trust root built in; `numan init` configures `official` automatically; `numan registry sync` verifies signed indexes
-- **Package types** — plugins and modules support activation; scripts and completion packages are install-only while their activation contracts are deferred
-- **Verified artifacts** — mandatory SHA256 for plugin binaries; signed registry indexes
-- **Scoped activation** — plugins active only when Nu executable hash, Nu version, and plugin registry path match
-- **Module autoloads** — managed vendor autoload files with ownership markers and candidate validation
-- **Lifecycle management** — `update`, `remove`, and `gc` with pending-lifecycle journal recovery
-- **nupm interoperability** — `numan nupm status|inspect|import|diff` for migration from [nupm](https://github.com/nushell/nupm)
-- **Health checks** — `numan doctor` diagnoses root health and applies safe repairs by default; `--scan` reports only
-- **Shell completions** — bash, fish, zsh, PowerShell, and Nushell via `numan completions`
+- **Registry-backed installs**: Search packages, inspect available versions, and install `owner/name` or `owner/name@version`.
+- **Official registry**: `numan init` configures the `official` registry automatically. Its production trust root is built into numan, and `numan registry sync` verifies every signed index.
+- **Registry-backed installs**: Search packages, inspect available versions, and install `owner/name` or `owner/name@version`.
+- **Official registry**: `numan init` configures the `official` registry automatically. Its production trust root is built into numan, and `numan registry sync` verifies every signed index.
+- **Package types**: Plugins and modules support activation. Scripts and completion packages are currently install-only while their activation contracts are finalized.
+- **Verified artifacts**: Plugin binaries require SHA-256 hashes, and registry indexes require valid Ed25519 signatures.
+- **Scoped activation**: Plugins remain active only while the Nushell executable hash, Nushell version, and plugin registry path match the recorded activation state.
+- **Module autoloads**: numan writes managed vendor autoload files with ownership markers and validates candidate files before promotion.
+- **Lifecycle management**: Update, remove, and garbage collection operations recover safely through lifecycle journals.
+- **nupm interoperability**: Use `numan nupm status`, `inspect`, `import`, and `diff` to inspect, migrate, and detect drift in existing [nupm](https://github.com/nushell/nupm) installations.
+- **Health checks**: `numan doctor` diagnoses installation health and applies safe repairs by default. Use `--scan` for report-only mode.
+- **Shell completions**: Generate completions for Bash, Fish, Zsh, PowerShell, and Nushell with `numan completions`.
 
 ---
 
@@ -53,13 +60,13 @@ Numan is **early-stage**. Core install, activate, update, remove, gc, registry, 
 | Registry package type | Install, verify, and lock | `numan activate` | Support tier |
 |-----------------------|----------------------------|------------------|--------------|
 | Plugin | Yes | Yes, through Nu's plugin registry | Supported |
-| Module | Yes | Yes, through a Numan-managed vendor autoload file | Supported |
+| Module | Yes | Yes, through a numan-managed vendor autoload file | Supported |
 | Script | Yes | No | Install-only; activation is deferred |
 | Completion package | Yes | No | Install-only; activation is deferred |
 
-Install-only packages remain inert: Numan downloads, verifies, locks, lists,
+Install-only packages remain inert: numan downloads, verifies, locks, lists,
 removes, and garbage-collects their payloads, but does not execute them or
-modify Nu configuration for them. This is separate from Numan's own shell
+modify Nu configuration for them. This is separate from numan's own shell
 completion generator: `numan completions <shell>` is supported for bash, fish,
 zsh, PowerShell, and Nushell (`nu`).
 
@@ -88,19 +95,18 @@ Download the latest archive for your platform from [GitHub Releases](https://git
 | Linux (x86_64) | `numan-<version>-x86_64-unknown-linux-gnu.tar.gz` | `numan` |
 | Windows (x86_64) | `numan-<version>-x86_64-pc-windows-msvc.zip` | `numan.exe` |
 | macOS (Apple Silicon) | `numan-<version>-aarch64-apple-darwin.tar.gz` | `numan` |
-| macOS (Intel) | `numan-<version>-x86_64-apple-darwin.tar.gz` | `numan` |
 
 **Linux / macOS**
 
 ```bash
-tar -xzf numan-<version>-<target>.tar.gz
-install -m 755 numan-<version>-<target>/numan ~/.local/bin/numan
+tar -xzf numan-VERSION-TARGET.tar.gz
+install -m 755 numan-VERSION-TARGET/numan ~/.local/bin/numan
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-Expand-Archive numan-<version>-x86_64-pc-windows-msvc.zip -DestinationPath .
+Expand-Archive numan-VERSION-x86_64-pc-windows-msvc.zip -DestinationPath .
 # Add the extracted folder to your PATH, or copy numan.exe into a directory already on PATH
 ```
 
@@ -176,13 +182,31 @@ Add-Content -Path $PROFILE -Value '. $HOME\.numan\completions.ps1'
 
 ## Quick start
 
-Copy-paste path from install through first activation:
+Install with **one** of the options below, then run the activation path.
+
+**Homebrew (macOS / Linux)**
 
 ```bash
-# Install (pick one)
-cargo install numan-cli
-# or: download a release archive from GitHub Releases and add numan to PATH
+brew tap tonythethompson/numan && brew install numan
+```
 
+**winget (Windows)**
+
+```powershell
+winget install tonythethompson.numan
+```
+
+**crates.io (any platform with Rust)**
+
+```bash
+cargo install numan-cli
+```
+
+Or download a release archive from [GitHub Releases](https://github.com/tonythethompson/numan/releases) and add `numan` to `PATH`.
+
+Then:
+
+```bash
 numan init
 numan registry sync
 numan try                 # install + activate a starter that fits your Nu (e.g., skim for Nu 0.114)
@@ -192,13 +216,13 @@ numan doctor
 Or pick a package yourself (`numan search` hides incompatible hits by default; use `--all` to see them):
 
 ```bash
-numan search nutest
-numan info vyadh/nutest
-numan install vyadh/nutest
-numan activate vyadh/nutest
+numan search your-query
+numan info owner/package-name
+numan install owner/package-name
+numan activate owner/package-name
 ```
 
-Install is **inert** — nothing is registered with Nu until you run `numan activate` (or `numan try`, which activates after install). If a package needs a different Nu minor, Numan explains the mismatch and can offer `numan setup nu <x.y.z>` (activations are per-Nu; re-activate after switching). When no compatible starter exists, `numan try` suggests installing a matching managed Nu version or searching for another package with `numan search`.
+Install is **inert** — nothing is registered with Nu until you run `numan activate` (or `numan try`, which activates after install). If a package needs a different Nu minor, numan explains the mismatch and can offer `numan setup nu <x.y.z>` (activations are per-Nu; re-activate after switching). When no compatible starter exists, `numan try` suggests installing a matching managed Nu version or searching for another package with `numan search`.
 
 After Nu upgrades, refresh cached paths and activation identity:
 
@@ -212,7 +236,7 @@ Optional: install shell completions (`numan completions bash`, etc.) — see [In
 
 #### 1. Initialize
 
-Probe your local Nu installation and create Numan state under the default root (or `--root`):
+Probe your local Nu installation and create numan state under the default root (or `--root`):
 
 ```bash
 numan init
@@ -264,12 +288,12 @@ numan gc --dry-run                # preview orphaned payload dirs
 numan gc                          # delete unreferenced payloads
 ```
 
-Numan snapshots activation state before `update`, `remove`, `activate`, and `deactivate`, so a bad change can be undone:
+numan snapshots activation state before `update`, `remove`, `activate`, and `deactivate`, so a bad change can be undone:
 
 ```bash
 numan snapshot list
-numan snapshot inspect <id>       # affected packages, digests, payload check
-numan snapshot rollback <id>      # restore exactly that state
+numan snapshot inspect SNAPSHOT-ID       # affected packages, digests, payload check
+numan snapshot rollback SNAPSHOT-ID      # restore exactly that state
 ```
 
 See [docs/snapshots-and-rollback.md](docs/snapshots-and-rollback.md) for scope, retention, and safety guarantees.
@@ -285,7 +309,7 @@ numan doctor --scan               # report-only diagnosis
 
 ## Data layout
 
-By default, Numan stores state under a platform-specific root (override with `NUMAN_ROOT` or `--root`):
+By default, numan stores state under a platform-specific root (override with `NUMAN_ROOT` or `--root`):
 
 | Platform | Default root |
 |----------|--------------|
@@ -311,7 +335,7 @@ Payload paths are immutable: `packages/<type>/<owner>/<name>/<version>-<hash>/`.
 
 ## Command reference
 
-Global flag: `--root <path>` — override the Numan root directory (all commands).
+Global flag: `--root <path>` — override the numan root directory (all commands).
 
 | Command | Description |
 |---------|-------------|
@@ -331,7 +355,7 @@ Global flag: `--root <path>` — override the Numan root directory (all commands
 | `numan snapshot delete <id> [--yes]` | Delete a snapshot |
 | `numan snapshot rollback <id> [--yes]` | Restore exactly a stored snapshot |
 | `numan registry list\|sync\|add\|remove\|packages` | Registry management |
-| `numan setup nu [VERSION]` | Download and install official Nushell under Numan root (optionally pinned) |
+| `numan setup nu [VERSION]` | Download and install official Nushell under numan root (optionally pinned) |
 | `numan setup nu remove` | Remove the managed Nushell install and fall back to PATH Nu |
 | `numan setup nu path` | Use the Nushell already on PATH (removes managed install) |
 | `numan setup nu use <path>` | Register a specific existing Nushell binary |
@@ -340,7 +364,7 @@ Global flag: `--root <path>` — override the Numan root directory (all commands
 | `numan use list` | List installed managed Nu versions and mark the active one |
 | `numan nupm status` | Summarize nupm home and import eligibility |
 | `numan nupm inspect [--all] [path]` | Classify nupm packages at a path |
-| `numan nupm import [--as owner/name] [path]` | One-way import into Numan |
+| `numan nupm import [--as owner/name] [path]` | One-way import into numan |
 | `numan nupm import --manifest file.toml` | Batch import from manifest |
 | `numan nupm diff <owner/name>` | Compare imported payload vs nupm source |
 | `numan completions <shell>` | Generate bash, fish, zsh, powershell, or nushell completions |
@@ -369,7 +393,7 @@ Run `numan <command> --help` for full flag documentation.
 
 ## nupm migration
 
-Numan can discover and import compatible packages from an existing [nupm](https://github.com/nushell/nupm) installation without modifying nupm state.
+numan can discover and import compatible packages from an existing [nupm](https://github.com/nushell/nupm) installation without modifying nupm state.
 
 ```bash
 # Point at nupm home (or rely on $NUPM_HOME)
@@ -383,7 +407,7 @@ numan nupm import /path/to/package --as myorg/my-module --yes
 numan nupm diff myorg/my-module
 ```
 
-**Compatibility matrix:** which nupm package shapes Numan can import is defined in [docs/nupm-compatibility.md](docs/nupm-compatibility.md) (compat-schema-v1). Run `numan nupm inspect` to classify packages before import.
+**Compatibility matrix:** which nupm package shapes numan can import is defined in [docs/nupm-compatibility.md](docs/nupm-compatibility.md) (compat-schema-v1). Run `numan nupm inspect` to classify packages before import.
 
 ---
 
@@ -487,7 +511,7 @@ MIT — see [LICENSE](LICENSE).
 
 ## Related projects
 
-- [Nushell](https://www.nushell.sh/) — the shell Numan packages for
-- [nupm](https://github.com/nushell/nupm) — Nushell’s built-in package manager; Numan interoperates via import and drift detection
+- [Nushell](https://www.nushell.sh/) — the shell numan packages for
+- [nupm](https://github.com/nushell/nupm) — Nushell’s built-in package manager; numan interoperates via import and drift detection
 - [numan-registry](https://github.com/tonythethompson/numan-registry) — signed official catalog ([catalog × Nu matrix](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md))
 - [numan-plugins](https://github.com/tonythethompson/numan-plugins) — CI-built plugin binaries for source-only upstreams ([backlog](https://github.com/tonythethompson/numan-plugins/blob/main/docs/backlog.json))

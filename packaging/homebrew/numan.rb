@@ -23,8 +23,7 @@ class Numan < Formula
       sha256 "4d8fa065b5bc7fcce30af3ca7d5c3cd943701bee168d78fae6120a12689738b8"
     end
     on_intel do
-      url "https://github.com/tonythethompson/numan/releases/download/v#{version}/numan-#{version}-x86_64-apple-darwin.tar.gz"
-      sha256 "1ec90c0036db2ad9fadf2e629f482b5b8b1df48dbe6bfb0befef2ba8b5e9fbf5"
+      odie "Numan no longer ships Intel Mac (x86_64) binaries. Use Apple Silicon, or `cargo install numan-cli`."
     end
   end
 
