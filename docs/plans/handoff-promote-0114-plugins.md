@@ -2,7 +2,28 @@
 
 ## Context
 
-Numan's official registry has **25 packages** but only **3** work on Nu 0.114.x (the current stable): `nu_plugin_skim`, `nu_plugin_desktop_notifications`, `nu_plugin_prometheus`. Catalog depth is the #1 adoption bottleneck. This task grows the 0.114-compatible set by 2–3 plugins through the full pipeline.
+> **As of 2026-08-05 (immutable snapshot):** Wave 1 and Wave 2 Nu 0.114 intakes
+> reached production. Evidence: Wave 1 intake
+> ([numan-registry#43](https://github.com/tonythethompson/numan-registry/pull/43)),
+> Wave 2 intake
+> ([numan-registry#45](https://github.com/tonythethompson/numan-registry/pull/45)),
+> production dispatch
+> ([run 30996546918](https://github.com/tonythethompson/numan-registry/actions/runs/30996546918)),
+> Windows lifecycle-prove
+> ([numan-registry#47](https://github.com/tonythethompson/numan-registry/pull/47),
+> [run 30998507400](https://github.com/tonythethompson/numan-registry/actions/runs/30998507400)),
+> plugins docs/roadmap refresh
+> ([numan-plugins#51](https://github.com/tonythethompson/numan-plugins/pull/51)).
+> Do not treat package counts here as current; see live catalog below.
+
+**Live catalog × Nu overview:**
+[`catalog-compat.md`](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md)
+(regenerate from `registry/index.json` on the registry repo).
+
+This handoff is the **pipeline playbook** for the next 1–2 promotions.
+
+Catalog depth remains the #1 adoption bottleneck toward 1.0. Grow the
+0.114-compatible set through the full pipeline below.
 
 ## Repos (all local)
 
@@ -20,7 +41,9 @@ Research → Promote to manifest → Build dispatch → Spec download → Regist
 
 ## Step 1: Find Candidates
 
-**Source of truth:** `d:\Dev\numan-plugins\docs\backlog.json` (45 entries, demand-ranked).
+**Source of truth for candidates:** [`numan-plugins/docs/backlog.json`](https://github.com/tonythethompson/numan-plugins/blob/main/docs/backlog.json) (demand-ranked; entry count lives in that file).
+**Live catalog (what `numan registry sync` / `install` fetch):** [`https://tonythethompson.github.io/numan-registry/index.json`](https://tonythethompson.github.io/numan-registry/index.json).
+**Repository source for that catalog:** `numan-registry/registry/index.json` (human overview: [`docs/catalog-compat.md`](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md)).
 
 **Eligibility filter:**
 - `nu-plugin` / `nu-protocol` dependency **>= 0.114.0** on a tagged release
@@ -30,7 +53,7 @@ Research → Promote to manifest → Build dispatch → Spec download → Regist
 
 **Already researched and blocked (skip these):**
 - `PRE_0_112`: clipboard (0.110), dbus (0.101), audio_hook (0.110), vec (0.105), from_beancount (0.76), nuts (0.110)
-- `PROMOTED`: skim, highlight, desktop_notifications, image, port_extension, prometheus
+- `PROMOTED` (skip; already shipped): skim, highlight, desktop_notifications, image, port_extension, prometheus; Wave 1 Nu 0.114 (`highlight`, `port_extension`, `regex`, `file`, `hcl`); Wave 2 Nu 0.114 (`ulid`, `jwalk`, `strutils`, `query_git`, `nutext`). Use this fixed name list for this revision (do not re-derive Wave membership by intersecting or unioning `backlog.json` with `manifest.json` `active[]`).
 - `nu_plugin_bigquery`: nu-plugin 0.112.2 (eligible minor) but needs Google creds for lifecycle proof — skip unless you can prove without credentials
 
 **What to do:**
