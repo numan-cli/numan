@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/tonythethompson/numan/actions/workflows/ci.yml/badge.svg)](https://github.com/tonythethompson/numan/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-<img alt="Homebrew Package Version" src="https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Ftonythethompson%2Fhomebrew-numan%2Fmaster%2FFormula%2Fnuman.rb&search=version%20%22(%5B%5E%22%5D%2B)%22&replace=%241&label=homebrew&logo=homebrew&color=fbb040">
+<a href="https://github.com/tonythethompson/homebrew-numan"><img alt="Homebrew Package Version" src="https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Ftonythethompson%2Fhomebrew-numan%2Fmaster%2FFormula%2Fnuman.rb&search=version%20%22(%5B%5E%22%5D%2B)%22&replace=%241&label=homebrew&logo=homebrew&color=fbb040"></a>
 ![WinGet Package Version](https://img.shields.io/winget/v/tonythethompson.numan)
 <img alt="Crates.io Version" src="https://img.shields.io/crates/v/numan-cli"> 
 <img alt="Crates.io Version" src="https://img.shields.io/crates/d/numan-cli"> 
