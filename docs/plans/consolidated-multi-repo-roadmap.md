@@ -129,6 +129,16 @@ Move a candidate from `docs/backlog.json` → `manifest.json` `active[]` only wh
 - [ ] No existing `numan-plugins` release tag/assets for that package version
 - [ ] README active list and backlog notes updated in the same PR
 
+### Wave 2 Nu 0.114 CI-built promotion (2026-08-05)
+
+- [x] `fdncred/nu_plugin_jwalk@0.26.0` — [numan-plugins#40](https://github.com/tonythethompson/numan-plugins/pull/40), [numan-registry#45](https://github.com/tonythethompson/numan-registry/pull/45); lifecycle-prove OK Linux/Nu 0.114.1
+- [x] `fdncred/nu_plugin_strutils@0.22.0` — same PRs; lifecycle-prove OK
+- [x] `fdncred/nu_plugin_query_git@0.24.0` — same PRs; lifecycle-prove OK
+- [x] `lizclipse/nu_plugin_ulid@0.23.0` — same PRs; distinct from `nushell-works/nu_plugin_nw_ulid`; lifecycle-prove OK
+- [x] `rhino-linux/nu_plugin_nutext@0.6.2` — same PRs; lifecycle-prove OK
+
+Production publish: [run 30996546918](https://github.com/tonythethompson/numan-registry/actions/runs/30996546918).
+
 ### Wave 2 research queue (`numan-plugins`)
 
 Source: `docs/backlog.json`. Research before promoting:

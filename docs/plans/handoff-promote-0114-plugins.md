@@ -172,13 +172,16 @@ Lifecycle-prove runs: `init → registry sync → search → info → install �
 
 ## Success Criteria
 
-- [ ] 2–3 new plugins in `manifest.json` `active[]` with `nu_version: ">=0.114.0 <0.115.0"`
-- [ ] Successful build run with spec artifacts downloaded
-- [ ] Registry PR(s) merged, staging green
-- [ ] Production dispatched and live
-- [ ] Lifecycle-prove passes on Windows x64 / Nu 0.114.1 for each plugin
-- [ ] `numan search` on Nu 0.114.1 shows the new plugins as compatible
-- [ ] Backlog + roadmap docs updated
+Wave 1 (5) and wave 2 (5) completed through production. Prove ran on **Linux** x86_64 / Nu 0.114.1 (Windows prove still optional).
+
+- [x] 2–3+ new plugins in `manifest.json` `active[]` with `nu_version: ">=0.114.0 <0.115.0"` (wave1+wave2 = 10)
+- [x] Successful build run with spec artifacts downloaded
+- [x] Registry PR(s) merged, staging green ([numan-registry#43](https://github.com/tonythethompson/numan-registry/pull/43), [#45](https://github.com/tonythethompson/numan-registry/pull/45))
+- [x] Production dispatched and live
+- [x] Lifecycle-prove passes on Linux x86_64 / Nu 0.114.1 for each plugin (Windows optional follow-up)
+- [x] `numan search` on Nu 0.114.1 shows the new plugins as compatible
+- [ ] Backlog + roadmap docs updated (numan-plugins bookkeeping PR; this file)
+
 
 ## Time Estimate
 
