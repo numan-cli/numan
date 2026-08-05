@@ -180,6 +180,11 @@ Copy-paste path from install through first activation:
 
 ```bash
 # Install (pick one)
+# macOS / Linux
+brew tap tonythethompson/numan && brew install numan
+# Windows
+winget install tonythethompson.numan
+# any platform with Rust
 cargo install numan-cli
 # or: download a release archive from GitHub Releases and add numan to PATH
 
