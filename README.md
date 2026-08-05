@@ -5,6 +5,9 @@
 <img alt="Crates.io Version" src="https://img.shields.io/crates/v/numan-cli"> 
 ![WinGet Package Version](https://img.shields.io/winget/v/tonythethompson.numan)
 <img alt="Crates.io Version" src="https://img.shields.io/crates/d/numan-cli"> 
+[![Homebrew](https://shields.io)](https://github.com/tonythethompson/homebrew-numan)
+
+
 
 
 
