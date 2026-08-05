@@ -28,6 +28,7 @@ jobs:
     outputs:
       head_branch: ${{ steps.check.outputs.head_branch }}
       base_branch: ${{ steps.check.outputs.base_branch }}
+      head_sha: ${{ steps.check.outputs.head_sha }}
     steps:
       - name: Validate PR
         id: check
@@ -37,7 +38,7 @@ jobs:
           set -euo pipefail
           PR_JSON=$(gh pr view "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
-            --json headRefName,baseRefName,state,isCrossRepository)
+            --json headRefName,baseRefName,state,isCrossRepository,headRefOid)
 
           if [ "$(jq -r '.state' <<<"$PR_JSON")" != "OPEN" ]; then
             echo "::error::PR is not open."; exit 1
@@ -51,6 +52,7 @@ jobs:
           {
             echo "head_branch=$(jq -r '.headRefName' <<<"$PR_JSON")"
             echo "base_branch=$(jq -r '.baseRefName' <<<"$PR_JSON")"
+            echo "head_sha=$(jq -r '.headRefOid' <<<"$PR_JSON")"
           } >> "$GITHUB_OUTPUT"
 
   remediate:
@@ -70,7 +72,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.guard.outputs.head_branch }}
+          ref: ${{ needs.guard.outputs.head_sha }}
           fetch-depth: 0
           token: ${{ secrets.AUTOPILOT_TOKEN || secrets.GITHUB_TOKEN }}
 
