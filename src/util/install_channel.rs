@@ -429,22 +429,24 @@ mod tests {
     #[test]
     fn conflicting_installs_excludes_paths() {
         let excluded = PathBuf::from("/tmp/excluded/numan");
-        let installs = vec![
+        let other = PathBuf::from("/tmp/other/numan");
+        let channel = InstallChannel::Winget;
+        let filtered = [
             DiscoveredInstall {
                 path: excluded.clone(),
-                channel: InstallChannel::Winget,
-            },
-            DiscoveredInstall {
-                path: PathBuf::from("/tmp/other/numan"),
                 channel: InstallChannel::Cargo,
             },
-        ];
-        let filtered = installs
-            .into_iter()
-            .filter(|install| !std::slice::from_ref(&excluded).contains(&install.path))
-            .filter(|install| install.channel != InstallChannel::Winget)
-            .collect::<Vec<_>>();
+            DiscoveredInstall {
+                path: other.clone(),
+                channel: InstallChannel::Cargo,
+            },
+        ]
+        .into_iter()
+        .filter(|install| !std::slice::from_ref(&excluded).contains(&install.path))
+        .filter(|install| install.channel != channel)
+        .collect::<Vec<_>>();
         assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].path, other);
         assert_eq!(filtered[0].channel, InstallChannel::Cargo);
     }
 }

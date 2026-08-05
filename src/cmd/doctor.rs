@@ -367,6 +367,8 @@ fn check_install_channels(findings: &mut Vec<Finding>) {
         .iter()
         .filter(|install| install.channel != current_channel)
         .filter_map(|install| install.channel.uninstall_hint())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
         .collect::<Vec<_>>()
         .join("; ");
 
