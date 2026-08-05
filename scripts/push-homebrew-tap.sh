@@ -27,6 +27,9 @@ fi
 cleanup() { rm -rf "${WORKDIR}"; }
 trap cleanup EXIT
 
+# Ensure git push can use the same credentials as gh (needed when only GH_TOKEN is set).
+gh auth setup-git --hostname github.com --force
+
 gh repo clone "${TAP_REPO}" "${WORKDIR}"
 mkdir -p "${WORKDIR}/Formula"
 cp "${FORMULA_SRC}" "${WORKDIR}/Formula/numan.rb"

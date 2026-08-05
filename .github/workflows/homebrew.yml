@@ -145,6 +145,8 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${RELEASE_TAG#v}"
+          # GH_TOKEN authenticates gh(1), but git push needs a credential helper.
+          gh auth setup-git --hostname github.com --force
           rm -rf /tmp/homebrew-numan
           gh repo clone "$TAP_REPO" /tmp/homebrew-numan
           mkdir -p /tmp/homebrew-numan/Formula
