@@ -8,9 +8,9 @@ name: Roadmap drift
 
 on:
   pull_request:
-    branches: [master, main]
+    branches: [main, master]
   push:
-    branches: [master, main]
+    branches: [main, master]
 
 permissions:
   contents: read
