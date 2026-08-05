@@ -5,8 +5,7 @@
 <img alt="Crates.io Version" src="https://img.shields.io/crates/v/numan-cli"> 
 ![WinGet Package Version](https://img.shields.io/winget/v/tonythethompson.numan)
 <img alt="Crates.io Version" src="https://img.shields.io/crates/d/numan-cli"> 
-
-
+[![Homebrew](https://img.shields.io/homebrew/v/numan?logo=homebrew&label=homebrew)](https://github.com/tonythethompson/homebrew-numan)
 
 **Numan** is a cross-platform package manager for [Nushell](https://www.nushell.sh/). It installs registry plugins, modules, scripts, and completion payloads from signed registries, pins immutable artifacts in a lockfile, and activates plugins and modules with Nu only when you ask — keeping installs inert until you run `numan activate`.
 
