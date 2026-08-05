@@ -33,7 +33,7 @@ use crate::state::nupm_import::NupmImportsFile;
 use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::fs_safety::{acquire_mutation_lock, assert_managed_file_owned};
-use numan_install_guard::{classify_binary_path, discover_installations, InstallChannel};
+use numan_install_guard::{classify_binary_path, discover_path_installations, InstallChannel};
 use crate::util::hints::{
     self, active_plugin_mutation_gated_doctor_message, registry_none_fix, setup_nu_use_existing,
     ACTIVE_PLUGIN_MUTATION_GATED_FIX, CMD_ACTIVATE, CMD_DEACTIVATE, CMD_DOCTOR_FIX, CMD_INIT,
@@ -325,7 +325,8 @@ fn nu_is_available(root: &Path) -> bool {
 }
 
 fn check_install_channels(findings: &mut Vec<Finding>) {
-    let installs = discover_installations();
+    // Doctor uses the cheap PATH-only scan; package-manager trees are checked by install guards.
+    let installs = discover_path_installations();
     if installs.len() <= 1 {
         return;
     }

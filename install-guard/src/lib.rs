@@ -81,6 +81,16 @@ pub fn classify_binary_path(path: &Path) -> InstallChannel {
 }
 
 /// Discover `numan` binaries on PATH and in known package-manager locations.
+pub fn discover_path_installations() -> Vec<DiscoveredInstall> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for dir in path_directories() {
+        push_if_numan(&dir, &mut seen, &mut out);
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out
+}
+
 pub fn discover_installations() -> Vec<DiscoveredInstall> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
@@ -254,10 +264,6 @@ fn default_cargo_install_root() -> PathBuf {
 }
 
 fn run_install_guard(channel: InstallChannel, exclude_paths: &[PathBuf]) -> ExitCode {
-    if should_skip_guard() {
-        return ExitCode::SUCCESS;
-    }
-
     let conflicts = conflicting_installs(channel, exclude_paths);
     if conflicts.is_empty() {
         return ExitCode::SUCCESS;
@@ -271,7 +277,7 @@ fn run_install_guard(channel: InstallChannel, exclude_paths: &[PathBuf]) -> Exit
             "Refusing {} install in non-interactive session while another channel is installed.",
             channel.label()
         );
-        eprintln!("Remove the existing install first, or set NUMAN_SKIP_INSTALL_GUARD=1 to bypass.");
+        eprintln!("Remove the existing install first, then retry the installation.");
         return ExitCode::from(1);
     }
 
@@ -312,7 +318,7 @@ fn run_install_guard(channel: InstallChannel, exclude_paths: &[PathBuf]) -> Exit
         }
     }
 
-  let remaining = conflicting_installs(channel, exclude_paths);
+    let remaining = conflicting_installs(channel, exclude_paths);
     if !remaining.is_empty() {
         eprintln!("Existing install still detected after uninstall; cancelling install.");
         for install in remaining {
@@ -322,14 +328,6 @@ fn run_install_guard(channel: InstallChannel, exclude_paths: &[PathBuf]) -> Exit
     }
 
     ExitCode::SUCCESS
-}
-
-fn should_skip_guard() -> bool {
-    std::env::var("NUMAN_SKIP_INSTALL_GUARD")
-        .map(|v| v == "1")
-        .unwrap_or(false)
-        || std::env::var("CI").ok().as_deref() == Some("true")
-        || std::env::var("GITHUB_ACTIONS").ok().as_deref() == Some("true")
 }
 
 fn print_conflict_banner(channel: InstallChannel, conflicts: &[DiscoveredInstall]) {
