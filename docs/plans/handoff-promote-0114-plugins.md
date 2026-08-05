@@ -180,7 +180,7 @@ Wave 1 (5) and wave 2 (5) completed through production. Prove ran on **Linux** x
 - [x] Production dispatched and live
 - [x] Lifecycle-prove passes on Linux x86_64 / Nu 0.114.1 for each plugin (Windows optional follow-up)
 - [x] `numan search` on Nu 0.114.1 shows the new plugins as compatible
-- [x] Backlog + roadmap docs updated ([numan-plugins#42](https://github.com/tonythethompson/numan-plugins/pull/42); this PR)
+- [x] Backlog + roadmap docs updated (numan-plugins bookkeeping PR; this file)
 
 
 ## Time Estimate
