@@ -2,7 +2,7 @@
 name = "numan-install-guard"
 version = "0.1.0"
 edition = "2021"
-publish = false
+publish = true
 
 [[bin]]
 name = "numan-install-guard"

@@ -17,14 +17,13 @@ exclude = [
     "tests/fixtures/**",
     "Phase*.md",
     ".tmp*",
-    "install-guard/**",
 ]
 
 [build-dependencies]
-numan-install-guard = { path = "install-guard" }
+numan-install-guard = { path = "install-guard", version = "0.1.0" }
 
 [dependencies]
-numan-install-guard = { path = "install-guard" }
+numan-install-guard = { path = "install-guard", version = "0.1.0" }
 # CLI
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
