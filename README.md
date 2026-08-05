@@ -419,7 +419,7 @@ PR reviewers should follow [`REVIEW.md`](REVIEW.md).
 
 ## Roadmap
 
-**Releases:** see the [latest GitHub Release](https://github.com/tonythethompson/numan/releases/latest) — feature-complete core on **0.1.x** while dogfooding the official registry (~36 packages; [catalog × Nu matrix](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md)).
+**Releases:** see the [latest GitHub Release](https://github.com/tonythethompson/numan/releases/latest) — feature-complete core on **0.1.x** while dogfooding the official registry ([catalog × Nu matrix](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md) for live package counts and Nu bands).
 
 For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 `numan-plugins`, see

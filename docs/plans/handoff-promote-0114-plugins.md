@@ -2,8 +2,8 @@
 
 ## Context
 
-> **Status (2026-08-05):** Wave 1 and Wave 2 Nu 0.114 intakes are in production.
-> Evidence: Wave 1 intake
+> **As of 2026-08-05 (immutable snapshot):** Wave 1 and Wave 2 Nu 0.114 intakes
+> reached production. Evidence: Wave 1 intake
 > ([numan-registry#43](https://github.com/tonythethompson/numan-registry/pull/43)),
 > Wave 2 intake
 > ([numan-registry#45](https://github.com/tonythethompson/numan-registry/pull/45)),
@@ -14,11 +14,13 @@
 > [run 30998507400](https://github.com/tonythethompson/numan-registry/actions/runs/30998507400)),
 > plugins docs/roadmap refresh
 > ([numan-plugins#51](https://github.com/tonythethompson/numan-plugins/pull/51)).
-> The official registry has **~36** packages; about **18** latest versions target
-> Nu **0.114.x** (see
-> [`catalog-compat.md`](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md)).
-> Use this handoff as the **pipeline playbook** for the next 1–2 promotions, not
-> as live catalog counts.
+> Do not treat package counts here as current; see live catalog below.
+
+**Live catalog × Nu overview:**
+[`catalog-compat.md`](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md)
+(regenerate from `registry/index.json` on the registry repo).
+
+This handoff is the **pipeline playbook** for the next 1–2 promotions.
 
 Catalog depth remains the #1 adoption bottleneck toward 1.0. Grow the
 0.114-compatible set through the full pipeline below.
@@ -39,7 +41,7 @@ Research → Promote to manifest → Build dispatch → Spec download → Regist
 
 ## Step 1: Find Candidates
 
-**Source of truth for candidates:** `numan-plugins/docs/backlog.json` (~69 entries, demand-ranked).
+**Source of truth for candidates:** [`numan-plugins/docs/backlog.json`](https://github.com/tonythethompson/numan-plugins/blob/main/docs/backlog.json) (demand-ranked; entry count lives in that file).
 **Live catalog (what `numan registry sync` / `install` fetch):** [`https://tonythethompson.github.io/numan-registry/index.json`](https://tonythethompson.github.io/numan-registry/index.json).
 **Repository source for that catalog:** `numan-registry/registry/index.json` (human overview: [`docs/catalog-compat.md`](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md)).
 
