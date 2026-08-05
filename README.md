@@ -182,18 +182,31 @@ Add-Content -Path $PROFILE -Value '. $HOME\.numan\completions.ps1'
 
 ## Quick start
 
-Copy-paste path from install through first activation:
+Install with **one** of the options below, then run the activation path.
+
+**Homebrew (macOS / Linux)**
 
 ```bash
-# Install (pick one)
-# macOS / Linux
 brew tap tonythethompson/numan && brew install numan
-# Windows
-winget install tonythethompson.numan
-# any platform with Rust
-cargo install numan-cli
-# or: download a release archive from GitHub Releases and add numan to PATH
+```
 
+**winget (Windows)**
+
+```powershell
+winget install tonythethompson.numan
+```
+
+**crates.io (any platform with Rust)**
+
+```bash
+cargo install numan-cli
+```
+
+Or download a release archive from [GitHub Releases](https://github.com/tonythethompson/numan/releases) and add `numan` to `PATH`.
+
+Then:
+
+```bash
 numan init
 numan registry sync
 numan try                 # install + activate a starter that fits your Nu (e.g., skim for Nu 0.114)
