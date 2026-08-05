@@ -115,6 +115,15 @@ cargo install --git https://github.com/tonythethompson/numan
 
 Tracks the default branch. For a reproducible install, choose a published tag from [GitHub Releases](https://github.com/tonythethompson/numan/releases) and pass `--tag vX.Y.Z`.
 
+### Homebrew (macOS / Linux)
+
+```bash
+brew tap tonythethompson/numan
+brew install numan
+```
+
+Uses the public [`homebrew-numan`](https://github.com/tonythethompson/homebrew-numan) tap. Formula digests update automatically after each GitHub Release (see [docs/PACKAGING.md](docs/PACKAGING.md)).
+
 ### winget (Windows)
 
 ```powershell
@@ -439,6 +448,7 @@ For the cross-repository plan snapshot (as of 2026-07-29) across `numan`,
 | Item | Tracking |
 |------|----------|
 | Community **winget** install (`winget install tonythethompson.numan`) | ✅ [winget-pkgs PR #400470](https://github.com/microsoft/winget-pkgs/pull/400470); updates automated |
+| Homebrew tap (`brew tap tonythethompson/numan && brew install numan`) | 🔄 formula at v0.1.5; auto-update on release needs `HOMEBREW_TAP_TOKEN` ([PACKAGING.md](docs/PACKAGING.md)) |
 | Curated **official registry** packages + trust/bootstrap policy | 🔄 [#18](https://github.com/tonythethompson/numan/issues/18), [intake roadmap](docs/registry-intake-roadmap.md) stage 1 |
 | Cross-platform **fresh-install** dogfooding | 🔄 `init` → `registry sync` → `search` → `install` → `activate` → `doctor` on Linux, macOS, Windows |
 

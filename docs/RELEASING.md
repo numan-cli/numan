@@ -50,7 +50,8 @@ Then:
 7. Confirm platform archives and `SHA256SUMS` on GitHub Releases.
 8. Confirm the **Publish to crates.io** job succeeds (requires `CRATES_IO_TOKEN` repository secret).
 9. Confirm the [`Publish to WinGet`](../.github/workflows/winget.yml) workflow verifies the `winget-release-ready` artifact and published Windows release asset, then opens the update PR after the `v*.*.*` tag-triggered Release workflow completes (manual recovery: dispatch with required `release_tag`).
-10. After publication, update documentation only if it needs links that depend on newly created release pages or assets; do not use this step to repair README content already shipped in the crate or tag.
+10. Confirm the [`Publish to Homebrew tap`](../.github/workflows/homebrew.yml) workflow verifies the `homebrew-release-ready` artifact and pushes `Formula/numan.rb` to [`tonythethompson/homebrew-numan`](https://github.com/tonythethompson/homebrew-numan) (requires `HOMEBREW_TAP_TOKEN`; manual recovery: dispatch with required `release_tag`).
+11. After publication, update documentation only if it needs links that depend on newly created release pages or assets; do not use this step to repair README content already shipped in the crate or tag.
 
 **Do not tag until CI is green on `master`.** The release workflow gates on CI check results for tag pushes; pushing a tag on a failing commit blocks publication.
 
@@ -80,4 +81,5 @@ Then:
 | GitHub Release | Download archive from [Releases](https://github.com/tonythethompson/numan/releases) |
 | crates.io | `cargo install numan-cli` |
 | From source | `cargo install --path .` or `cargo install --git https://github.com/tonythethompson/numan` |
-| winget | See [PACKAGING.md](PACKAGING.md) |
+| Homebrew | `brew tap tonythethompson/numan && brew install numan` (see [PACKAGING.md](PACKAGING.md)) |
+| winget | `winget install tonythethompson.numan` (see [PACKAGING.md](PACKAGING.md)) |
