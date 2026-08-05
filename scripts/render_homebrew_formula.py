@@ -109,7 +109,7 @@ end
 """
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", help="Release version without v prefix (e.g. 0.1.5)")
     parser.add_argument(
@@ -133,7 +133,7 @@ def main() -> int:
         action="store_true",
         help="Print required asset names and exit",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.check_url_layout:
         print("Required release assets for Homebrew:")
@@ -148,7 +148,9 @@ def main() -> int:
     text = render_formula(args.version, digests)
     if args.write:
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(text, encoding="utf-8", newline="\n")
+        # Use open(..., newline="\n") so LF is stable on Windows hosts too.
+        with args.out.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
         print(f"Wrote {args.out}")
     else:
         sys.stdout.write(text)

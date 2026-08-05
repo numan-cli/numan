@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "render_homebrew_formula.py"
@@ -73,10 +75,59 @@ cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  numan-0.2.0-x8
             out = Path(tmp) / "numan.rb"
             sums_path.write_text(sums + "\n", encoding="utf-8")
             digests = self.mod.parse_sha256sums(sums_path.read_text(encoding="utf-8"), "0.2.0")
-            out.write_text(self.mod.render_formula("0.2.0", digests), encoding="utf-8")
+            text = self.mod.render_formula("0.2.0", digests)
+            with out.open("w", encoding="utf-8", newline="\n") as handle:
+                handle.write(text)
             body = out.read_text(encoding="utf-8")
+            self.assertEqual(body, text)
             self.assertIn('version "0.2.0"', body)
-            self.assertIn("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", body)
+
+    def test_cli_check_url_layout(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = self.mod.main(["--check-url-layout"])
+        self.assertEqual(0, code)
+        stdout = buf.getvalue()
+        self.assertIn("numan-<version>-aarch64-apple-darwin.tar.gz", stdout)
+        self.assertIn("numan-<version>-x86_64-apple-darwin.tar.gz", stdout)
+        self.assertIn("numan-<version>-x86_64-unknown-linux-gnu.tar.gz", stdout)
+
+    def test_cli_full_write(self):
+        sums = """
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  numan-0.2.0-aarch64-apple-darwin.tar.gz
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  numan-0.2.0-x86_64-apple-darwin.tar.gz
+cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  numan-0.2.0-x86_64-unknown-linux-gnu.tar.gz
+""".strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            sums_path = tmp_path / "SHA256SUMS"
+            out_path = tmp_path / "numan.rb"
+            sums_path.write_text(sums + "\n", encoding="utf-8")
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = self.mod.main(
+                    [
+                        "--version",
+                        "0.2.0",
+                        "--sha256sums",
+                        str(sums_path),
+                        "--write",
+                        "--out",
+                        str(out_path),
+                    ]
+                )
+            self.assertEqual(0, code)
+            self.assertTrue(out_path.is_file())
+            text = out_path.read_text(encoding="utf-8")
+            self.assertIn('version "0.2.0"', text)
+            self.assertIn("Wrote ", buf.getvalue())
+
+    def test_cli_missing_required_args_fails(self):
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit) as cm:
+            self.mod.main([])
+        self.assertNotEqual(0, cm.exception.code)
+        self.assertIn("--version", err.getvalue())
 
 
 if __name__ == "__main__":

@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
 # Manually push packaging/homebrew/numan.rb to tonythethompson/homebrew-numan.
-# Prefer the Publish to Homebrew tap workflow once HOMEBREW_TAP_TOKEN is set.
+# Prefer the Publish to Homebrew tap workflow once HOMEBREW_TAP_TOKEN is set
+# on the numan repo.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FORMULA_SRC="${ROOT}/packaging/homebrew/numan.rb"
 TAP_REPO="${TAP_REPO:-tonythethompson/homebrew-numan}"
 WORKDIR="${TMPDIR:-/tmp}/homebrew-numan-sync-$$"
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "error: gh (GitHub CLI) is not installed or not on PATH; see https://cli.github.com/" >&2
+  exit 1
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "error: python3 is not installed or not on PATH" >&2
+  exit 1
+fi
 
 if [[ ! -f "${FORMULA_SRC}" ]]; then
   echo "missing ${FORMULA_SRC}; run scripts/render_homebrew_formula.py --write first" >&2
@@ -19,12 +30,9 @@ trap cleanup EXIT
 gh repo clone "${TAP_REPO}" "${WORKDIR}"
 mkdir -p "${WORKDIR}/Formula"
 cp "${FORMULA_SRC}" "${WORKDIR}/Formula/numan.rb"
-VERSION="$(python3 - <<'PY' "${FORMULA_SRC}"
-import re, sys
-text = open(sys.argv[1], encoding="utf-8").read()
-m = re.search(r'version\s+"([^"]+)"', text)
-print(m.group(1) if m else "unknown")
-PY
+VERSION="$(
+  python3 -c "import re,sys; t=open(sys.argv[1],encoding='utf-8').read(); m=re.search(r'version\\s+\"([^\"]+)\"', t); print(m.group(1) if m else 'unknown')" \
+    "${FORMULA_SRC}"
 )"
 cd "${WORKDIR}"
 git config user.name "${GIT_AUTHOR_NAME:-numan-maintainer}"
