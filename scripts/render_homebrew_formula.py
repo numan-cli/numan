@@ -25,7 +25,9 @@ REQUIRED_ASSETS = {
 }
 
 ASSET_RE = re.compile(
-    r"^([0-9a-f]{64})\s+numan-(?P<ver>[^-]+(?:\.[^-]+)*)-(?P<triple>[^\s]+)\.(?P<ext>tar\.gz|zip)$"
+    r"^([0-9a-fA-F]{64})\s+numan-(?P<ver>.+)-(?P<triple>"
+    r"aarch64-apple-darwin|x86_64-apple-darwin|x86_64-unknown-linux-gnu"
+    r")\.(?P<ext>tar\.gz|zip)$"
 )
 
 
