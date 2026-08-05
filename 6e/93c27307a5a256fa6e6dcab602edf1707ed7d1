@@ -1,0 +1,43 @@
+AGENTS.md
+  s_d45850b3ec5b3a::t_4c3e4ae330aa11 164,166-168,171
+CLAUDE.md
+  s_29f425225a6196::t_f17d74d2f6d66c 60
+README.md
+  s_b04250085234ec::t_ce4c53e45ecb99 396
+docs/PACKAGING.md
+  s_29f425225a6196::t_abd2249d56a525 50
+docs/nupm-compatibility.md
+  s_29f425225a6196::t_4bd872b0a64334 7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "6e93c27307a5a256fa6e6dcab602edf1707ed7d1",
+  "prompts": {},
+  "sessions": {
+    "s_29f425225a6196": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6e35-501e-7672-ab58-8dc925987879",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    },
+    "s_b04250085234ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9153c712-00cc-4b98-abe2-ffc9ffff3370",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    },
+    "s_d45850b3ec5b3a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a39-ceb6-72e2-8e2f-2f74a904f982",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    }
+  }
+}

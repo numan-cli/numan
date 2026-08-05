@@ -1,0 +1,25 @@
+docs/active-plugin-gate.md
+  s_2b89eaf48e0bf9::t_6e1b4a1c283d28 27-29
+  s_2b89eaf48e0bf9::t_4e8f9475eacb00 30
+docs/numan-doctor.md
+  s_2b89eaf48e0bf9::t_0ddb7be2e9bd2a 135
+  s_2b89eaf48e0bf9::t_5c3caac0d0bb8a 81
+src/cmd/doctor.rs
+  s_2b89eaf48e0bf9::t_5c518e9bdd8813 194-197,619,636-652,1730-1799
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "091092c5e958df307c3686ae7b56556d48d71075",
+  "prompts": {},
+  "sessions": {
+    "s_2b89eaf48e0bf9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0c938dcd-4797-4f21-84dc-089f6a387dca",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

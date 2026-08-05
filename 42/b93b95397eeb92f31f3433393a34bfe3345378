@@ -1,0 +1,19 @@
+src/nu/paths.rs
+  s_4f0ebf702ce7c5::t_e2d3ce82e87e55 243-265,269,494,498-504,506-507
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "42b93b95397eeb92f31f3433393a34bfe3345378",
+  "prompts": {},
+  "sessions": {
+    "s_4f0ebf702ce7c5": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d8ec0c13-8248-4a58-88da-060bb42e8712",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    }
+  }
+}

@@ -1,0 +1,54 @@
+.gitignore
+  s_c9bab3dfcedcd8::t_8f5d6d0f089c4c 25,33-40
+README.md
+  s_adf8ad907495ff::t_659e9b18fbba1f 420,452
+  s_adf8ad907495ff::t_2617580030e923 115
+  s_adf8ad907495ff::t_ede56cfb7497f4 427
+docs/adr/0001-ecosystem-trust-upstream-contribution-fork-stewardship.md
+  s_c9bab3dfcedcd8::t_0a1ff6e58306cf 33,37,39
+docs/PACKAGING.md
+  s_adf8ad907495ff::t_2617580030e923 3,10-11,18,28
+  s_adf8ad907495ff::t_38bdc781204a70 34,36-43
+  s_adf8ad907495ff::t_659e9b18fbba1f 1
+  s_adf8ad907495ff::t_2ed76971e3aeb8 32
+AGENTS.md
+  s_adf8ad907495ff::t_659e9b18fbba1f 104
+  s_adf8ad907495ff::t_2ed76971e3aeb8 190
+  s_c9bab3dfcedcd8::t_13bf61975b70aa 130
+  s_c9bab3dfcedcd8::t_189a6b962948dd 27-30,33
+  s_c9bab3dfcedcd8::t_dbc92d12e49c41 71
+  s_c9bab3dfcedcd8::t_2757bfdebc8d38 151-154
+.github/workflows/winget.yml
+  s_adf8ad907495ff::t_2617580030e923 1-28
+docs/RELEASING.md
+  s_adf8ad907495ff::t_2617580030e923 50
+docs/plans/Phase7Plan.md
+  s_adf8ad907495ff::t_659e9b18fbba1f 80-82,95
+  s_adf8ad907495ff::t_2617580030e923 18,111
+packaging/winget/README.md
+  s_adf8ad907495ff::t_2617580030e923 23,25-27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "52512141eba37c8d232912367af1d62fb0166558",
+  "prompts": {},
+  "sessions": {
+    "s_adf8ad907495ff": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fab0d-0229-77c2-a651-cc1ca307d353",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    },
+    "s_c9bab3dfcedcd8": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "bb47d647-85ab-4b97-9820-0158f4e70318",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

@@ -1,0 +1,42 @@
+src/util/hints.rs
+  s_2b89eaf48e0bf9::t_e437f9332007b3 156-166
+  s_2b89eaf48e0bf9::t_f54bc0669c7d1a 96-98,103-116,124-125
+  s_2b89eaf48e0bf9::t_24bc6a8a289e2b 155
+tests/doctor_test.rs
+  s_2b89eaf48e0bf9::t_7cca44bfa7fc8b 290
+src/cmd/doctor.rs
+  s_2b89eaf48e0bf9::t_57c028ac8891f5 1204-1214,1216-1237
+docs/numan-doctor.md
+  s_2b89eaf48e0bf9::t_77057353d3232a 143-144
+  s_2b89eaf48e0bf9::t_c9c96fad9b485b 67-73
+  s_2b89eaf48e0bf9::t_d76c22838d3de3 84
+  s_2b89eaf48e0bf9::t_2ed5e9533a28a6 96-97,99
+src/cmd/update.rs
+  s_2b89eaf48e0bf9::t_fbaef3c7f15e16 406-410
+  s_2b89eaf48e0bf9::t_c098f74155e62e 309
+docs/active-plugin-gate.md
+  s_2b89eaf48e0bf9::t_1d44d3088d3695 19-21
+src/cmd/deactivate.rs
+  s_2b89eaf48e0bf9::t_ab2489356b5411 460-461
+  s_2b89eaf48e0bf9::t_aab50c7ce182d1 389-390
+  s_2b89eaf48e0bf9::t_c3c3f2b76a40dd 1673-1729
+  s_2b89eaf48e0bf9::t_1051c4b0353a9b 679-704,724,728,765-768,782
+  s_2b89eaf48e0bf9::t_2d387954b613d6 1405,1415-1418
+  s_2b89eaf48e0bf9::t_7ec2bb2a878180 1672
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "c8ea6e4b6d6cbf808bec7c73d11892866e208014",
+  "prompts": {},
+  "sessions": {
+    "s_2b89eaf48e0bf9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0c938dcd-4797-4f21-84dc-089f6a387dca",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

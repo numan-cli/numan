@@ -1,0 +1,19 @@
+CLAUDE.md
+  s_36c1226f353e79::t_db74f6ec006150 1-154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "7e726a221f2530ccc62ca8b26c9a7063305ba2a9",
+  "prompts": {},
+  "sessions": {
+    "s_36c1226f353e79": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "83ec1b05-c752-4e9f-89fb-95acb3704ba7",
+        "model": "claude-haiku-4-5-20251001"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

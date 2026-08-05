@@ -1,0 +1,31 @@
+AGENTS.md
+  s_aecdb4cfe17926::t_bd6e4128e9d472 58,149
+CHANGELOG.md
+  s_aecdb4cfe17926::t_4d5547719cdb6c 10-13
+Cargo.lock
+  s_aecdb4cfe17926::t_a27dc17f663cb9 235-244,1205
+Cargo.toml
+  s_aecdb4cfe17926::t_24adccbf712638 30
+README.md
+  s_aecdb4cfe17926::t_ca9b2e23936f5d 43,60,170-173,348
+src/cmd/completions.rs
+  s_aecdb4cfe17926::t_df92840eb0ae6c 4,23-25,60-65,79-85,172-187
+tests/completions_test.rs
+  s_aecdb4cfe17926::t_4fb6372e1a85b8 31,41-59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "a2fe67e3d4eb8ccf3176a905be04aad48c22729f",
+  "prompts": {},
+  "sessions": {
+    "s_aecdb4cfe17926": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "1e2941b8-e6bb-4487-839c-774807fed75c",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

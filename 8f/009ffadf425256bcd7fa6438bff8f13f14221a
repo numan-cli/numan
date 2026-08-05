@@ -1,0 +1,32 @@
+AGENTS.md
+  s_a92fb5b3caa63e::t_56780393013253 68
+src/nu/migrate_legacy.rs
+  s_a92fb5b3caa63e::t_e4e3dd1b933a90 43-47,52-54,75,78-80,88-89,94-115
+  s_a92fb5b3caa63e::t_71cbd1ba5504d7 90-93
+src/state/migration_journal.rs
+  s_a92fb5b3caa63e::t_245d1fa4708355 143-144
+src/cmd/doctor.rs
+  s_a92fb5b3caa63e::t_5773ee0c793b43 644-645
+  s_a92fb5b3caa63e::t_6e33b962388618 1536
+  s_a92fb5b3caa63e::t_698a72386006f6 2032
+src/nu/bootstrap.rs
+  s_a92fb5b3caa63e::t_7bc7a402779567 839-842
+src/util/test_paths.rs
+  s_a92fb5b3caa63e::t_ee71c49f7e912f 5-6,9-13,16-20,31,36-38,41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "8f009ffadf425256bcd7fa6438bff8f13f14221a",
+  "prompts": {},
+  "sessions": {
+    "s_a92fb5b3caa63e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "cd521e45-4f5a-4ec3-81ea-872c74d16608",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

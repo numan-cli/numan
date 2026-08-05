@@ -1,0 +1,19 @@
+AGENTS.md
+  s_4f0ebf702ce7c5::t_a38cf646b05a8b 67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "03f6545b935accc4fe12042e046aa1fe1ef5c871",
+  "prompts": {},
+  "sessions": {
+    "s_4f0ebf702ce7c5": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d8ec0c13-8248-4a58-88da-060bb42e8712",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    }
+  }
+}

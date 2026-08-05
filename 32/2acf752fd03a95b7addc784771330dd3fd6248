@@ -1,0 +1,102 @@
+src/cmd/plugin_lifecycle.rs
+  s_a8c98778e26f09::t_4c6068c7e12772 1-181,183-186,188
+  s_a8c98778e26f09::t_3c4e82d44007d6 182,187
+src/cmd/update.rs
+  s_a8c98778e26f09::t_8a5e33a5501d9a 809-813
+  s_a8c98778e26f09::t_ad8fd17d060ece 6-8,14-15,46-53,59,65,68-74,78-81,194,220,228-229,248,401-406,415-421,427,429-432,434-437,475-480,510-512,514-528,531,534-535,539,552,555-578,583-653,721-808,815-822
+  s_7c3809fb3884e3::t_2b736f3c209b8b 75,481-482
+  s_a8c98778e26f09::t_f1f7ca63f215b6 579-582
+  s_a8c98778e26f09::t_0f7f04249159ce 55-58,64
+  s_a8c98778e26f09::t_1762f49778bb91 54,60-63,66-67,76,82,184-192,214-219,221-227,230-231,241-247,249-250,254,257-281,294,483,654-720,814
+AGENTS.md
+  s_ae12ad8694742c::t_969b97f2992ffe 164
+  s_2b89eaf48e0bf9::t_8fbcece7097f5e 165
+  s_a8c98778e26f09::t_f498ae40064708 225
+  s_2993f8b299a77d::t_544af3af3a2b60 54-56,70,123
+tests/plugin_lifecycle_real_nu.rs
+  s_a8c98778e26f09::t_833a0e6a16d7f1 1-2,4,6,12,17-22,25-30,32-34,45,47-48
+  s_2b89eaf48e0bf9::t_7053ba542725d5 3,5,7-11,13-16,23-24,31,35-44,46
+src/state/mod.rs
+  s_a8c98778e26f09::t_f55352f5110a22 1
+src/cmd/doctor.rs
+  s_a8c98778e26f09::t_aa0cd72b6c9c3f 635-638,641-643
+  s_a8c98778e26f09::t_0feadc5c2bd0a9 634
+  s_a8c98778e26f09::t_170acf89c3c6ae 1710-1711
+docs/active-plugin-gate.md
+  s_2b89eaf48e0bf9::t_7a6a23f59303b2 32-40
+  s_a8c98778e26f09::t_bc89c068f87ae3 5-7,13-14,19-28,30-31
+  s_1bd3a5935743c1::t_e19f751eb2ac48 29
+  s_2b89eaf48e0bf9::t_45aa0d499edef5 41-43
+  s_a8c98778e26f09::t_4e6e23808d7153 45,47,49-56
+src/state/active_plugin_mutation.rs
+  s_a8c98778e26f09::t_af01373c95c4a6 1-52
+CHANGELOG.md
+  s_a8c98778e26f09::t_b0219549982cc4 27
+  s_a8c98778e26f09::t_eb1791b3f43f45 16
+src/cmd/activate.rs
+  s_2993f8b299a77d::t_107d9ac8248d88 658-668,1249-1253
+src/cmd/deactivate.rs
+  s_2993f8b299a77d::t_8282e5335446fe 718-722
+src/cmd/mod.rs
+  s_2993f8b299a77d::t_a65cd4b24da255 12
+src/state/lifecycle_journal.rs
+  s_2993f8b299a77d::t_e3e826f0c6d1f0 19-27
+src/util/hints.rs
+  s_2993f8b299a77d::t_f85377d22d0641 96-99,104-105,110-121,136-143
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "322acf752fd03a95b7addc784771330dd3fd6248",
+  "prompts": {},
+  "sessions": {
+    "s_1bd3a5935743c1": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "041664ce-856b-4c67-a830-5fad2c343d77",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    },
+    "s_2993f8b299a77d": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "2ce28142-c2b0-4fc4-86d4-303c5594bd8d",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    },
+    "s_2b89eaf48e0bf9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0c938dcd-4797-4f21-84dc-089f6a387dca",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    },
+    "s_7c3809fb3884e3": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "5ff7f5f5-4811-47f5-907b-4a0776f40120",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    },
+    "s_a8c98778e26f09": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "6d9a9865-becc-4373-9d60-10fe299ab5a2",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    },
+    "s_ae12ad8694742c": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "f0df6249-09df-4359-9d67-5c8bfb490fbc",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

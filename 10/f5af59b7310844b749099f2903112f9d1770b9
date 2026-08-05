@@ -1,0 +1,58 @@
+src/util/hints.rs
+  s_2b89eaf48e0bf9::t_129b34f28795e6 171-172,175
+  s_2b89eaf48e0bf9::t_85050bbacdd5a8 137
+  s_2b89eaf48e0bf9::t_361952a7d1346f 117-118,122-128
+  s_2b89eaf48e0bf9::t_976933f1492d7e 173-174,176
+  s_2b89eaf48e0bf9::t_9ef15976feae74 129-130
+src/cmd/update.rs
+  s_2b89eaf48e0bf9::t_01135fc425947d 992-993
+  s_2b89eaf48e0bf9::t_fafcbfaf4b8584 662,671-674
+  s_2b89eaf48e0bf9::t_46a8dd0e5cdf47 168,209-210,225-231
+  s_2b89eaf48e0bf9::t_bc7d680fa116e8 498,524-532
+  s_2b89eaf48e0bf9::t_54c1ab1ea4018b 890-895,914-963,966-973,979-991,996-1075,1081,1083,1085-1091,1093-1096
+  s_2b89eaf48e0bf9::t_59f6d4ec4e2611 113-119,130
+  s_2b89eaf48e0bf9::t_1fdef3cb20d337 964-965,974-978,1082,1084,1092
+  s_2b89eaf48e0bf9::t_b716b551067443 1076-1080
+  s_2b89eaf48e0bf9::t_d905ba694316ed 232-239,994-995,1097
+src/cmd/deactivate.rs
+  s_2b89eaf48e0bf9::t_6c5be15fc25a5c 1501-1537
+  s_2b89eaf48e0bf9::t_d737adae6a71df 248-260
+  s_2b89eaf48e0bf9::t_a74a9a21c3b1c8 3
+  s_2b89eaf48e0bf9::t_b4c8f521dea20c 143-146
+  s_2b89eaf48e0bf9::t_9565a83d182ef1 194-197
+  s_2b89eaf48e0bf9::t_6e2901efa15771 1500
+tests/plugin_lifecycle_real_nu.rs
+  s_2b89eaf48e0bf9::t_ad4eb2fa32930d 7,11,19,23
+  s_2b89eaf48e0bf9::t_1aec29b4144bad 55
+docs/active-plugin-gate.md
+  s_2b89eaf48e0bf9::t_a1ab4bf8635f0e 56,59,62
+  s_2b89eaf48e0bf9::t_24aba1fc36fb09 29
+  s_2b89eaf48e0bf9::t_7982c75ad6c49d 7
+src/state/lifecycle_journal.rs
+  s_2b89eaf48e0bf9::t_871d4878d790a9 28
+src/state/active_plugin_mutation.rs
+  s_2b89eaf48e0bf9::t_3f191541777549 11,26-62,69-70,76,78,82,85
+src/cmd/activate.rs
+  s_2b89eaf48e0bf9::t_0105afe2649a21 660-662
+src/cmd/doctor.rs
+  s_2b89eaf48e0bf9::t_c7dd989e83884a 1724-1728,1730-1733
+  s_2b89eaf48e0bf9::t_f69e51af5f0eca 1734-1735
+src/cmd/plugin_lifecycle.rs
+  s_2b89eaf48e0bf9::t_a1918cd78f0d92 98,101
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "10f5af59b7310844b749099f2903112f9d1770b9",
+  "prompts": {},
+  "sessions": {
+    "s_2b89eaf48e0bf9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0c938dcd-4797-4f21-84dc-089f6a387dca",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

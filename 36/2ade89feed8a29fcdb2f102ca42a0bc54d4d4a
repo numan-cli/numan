@@ -1,0 +1,20 @@
+src/cmd/search.rs
+  s_2b89eaf48e0bf9::t_d975ef74b8a7ef 2,5,36,39,43-44,53-55,65-67,70-96,113-119,130-191,200-205,256,265,274,280,290,305,312,326-327,333,339
+  s_2b89eaf48e0bf9::t_79940de260f39f 206-207,221,226,257-264,266-273,275-279,281-289,291-304,306-311,313-325,328-332,334-338,340-342
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "362ade89feed8a29fcdb2f102ca42a0bc54d4d4a",
+  "prompts": {},
+  "sessions": {
+    "s_2b89eaf48e0bf9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0c938dcd-4797-4f21-84dc-089f6a387dca",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

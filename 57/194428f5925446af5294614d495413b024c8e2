@@ -1,0 +1,29 @@
+docs/numan-doctor.md
+  s_2b89eaf48e0bf9::t_c5e025ed566870 67-73,84,96-97,99
+src/util/hints.rs
+  s_2b89eaf48e0bf9::t_bc90c159e92710 174-177
+src/cmd/update.rs
+  s_2b89eaf48e0bf9::t_5401372a13f948 659-662
+src/cmd/deactivate.rs
+  s_2b89eaf48e0bf9::t_7c4631c3e61661 390-391,461-462,680-705,725,729,766-769,783,1410,1420-1423,1715-1772
+src/cmd/doctor.rs
+  s_2b89eaf48e0bf9::t_2e28320e232350 1205-1215,1217-1238
+tests/doctor_test.rs
+  s_2b89eaf48e0bf9::t_17e2449d55b0f0 290
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "57194428f5925446af5294614d495413b024c8e2",
+  "prompts": {},
+  "sessions": {
+    "s_2b89eaf48e0bf9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0c938dcd-4797-4f21-84dc-089f6a387dca",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

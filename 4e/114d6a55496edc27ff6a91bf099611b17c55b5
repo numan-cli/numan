@@ -1,0 +1,19 @@
+src/install/extract.rs
+  s_4f0ebf702ce7c5::t_d42a783547a880 736-739,790
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "4e114d6a55496edc27ff6a91bf099611b17c55b5",
+  "prompts": {},
+  "sessions": {
+    "s_4f0ebf702ce7c5": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d8ec0c13-8248-4a58-88da-060bb42e8712",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

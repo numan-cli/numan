@@ -1,0 +1,53 @@
+scripts/release-notes-from-changelog.sh
+  s_763734e1ab2afd::t_b21834abd8c46c 8-11,16,18
+  s_763734e1ab2afd::t_b26788c43d492e 55,62-71
+  s_763734e1ab2afd::t_8154534e8a86b0 32-42
+src/core/official_registry.rs
+  s_9847f3c92a7251::t_b6158ab0eee5bd 22,24-25
+Phase7Plan.md
+  s_9847f3c92a7251::t_c76ceffe9ed432 96-98
+README.md
+  s_9847f3c92a7251::t_e809eb60f9ce08 20,35,397
+docs/adr/0001-ecosystem-trust-upstream-contribution-fork-stewardship.md
+  s_9847f3c92a7251::t_fbbfbda41dd9af 40-44,211,213-220,238-241
+docs/registry-intake-roadmap.md
+  s_9847f3c92a7251::t_ea5f69ee0742db 3
+.github/workflows/release.yml
+  s_ce90dec51b5a80::t_7b5483d41872b8 192
+.gitattributes
+  s_763734e1ab2afd::t_4669ba41d4c590 2
+docs/RELEASING.md
+  s_763734e1ab2afd::t_28ff658501e262 23-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "53d7db579c79f7f11baa85d4bc1dbba464ccea13",
+  "prompts": {},
+  "sessions": {
+    "s_763734e1ab2afd": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "eaca2697-5a6a-4ded-8ed8-bafac74fa4e4",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    },
+    "s_9847f3c92a7251": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "019f4beb-dd0e-70a0-a0aa-f4a7e0cd4f16",
+        "model": "unknown"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    },
+    "s_ce90dec51b5a80": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "159a968c-3817-46fa-b0d6-f6f469c82b1c",
+        "model": "unknown"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    }
+  }
+}

@@ -1,0 +1,47 @@
+src/cmd/deactivate.rs
+  s_d45850b3ec5b3a::t_f57920f0d9259a 139,909-910
+  s_d45850b3ec5b3a::t_dfca2b57ad30fb 15,21-22,96-98,151-153
+  s_d45850b3ec5b3a::t_407ed17b32e21e 903-908,911-920
+  s_d45850b3ec5b3a::t_a53a01366b5fa1 38,352,354-360
+  s_d45850b3ec5b3a::t_f828b16b122e02 349-351,353
+  s_d45850b3ec5b3a::t_6e92060b7ab734 361-362,902
+tests/module_autoload_test.rs
+  s_d45850b3ec5b3a::t_4098c7275079fe 1005-1019,1137,1198-1210,1212-1218
+  s_d45850b3ec5b3a::t_588b8e5550e31c 1138-1177,1220
+  s_d45850b3ec5b3a::t_f57920f0d9259a 1211
+  s_d45850b3ec5b3a::t_dc1348bcbfcb95 1219,1221
+docs/superpowers/specs/2026-07-12-autoload-journal-recovery-design.md
+  s_d45850b3ec5b3a::t_dfca2b57ad30fb 3
+src/cmd/activate.rs
+  s_d45850b3ec5b3a::t_dfca2b57ad30fb 13,19-20
+src/state/autoload_recovery.rs
+  s_d45850b3ec5b3a::t_b12ce52065134a 9-11,147-159
+  s_d45850b3ec5b3a::t_dfca2b57ad30fb 174
+  s_d45850b3ec5b3a::t_1c85d1f4e7f1ba 160-162
+src/cmd/mod.rs
+  s_a72606496bd618::t_56f5e30a9194a2 17-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "8f9c62798aa9ed2f8bd658c617039126010102bb",
+  "prompts": {},
+  "sessions": {
+    "s_a72606496bd618": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "1022dbbc-f97b-4e21-a2ff-73c21333aeab",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    },
+    "s_d45850b3ec5b3a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a39-ceb6-72e2-8e2f-2f74a904f982",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    }
+  }
+}

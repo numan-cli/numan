@@ -1,0 +1,31 @@
+tests/support/acceptance/filesystem.rs
+  s_29f425225a6196::t_0602bb95e9dda7 68,103-114,121-126,343,355-356,480-493
+tests/support/acceptance/model.rs
+  s_302ff795e0dfa4::t_567c111086ef73 42-74,76-79,83-118
+tests/support/acceptance/runner.rs
+  s_302ff795e0dfa4::t_9a92998cd047c9 23,123,126,158,215,324,345-346,360,485,513,554,568,578,623,629,632,635,642,647-648,659,664,667,756,766
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "7a6fadaf7c46bf217d088cc03cbb815f782a3586",
+  "prompts": {},
+  "sessions": {
+    "s_29f425225a6196": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6e35-501e-7672-ab58-8dc925987879",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    },
+    "s_302ff795e0dfa4": {
+      "agent_id": {
+        "tool": "windsurf",
+        "id": "8e1c8cf5-999e-4cf3-87fb-789a15d6f110",
+        "model": "SWE-1.7"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    }
+  }
+}

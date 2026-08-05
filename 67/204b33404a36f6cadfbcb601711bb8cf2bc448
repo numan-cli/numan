@@ -1,0 +1,23 @@
+src/cmd/plugin_lifecycle.rs
+  s_2b89eaf48e0bf9::t_78144b82050fec 167-170
+  s_2b89eaf48e0bf9::t_c669eee16aaf8b 301-454
+  s_2b89eaf48e0bf9::t_fcafb81c2808c1 217-242,244-265,267-288
+  s_2b89eaf48e0bf9::t_0dbce7e4be3d26 243,266
+  s_2b89eaf48e0bf9::t_daaba2fabaed71 21,298-300
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "67204b33404a36f6cadfbcb601711bb8cf2bc448",
+  "prompts": {},
+  "sessions": {
+    "s_2b89eaf48e0bf9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0c938dcd-4797-4f21-84dc-089f6a387dca",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

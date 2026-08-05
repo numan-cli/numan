@@ -1,0 +1,88 @@
+src/nu/bootstrap.rs
+  s_b99a1db21af303::t_90dafce40a4a4c 19,92-113,115,269-277,282-285,308-311,633-634,642-647,651,655-659,661-666,690,710,746,748,783-810
+src/cmd/try_cmd.rs
+  s_b99a1db21af303::t_90dafce40a4a4c 1-378
+tests/completions_test.rs
+  s_b99a1db21af303::t_3258487681c0a3 18
+src/cmd/search.rs
+  s_b99a1db21af303::t_90dafce40a4a4c 1-2,4-5,7,10-21,23,26,30-41,44-82,84,86-98,104-170
+src/cmd/install.rs
+  s_b99a1db21af303::t_90dafce40a4a4c 1,3,5,7,9-10,12,29-32,34,36-61,63-73,76-78,96-160
+src/cmd/info.rs
+  s_b99a1db21af303::t_90dafce40a4a4c 4-5,15-16,25-27,31-43,47,60-68
+src/core/resolve.rs
+  s_b99a1db21af303::t_90dafce40a4a4c 6,13-47,57-66,73,76-80,84-88,90,93-98,101-253,280-304,312-440,476,549-612,639,644
+src/cmd/nu_pin_offer.rs
+  s_b99a1db21af303::t_eb0b58c88df70e 1-2,4-8,10-14,17-31,33-60,62-72,75-82,86-87
+  s_b99a1db21af303::t_97672c510d75f7 3,9,15-16,32,61,73-74,83-85
+AGENTS.md
+  s_d45850b3ec5b3a::t_9266e7a2aa9eb1 18,45-46,59-61,140,203-212
+CLAUDE.md
+  s_b99a1db21af303::t_3644eea5a39ec0 10
+README.md
+  s_31f07daac56a3a::t_b30698f9b8cc33 28,183-189,196,224,227-229,244-245,393
+src/cli.rs
+  s_a72606496bd618::t_046767f82e2436 25,62-63
+src/cmd/doctor.rs
+  s_4f0ebf702ce7c5::t_f08fca0b981ffa 896,945
+src/cmd/init.rs
+  s_4f0ebf702ce7c5::t_e79a951ac29069 15,135-137,146-148
+src/cmd/mod.rs
+  s_d45850b3ec5b3a::t_18ce767f43deab 10,17
+src/cmd/setup.rs
+  s_4f0ebf702ce7c5::t_2535dda992fa0d 43-46,48,93
+src/main.rs
+  s_4f0ebf702ce7c5::t_956485f8ecb747 23,45
+src/util/hints.rs
+  s_4f0ebf702ce7c5::t_f7fb5b3b9f7255 24-31
+tests/setup_nu_test.rs
+  s_4f0ebf702ce7c5::t_9f94b0eddc1393 65,89,142,182
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "e198cbccfc7e3a1b7fa2b0c1f54778394351326d",
+  "prompts": {},
+  "sessions": {
+    "s_31f07daac56a3a": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "50dc6f04-f298-41f5-bab4-01544f953e2b",
+        "model": "default"
+      },
+      "human_author": "Anthony Thompson <github@trackdub.com>"
+    },
+    "s_4f0ebf702ce7c5": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d8ec0c13-8248-4a58-88da-060bb42e8712",
+        "model": "default"
+      },
+      "human_author": "Anthony Thompson <github@trackdub.com>"
+    },
+    "s_a72606496bd618": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "1022dbbc-f97b-4e21-a2ff-73c21333aeab",
+        "model": "default"
+      },
+      "human_author": "Anthony Thompson <github@trackdub.com>"
+    },
+    "s_b99a1db21af303": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "037a626a-2e7d-4352-b3ab-6328abc8e631",
+        "model": "default"
+      },
+      "human_author": "Anthony Thompson <github@trackdub.com>"
+    },
+    "s_d45850b3ec5b3a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a39-ceb6-72e2-8e2f-2f74a904f982",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Anthony Thompson <github@trackdub.com>"
+    }
+  }
+}

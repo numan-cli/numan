@@ -1,0 +1,33 @@
+src/cmd/deactivate.rs
+  s_2b89eaf48e0bf9::t_0ea31627ac2c7e 621-660,1648
+  s_2b89eaf48e0bf9::t_b09d1da28f8799 88-90
+  s_2b89eaf48e0bf9::t_2f1a257b13bbe0 91
+  s_2b89eaf48e0bf9::t_8339587da95daa 27-31
+  s_2b89eaf48e0bf9::t_13682e3672c0f0 711,715
+  s_2b89eaf48e0bf9::t_8b73912c69ae54 182-183
+  s_2b89eaf48e0bf9::t_089346184beee1 769-770,773
+  s_2b89eaf48e0bf9::t_55de141f0d672e 1571-1576,1587-1647
+  s_2b89eaf48e0bf9::t_ed7b0bb711b6e6 575,578
+  s_2b89eaf48e0bf9::t_91a1a024a5b806 124
+  s_2b89eaf48e0bf9::t_2445cec75533da 1649
+src/cmd/doctor.rs
+  s_2b89eaf48e0bf9::t_d85c0384db3297 939-974
+src/util/hints.rs
+  s_2b89eaf48e0bf9::t_32a8076c0e028c 127-136
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "ecfb5724cc3b9e8cf60d6373cff47c0357b9a6fa",
+  "prompts": {},
+  "sessions": {
+    "s_2b89eaf48e0bf9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0c938dcd-4797-4f21-84dc-089f6a387dca",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

@@ -1,0 +1,43 @@
+src/cmd/update.rs
+  s_6c58868655aae2::t_148c1a42f72867 580
+  s_6c58868655aae2::t_6402e23935c129 1208-1212,1222
+  s_6c58868655aae2::t_5623a59a5bf330 734,736,749,751,764
+src/util/hints.rs
+  s_6c58868655aae2::t_6f87df456072e4 110,114-115,127,137-138,171,178-179
+docs/numan-doctor.md
+  s_6c58868655aae2::t_5702241aa1e721 145
+src/cmd/doctor.rs
+  s_6c58868655aae2::t_6f87df456072e4 702-703,1873-1874,1881-1882
+docs/acceptance/active-plugin-update-real-nu.md
+  s_6c58868655aae2::t_5702241aa1e721 17-18,21,52,59-60,74-76
+src/state/lifecycle_journal.rs
+  s_6c58868655aae2::t_148c1a42f72867 22
+tests/plugin_lifecycle_real_nu.rs
+  s_6c58868655aae2::t_1bbab4a18957b1 15-17
+tests/plugin_active_update_real_nu.rs
+  s_6c58868655aae2::t_5623a59a5bf330 55,78,80,173-174
+AGENTS.md
+  s_6c58868655aae2::t_1bbab4a18957b1 61,77,133,177-178,238
+src/state/active_plugin_mutation.rs
+  s_6c58868655aae2::t_5623a59a5bf330 71,74,78,89
+  s_6c58868655aae2::t_6f87df456072e4 3-5,13-14,18-19,29,35,57,72,79
+  s_6c58868655aae2::t_6402e23935c129 37-39
+docs/active-plugin-gate.md
+  s_6c58868655aae2::t_5702241aa1e721 7,14,19,22,25,29,42-43,59,64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "0217ea1976a9619ea4ef24082103c17e9edf65ce",
+  "prompts": {},
+  "sessions": {
+    "s_6c58868655aae2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fab11-b45b-76c0-9653-39aece85b698",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

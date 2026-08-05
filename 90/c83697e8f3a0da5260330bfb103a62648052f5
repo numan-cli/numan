@@ -1,0 +1,23 @@
+docs/superpowers/plans/2026-07-12-autoload-journal-recovery.md
+  s_7c56b5a16a642a::t_0bd54cedc0875d 765-804,817-846
+  s_7c56b5a16a642a::t_860a7350fc548f 197,203,206,211-244,249-282,287-347,352-389
+  s_7c56b5a16a642a::t_2917bd845bf375 391-540
+  s_7c56b5a16a642a::t_a14c8aa581bbc9 563,566-578,590-635,642-685,687-723,728-740,745-750
+  s_7c56b5a16a642a::t_f3e861f99ebce7 1-196,198-202,204-205,207-210,245-248,283-286,348-351,390,541-562,564-565,579-589,636-641,686,724-727,741-744,751-764,805-816,847-951
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "90c83697e8f3a0da5260330bfb103a62648052f5",
+  "prompts": {},
+  "sessions": {
+    "s_7c56b5a16a642a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f58e6-43e2-7a50-bee3-03507d3b9c3a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    }
+  }
+}

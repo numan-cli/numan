@@ -1,0 +1,41 @@
+src/nupm_compat/walk.rs
+  s_fd528823e8d35d::t_2af394a9d75630 273-282,293
+src/nupm_compat/classify.rs
+  s_fd528823e8d35d::t_2af394a9d75630 231-240,255
+Cargo.lock
+  s_fd528823e8d35d::t_db24128696b027 1204
+src/cmd/doctor.rs
+  s_fd528823e8d35d::t_49303e60f31e22 122,295-307,313,890,938
+src/cmd/setup.rs
+  s_fd528823e8d35d::t_222d086d36aa52 10,71-76
+src/nu/bootstrap.rs
+  s_fd528823e8d35d::t_ca1f5b3d29c19b 579-580
+tests/doctor_test.rs
+  s_fd528823e8d35d::t_e65dacd61f2993 18,211,257
+Cargo.toml
+  s_24e9bbda1b58fb::t_66936c21d0fefc 80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "93383a72e8e7c107c19aa30e5be58d02054d06a0",
+  "prompts": {},
+  "sessions": {
+    "s_24e9bbda1b58fb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b607f816-c1cc-43fc-9143-108c6e6ffe86",
+        "model": "unknown"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    },
+    "s_fd528823e8d35d": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "",
+        "model": "unknown"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    }
+  }
+}

@@ -1,0 +1,73 @@
+docs/acceptance/official-registry-stage1.md
+  s_7c3809fb3884e3::t_563a23991a59f9 6
+  s_b99a1db21af303::t_165edf35b6df4f 9-10,15,17,98,100,102
+src/cmd/remove.rs
+  s_7c3809fb3884e3::t_b679b4a76eb1c7 6,10
+  s_7c3809fb3884e3::t_1d6ab178b5a3c4 18,33-40,109-151,160,169,181,193,205,215,226,237,247-248
+  s_7c3809fb3884e3::t_3ad3f7d25df230 152-154,157-159
+  s_7c3809fb3884e3::t_e61e437c429b91 161-163,166-168
+  s_7c3809fb3884e3::t_47e0637ad9f907 170-172,178-180
+  s_7c3809fb3884e3::t_ffb3fa78c9410a 182-184,190-192
+  s_7c3809fb3884e3::t_8cab8beebf7550 194-196,202-204
+  s_7c3809fb3884e3::t_d4e0c4be606fbd 206-208,212-214
+  s_7c3809fb3884e3::t_7755f745edc5a1 216-218,223-225
+  s_7c3809fb3884e3::t_9fd1b393e775f5 227-229,234-236
+  s_7c3809fb3884e3::t_437744b362af1d 238-240,244-246
+  s_24e9bbda1b58fb::t_6ede41b1d384dd 155-156,164-165,173-177,185-189,197-201,209-211,219-222,230-233,241-243
+docs/active-plugin-gate.md
+  s_7c3809fb3884e3::t_760305fdea3e68 1-27
+AGENTS.md
+  s_ae12ad8694742c::t_b57e8872d00b2e 55,158-159,219
+CHANGELOG.md
+  s_ae12ad8694742c::t_a27399bb8751c2 14,23-24
+tests/support/acceptance/model.rs
+  s_b99a1db21af303::t_5a5794f221f4b2 98-100
+tests/support/acceptance/runner.rs
+  s_b99a1db21af303::t_167c1a4b899c6a 566-567,569-576,578
+src/cmd/update.rs
+  s_24e9bbda1b58fb::t_74197aab159d0c 17,309,402-405
+src/cmd/doctor.rs
+  s_7c3809fb3884e3::t_307af5ef0dd954 591-606,1188,1554-1631
+src/util/hints.rs
+  s_7c3809fb3884e3::t_049d77202affb9 88-98,103-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "fb7dc91e584514ed59d43f562d60dbea314b6d47",
+  "prompts": {},
+  "sessions": {
+    "s_24e9bbda1b58fb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b607f816-c1cc-43fc-9143-108c6e6ffe86",
+        "model": "unknown"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    },
+    "s_7c3809fb3884e3": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "5ff7f5f5-4811-47f5-907b-4a0776f40120",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    },
+    "s_ae12ad8694742c": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "f0df6249-09df-4359-9d67-5c8bfb490fbc",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    },
+    "s_b99a1db21af303": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "037a626a-2e7d-4352-b3ab-6328abc8e631",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+src/cmd/doctor.rs
+  s_463761de7f5816::t_48971006caf459 2523-2572
+  s_463761de7f5816::t_fe213074b4fe4e 1382-1416
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "1d6fa0e22a71a5c2311fc3d7a6a82999a800e108",
+  "prompts": {},
+  "sessions": {
+    "s_463761de7f5816": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "51dfbf17-dd54-4faa-8ccd-65418edec16b",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

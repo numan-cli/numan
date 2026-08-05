@@ -1,0 +1,20 @@
+docs/superpowers/specs/2026-07-12-autoload-journal-recovery-design.md
+  s_7c56b5a16a642a::t_2cb90a8d478c02 1-111,114,116,118-124,126-174
+  s_7c56b5a16a642a::t_2ac4875b17bace 112-113,115,117,125
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "bb80482553383ef7f7d45b2134e7f13b0659d2d7",
+  "prompts": {},
+  "sessions": {
+    "s_7c56b5a16a642a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f58e6-43e2-7a50-bee3-03507d3b9c3a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": null
+    }
+  }
+}

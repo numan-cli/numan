@@ -1,0 +1,60 @@
+tests/plugin_lifecycle_real_nu.rs
+  s_2b89eaf48e0bf9::t_53da5fd1b6348a 1,9-10,13,15-17,19-21,23,28,51-53
+.github/workflows/active-plugin-update-acceptance.yml
+  s_2b89eaf48e0bf9::t_1bdc3ff79f7946 1-56
+docs/active-plugin-gate.md
+  s_2b89eaf48e0bf9::t_d33d1eda004a02 57-60,62,64,66
+tests/plugin_active_update_real_nu.rs
+  s_2b89eaf48e0bf9::t_5d434dc323265a 1-14,19-30,34-172,174-235,237-269,271-313
+  s_2b89eaf48e0bf9::t_74da19dd773fcf 173
+  s_2b89eaf48e0bf9::t_026072393fc1da 236
+  s_2b89eaf48e0bf9::t_d3e155598910c8 31-33,270
+  s_4b2adf0111cbf3::t_61928df14e1231 15-18
+docs/acceptance/active-plugin-update-real-nu.md
+  s_2b89eaf48e0bf9::t_029122086f03ca 1-20,24-73
+  s_2b89eaf48e0bf9::t_3f89ef3ef92ed8 21-23
+tests/support/active_update/mod.rs
+  s_2b89eaf48e0bf9::t_29abe07beaad93 302
+  s_2b89eaf48e0bf9::t_4f4476b6aa9e79 1-70,72-73,75,77-78,80-83,85-87,89,91,93-301,303-677
+  s_2b89eaf48e0bf9::t_67067fe9043927 71,74,76,79,84,88,90,92
+AGENTS.md
+  s_2b89eaf48e0bf9::t_8edb444d8c189b 167-168
+  s_2b89eaf48e0bf9::t_31453ba8b1ae1c 107-109
+  s_2b89eaf48e0bf9::t_e2e2c25bc60c04 209
+.github/workflows/ci.yml
+  s_b99a1db21af303::t_e71e5237a31dac 91-94
+tests/support/mod.rs
+  s_b99a1db21af303::t_4eea80a227683f 2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "5fba00d5f9fafa484c5a732b7eeb13b68ba3f382",
+  "prompts": {},
+  "sessions": {
+    "s_2b89eaf48e0bf9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0c938dcd-4797-4f21-84dc-089f6a387dca",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    },
+    "s_4b2adf0111cbf3": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "2b0b9673-29fb-4287-a13b-5a0096c3d90e",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    },
+    "s_b99a1db21af303": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "037a626a-2e7d-4352-b3ab-6328abc8e631",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

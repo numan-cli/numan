@@ -1,0 +1,68 @@
+src/cmd/activate.rs
+  s_80b8b6ade46019::t_01f21b07cf1439 663
+  s_80b8b6ade46019::t_fd3f2a72d3670d 665
+src/state/active_plugin_mutation.rs
+  s_80b8b6ade46019::t_6eece3a50f4573 3-5,10-13,16-17,21
+  s_9ec1680b094402::t_b7093c195e1d36 22-24,30,33,37,39,41,43,45,48
+AGENTS.md
+  s_80b8b6ade46019::t_61c9244cac5132 70
+  s_80b8b6ade46019::t_9b3a07736c50d6 55
+  s_80b8b6ade46019::t_d2cfa5c202b302 164-165
+  s_80b8b6ade46019::t_60381bb26dec3a 225
+  s_80b8b6ade46019::t_1b62f01a58efaf 123
+CHANGELOG.md
+  s_80b8b6ade46019::t_18b1eab1c1dc22 16
+  s_80b8b6ade46019::t_848c6a188c049a 27
+src/state/lifecycle_journal.rs
+  s_80b8b6ade46019::t_c7c6072ee2e6d2 22
+docs/active-plugin-gate.md
+  s_80b8b6ade46019::t_5f6ba1d459182e 7,14
+  s_80b8b6ade46019::t_6362f802bfca2c 19,22,25,38-39,41,53-58
+src/util/hints.rs
+  s_80b8b6ade46019::t_2a51d036965dd9 110,114-115
+src/cmd/doctor.rs
+  s_80b8b6ade46019::t_981bde9929db4b 636-637,642-643
+tests/plugin_lifecycle_real_nu.rs
+  s_80b8b6ade46019::t_0b58381aa29fd9 3,5,9,13-15,17,21
+  s_80b8b6ade46019::t_4575ad3ed829e5 16
+  s_80b8b6ade46019::t_eb0095fb8c1baf 18-20
+  s_80b8b6ade46019::t_c7d0021c2fc15a 22-24
+  s_80b8b6ade46019::t_44c5608e61933e 40,55
+src/cmd/update.rs
+  s_80b8b6ade46019::t_dd71e2516400d8 474-481,491-500,502-503,569,641,796
+  s_80b8b6ade46019::t_e86d6e07c60a2e 104,123,161,182,190-199,201-218,240,242-248,255,261,264-280,284,288,293-295,313,339-364,568,638,889
+  s_80b8b6ade46019::t_4ed6b5ba3336a1 15,21
+  s_80b8b6ade46019::t_33fe71043bb305 58,83-87,513,565-567,570-577,606,612,615,621,626,630-637,639-640,642-645,663,770-771,792-795,797-798,802,810,828,839-842,878,884,890-893,899,936-941,946
+src/cmd/deactivate.rs
+  s_80b8b6ade46019::t_e1e9fc2d555602 28,138,194,369,480,587-592,673,698,1245-1248
+src/cmd/plugin_lifecycle.rs
+  s_80b8b6ade46019::t_a8a2115e481032 40-43,73-97,142-145
+src/state/plugin_deactivate_journal.rs
+  s_80b8b6ade46019::t_52e7c26ade710c 106
+tests/support/acceptance/runner.rs
+  s_80b8b6ade46019::t_40a9761f1d8439 574-575,586-588,590-592
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "119583ea5c5e15aeb720e862175e0d23a35aeeb3",
+  "prompts": {},
+  "sessions": {
+    "s_80b8b6ade46019": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "47cfa36d-fc98-4355-b43f-2e91d13c1da1",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    },
+    "s_9ec1680b094402": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "69b9ab76-4738-48ee-82f1-4b78b923820e",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

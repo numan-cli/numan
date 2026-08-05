@@ -1,0 +1,22 @@
+src/util/hints.rs
+  s_2b89eaf48e0bf9::t_9ef378025c3e68 123-128
+  s_2b89eaf48e0bf9::t_1ce9e64e8315ba 121-122,129-130,143-144
+src/cmd/doctor.rs
+  s_2b89eaf48e0bf9::t_3e9717aa7d4df3 30-31,640,1715
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "1fe0ef3d2a4d8888a57a15576d9e7782519c91c1",
+  "prompts": {},
+  "sessions": {
+    "s_2b89eaf48e0bf9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0c938dcd-4797-4f21-84dc-089f6a387dca",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

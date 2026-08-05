@@ -1,0 +1,45 @@
+src/cmd/setup.rs
+  s_a92fb5b3caa63e::t_149cad7a6ea3e4 553-555,562,573-576,584
+  s_a92fb5b3caa63e::t_3c662cc78835ea 244-245
+src/nu/migrate_legacy.rs
+  s_a92fb5b3caa63e::t_611e9689cfe956 169-170,172-184
+src/cmd/use_cmd.rs
+  s_a92fb5b3caa63e::t_c2d48e4ac31834 122,128-129
+  s_a92fb5b3caa63e::t_59cf24203e7cfa 118
+src/cmd/remove.rs
+  s_a92fb5b3caa63e::t_101ab582ad0138 29-33,37
+  s_a92fb5b3caa63e::t_0b23ad192ba451 268-269,271,278,295-296,303
+  s_a92fb5b3caa63e::t_f0eba3d2425cdd 3
+src/nu/version_manager.rs
+  s_a92fb5b3caa63e::t_56fbe10a0df504 328-332,336,339,344,350,354-355
+  s_a92fb5b3caa63e::t_581586902b22b9 421,429-430
+src/nu/paths.rs
+  s_a92fb5b3caa63e::t_7dedf5ca28c7b1 372-376,388,391
+  s_a92fb5b3caa63e::t_f5ebb184dfb180 11
+AGENTS.md
+  s_a92fb5b3caa63e::t_673bc0f781f8ff 147
+src/state/migration_journal.rs
+  s_a92fb5b3caa63e::t_d91e22aa9df88a 308-309,311
+  s_a92fb5b3caa63e::t_5be40eb92ac767 242-243,245,262-263
+  s_a92fb5b3caa63e::t_e898d0cb79a3ac 40
+src/cmd/snapshot.rs
+  s_a92fb5b3caa63e::t_39e2c495d22007 205-208,212,225-228,232
+  s_a92fb5b3caa63e::t_54ca63a001f898 274-275,277,292-293,304,319-320
+  s_a92fb5b3caa63e::t_8d4a6aa95eac4f 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "302d5b6415d5922349a28a23bfc7297401cb2e75",
+  "prompts": {},
+  "sessions": {
+    "s_a92fb5b3caa63e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "cd521e45-4f5a-4ec3-81ea-872c74d16608",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+.github/workflows/ci.yml
+  s_dbbceab836feee::t_d0f542ef16eaa0 91-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "06814a0778d06fe6b0cdeb68677a1deca179639f",
+  "prompts": {},
+  "sessions": {
+    "s_dbbceab836feee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6de1-442c-7240-bf88-60af37237a1b",
+        "model": "unknown"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    }
+  }
+}

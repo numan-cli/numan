@@ -1,0 +1,29 @@
+tests/support/acceptance/runner.rs
+  s_dbbceab836feee::t_48e997a642bd29 22-23,850
+  s_dbbceab836feee::t_de7586fd178146 149-151,162-164,181-182,185-188,223-225,229-233,236-240,246-247,254-255,269-270,335-338,407-409,411-415,417-421,423-426,432-435,438-440,451-454,463-468,471-473,484-485,518-520,544-548,639-641,837,881,899
+  s_dbbceab836feee::t_c8c5c0d43c3baa 4,7-20,25,37-62,102-109,114-148,152-161,165-180,183-184,189-222,226-228,234-235,241-245,248-253,256-268,271-334,339-406,410,416,422,427-431,436-437,441-450,455-462,469-470,474-483,486-517,521-543,549-638,642-643,654-771,777,782-788,799-836,838-849,851,855-858,869-880,882-898,900-935,938,942-945,959-976
+  s_dbbceab836feee::t_b57c673f06970e 772-776,778-781,789-798
+  s_dbbceab836feee::t_12823b70855b2e 852-854
+tests/support/acceptance/model.rs
+  s_dbbceab836feee::t_7b229a74e706cb 296-299
+  s_dbbceab836feee::t_b57c673f06970e 324-328,339-365,371-378
+tests/official_registry_stage1.rs
+  s_dbbceab836feee::t_c8c5c0d43c3baa 269-287
+  s_dbbceab836feee::t_7b229a74e706cb 251-254
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "733dcbbff4520c668592af7f91d15c737c97fcb2",
+  "prompts": {},
+  "sessions": {
+    "s_dbbceab836feee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6de1-442c-7240-bf88-60af37237a1b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    }
+  }
+}

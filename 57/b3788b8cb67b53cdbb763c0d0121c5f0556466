@@ -1,0 +1,20 @@
+src/core/resolve.rs
+  s_2b89eaf48e0bf9::t_64aa7d03ef6fd8 610-626,629,631-652
+  s_2b89eaf48e0bf9::t_f8437e1f8d44b4 627-628,630
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "57b3788b8cb67b53cdbb763c0d0121c5f0556466",
+  "prompts": {},
+  "sessions": {
+    "s_2b89eaf48e0bf9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0c938dcd-4797-4f21-84dc-089f6a387dca",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

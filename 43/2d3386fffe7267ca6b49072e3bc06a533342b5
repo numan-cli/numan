@@ -1,0 +1,30 @@
+src/cmd/update.rs
+  s_2b89eaf48e0bf9::t_7360c59cd52040 374-378
+  s_2b89eaf48e0bf9::t_c08d907e724c2a 279-281
+  s_2b89eaf48e0bf9::t_221e0b2e9dbaae 330-332
+src/cmd/plugin_lifecycle.rs
+  s_2b89eaf48e0bf9::t_a08906995bde2f 238-243,268,277,279-299
+  s_2b89eaf48e0bf9::t_7f97cc0b8718c5 58-62,84
+  s_2b89eaf48e0bf9::t_acac0ecc290112 222-237,244-267,269-276,278,300-315
+  s_2b89eaf48e0bf9::t_4645bac869b301 21
+  s_2b89eaf48e0bf9::t_9221d56c8ea10a 487-492,498-499,537,567-638
+  s_2b89eaf48e0bf9::t_464f33fc6a9dbe 64-66
+  s_2b89eaf48e0bf9::t_e535516facf883 422,432,455-460,482
+  s_2b89eaf48e0bf9::t_ffa4a0f727912f 63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "432d3386fffe7267ca6b49072e3bc06a533342b5",
+  "prompts": {},
+  "sessions": {
+    "s_2b89eaf48e0bf9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0c938dcd-4797-4f21-84dc-089f6a387dca",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

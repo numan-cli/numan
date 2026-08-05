@@ -1,0 +1,21 @@
+src/nu/bootstrap.rs
+  s_fd528823e8d35d::t_949e4d757cdd7a 34
+  s_fd528823e8d35d::t_be9e52571ca140 8,31-33
+  s_fd528823e8d35d::t_ca3d23546f69fc 209-236,251,254-259,701-702
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "40bef3f0ffdb3eeb899417619d8ebc21eeea5f8b",
+  "prompts": {},
+  "sessions": {
+    "s_fd528823e8d35d": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "",
+        "model": "unknown"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    }
+  }
+}

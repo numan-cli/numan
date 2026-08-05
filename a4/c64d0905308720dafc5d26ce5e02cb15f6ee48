@@ -1,0 +1,21 @@
+.github/workflows/official-registry-acceptance.yml
+  s_dbbceab836feee::t_c049f3c670ec92 1-53
+docs/acceptance/official-registry-stage1.md
+  s_dbbceab836feee::t_c049f3c670ec92 1-104
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "a4c64d0905308720dafc5d26ce5e02cb15f6ee48",
+  "prompts": {},
+  "sessions": {
+    "s_dbbceab836feee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6de1-442c-7240-bf88-60af37237a1b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "tonythethompson <tonythethompson@hotmail.com>"
+    }
+  }
+}

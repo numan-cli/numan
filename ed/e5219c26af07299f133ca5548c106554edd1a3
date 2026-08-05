@@ -1,0 +1,19 @@
+src/core/resolve.rs
+  s_2b89eaf48e0bf9::t_27a1024fdf9bed 290-294,312-325,327,329,346-348,350-353,577-592,597-616
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "ede5219c26af07299f133ca5548c106554edd1a3",
+  "prompts": {},
+  "sessions": {
+    "s_2b89eaf48e0bf9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0c938dcd-4797-4f21-84dc-089f6a387dca",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

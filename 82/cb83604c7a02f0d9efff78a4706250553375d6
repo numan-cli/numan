@@ -1,0 +1,19 @@
+src/cmd/search.rs
+  s_be8ce11bd96922::t_63e756c5399efb 56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "82cb83604c7a02f0d9efff78a4706250553375d6",
+  "prompts": {},
+  "sessions": {
+    "s_be8ce11bd96922": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "6527f90d-2d93-42fe-87d8-c2630411222b",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

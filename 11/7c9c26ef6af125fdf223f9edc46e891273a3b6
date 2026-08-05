@@ -1,0 +1,27 @@
+docs/PACKAGING.md
+  s_417de239f366a5::t_e29ae675ad3080 10
+docs/RELEASING.md
+  s_417de239f366a5::t_93708d6d5beb3c 52
+.github/workflows/release.yml
+  s_417de239f366a5::t_d01f33f8763033 204-215
+.github/workflows/winget.yml
+  s_417de239f366a5::t_78593844fd057c 38,46-49
+README.md
+  s_417de239f366a5::t_18f02813ff2ac2 412-413
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "117c9c26ef6af125fdf223f9edc46e891273a3b6",
+  "prompts": {},
+  "sessions": {
+    "s_417de239f366a5": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "216849da-412e-41c1-a522-db3459bb2857",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

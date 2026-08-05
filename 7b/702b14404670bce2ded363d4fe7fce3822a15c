@@ -1,0 +1,26 @@
+src/nu/bootstrap.rs
+  s_a92fb5b3caa63e::t_fae82b816555eb 457-458
+  s_a92fb5b3caa63e::t_fea9f81ad62d31 490
+tests/setup_nu_test.rs
+  s_a92fb5b3caa63e::t_5cd60e4a6eeba3 283
+  s_a92fb5b3caa63e::t_a7315e9dac4404 275-280
+src/util/confirm.rs
+  s_a92fb5b3caa63e::t_0f76688bc1b70a 148-158
+  s_a92fb5b3caa63e::t_97a7697488d4e1 90-107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "7b702b14404670bce2ded363d4fe7fce3822a15c",
+  "prompts": {},
+  "sessions": {
+    "s_a92fb5b3caa63e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "cd521e45-4f5a-4ec3-81ea-872c74d16608",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+tests/plugin_active_update_real_nu.rs
+  s_2b89eaf48e0bf9::t_7b293c4ad6a0d4 31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "e98f85f594f1741c18b47e444c3ebe3dd6db9221",
+  "prompts": {},
+  "sessions": {
+    "s_2b89eaf48e0bf9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0c938dcd-4797-4f21-84dc-089f6a387dca",
+        "model": "default"
+      },
+      "human_author": "tonythethompson <github@trackdub.com>"
+    }
+  }
+}
