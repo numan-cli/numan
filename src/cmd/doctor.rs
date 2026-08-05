@@ -33,6 +33,7 @@ use crate::state::nupm_import::NupmImportsFile;
 use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::fs_safety::{acquire_mutation_lock, assert_managed_file_owned};
+use numan_install_guard::{classify_binary_path, discover_installations, InstallChannel};
 use crate::util::hints::{
     self, active_plugin_mutation_gated_doctor_message, registry_none_fix, setup_nu_use_existing,
     ACTIVE_PLUGIN_MUTATION_GATED_FIX, CMD_ACTIVATE, CMD_DEACTIVATE, CMD_DOCTOR_FIX, CMD_INIT,
@@ -195,6 +196,7 @@ pub fn run_checks_with_options(
     let mut findings = Vec::new();
 
     check_root_layout(root, &mut findings);
+    check_install_channels(&mut findings);
     check_active_version_marker(root, &mut findings);
     let nu_paths = check_nu_paths(root, options, &mut findings);
     check_nu_environments(root, options, &mut findings);
@@ -320,6 +322,59 @@ fn nu_is_available(root: &Path) -> bool {
         }
     }
     false
+}
+
+fn check_install_channels(findings: &mut Vec<Finding>) {
+    let installs = discover_installations();
+    if installs.len() <= 1 {
+        return;
+    }
+
+    let channels: std::collections::HashSet<InstallChannel> =
+        installs.iter().map(|install| install.channel).collect();
+    if channels.len() <= 1 {
+        return;
+    }
+
+    let current = std::env::current_exe().ok();
+    let current_channel = current
+        .as_ref()
+        .map(|path| classify_binary_path(path))
+        .unwrap_or(InstallChannel::Unknown);
+
+    let mut lines = vec![
+        "Multiple numan installs from different package managers were detected:".to_string(),
+    ];
+    for install in &installs {
+        lines.push(format!(
+            "  {} ({})",
+            install.path.display(),
+            install.channel.label()
+        ));
+    }
+    lines.push(format!(
+        "This session is running the {} build.",
+        current_channel.label()
+    ));
+    lines.push(
+        "Keep one install channel to avoid PATH ambiguity. Uninstall the others before reinstalling."
+            .to_string(),
+    );
+
+    let fix = installs
+        .iter()
+        .filter(|install| install.channel != current_channel)
+        .filter_map(|install| install.channel.uninstall_hint())
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    findings.push(finding(
+        "install.multiple_channels",
+        Severity::Warn,
+        lines.join("\n"),
+        if fix.is_empty() { None } else { Some(fix.as_str()) },
+        RepairTier::Manual,
+    ));
 }
 
 /// Detect a present-but-unreadable `nu_state/active-version.json`.

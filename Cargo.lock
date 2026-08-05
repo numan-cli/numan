@@ -1213,6 +1213,7 @@ dependencies = [
  "hex",
  "indicatif",
  "libc",
+ "numan-install-guard",
  "rand_core",
  "reqwest",
  "semver",
@@ -1228,6 +1229,10 @@ dependencies = [
  "xz2",
  "zip",
 ]
+
+[[package]]
+name = "numan-install-guard"
+version = "0.1.0"
 
 [[package]]
 name = "number_prefix"

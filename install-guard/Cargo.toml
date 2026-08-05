@@ -1,0 +1,11 @@
+[package]
+name = "numan-install-guard"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "numan-install-guard"
+path = "src/main.rs"
+
+[dependencies]

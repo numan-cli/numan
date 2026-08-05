@@ -17,13 +17,14 @@ exclude = [
     "tests/fixtures/**",
     "Phase*.md",
     ".tmp*",
+    "install-guard/**",
 ]
 
-[[bin]]
-name = "numan"
-path = "src/main.rs"
+[build-dependencies]
+numan-install-guard = { path = "install-guard" }
 
 [dependencies]
+numan-install-guard = { path = "install-guard" }
 # CLI
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
@@ -75,6 +76,10 @@ uuid = { version = "1", features = ["v7", "v4"] }
 
 # Git (for source builds and registry sync)
 git2 = "0.21"
+
+[[bin]]
+name = "numan"
+path = "src/main.rs"
 
 # stdio redirect for doctor --json repair passes (Unix only)
 [target.'cfg(unix)'.dependencies]

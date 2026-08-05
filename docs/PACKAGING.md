@@ -37,10 +37,22 @@ python3 scripts/render_homebrew_formula.py --version X.Y.Z --sha256sums SHA256SU
 | GitHub Release | Download archive from [Releases](https://github.com/tonythethompson/numan/releases) |
 | crates.io | `cargo install numan-cli` |
 | From git | `cargo install --git https://github.com/tonythethompson/numan` |
-| Homebrew (tap) | `brew tap tonythethompson/numan && brew install numan` |
-| winget (community) | `winget install tonythethompson.numan` |
+| Homebrew tap | `brew tap tonythethompson/numan && brew install numan` (use `scripts/install-homebrew.sh` when switching from cargo/winget) |
+| winget (community) | `winget install tonythethompson.numan` (use `scripts/install-winget.ps1` when switching from cargo/Homebrew) |
 
-## Archive layout
+## Install channel guard
+
+Cross-channel installs (cargo vs winget vs Homebrew) prompt to uninstall the existing copy first; declining cancels the install.
+
+| Channel | Guard behavior |
+|---------|----------------|
+| `cargo install numan-cli` | Automatic via `build.rs` during install |
+| winget | `powershell -File scripts/install-winget.ps1` |
+| Homebrew tap | `bash scripts/install-homebrew.sh` |
+| CI / automation | Set `NUMAN_SKIP_INSTALL_GUARD=1` to bypass |
+
+`numan doctor` warns when multiple channels are detected (`install.multiple_channels`).
+
 
 Release archives extract to `numan-<version>-<target>/` containing the `numan`
 (or `numan.exe`) binary. Homebrew and winget installers assume this layout.

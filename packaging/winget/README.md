@@ -20,6 +20,14 @@ After manifests are accepted in [microsoft/winget-pkgs](https://github.com/micro
 winget install tonythethompson.numan
 ```
 
+If you already installed numan via **cargo** or **Homebrew**, use the install guard wrapper so winget prompts to remove the other copy first (plain `winget install` does not):
+
+```powershell
+powershell -File scripts/install-winget.ps1
+```
+
+`cargo install numan-cli` runs the same guard automatically during install.
+
 ## Automated updates
 
 The [`Publish to WinGet`](../../.github/workflows/winget.yml) workflow submits one update PR after each published GitHub Release. It uses the Windows `.zip` release asset and the existing `tonythethompson/winget-pkgs` fork.

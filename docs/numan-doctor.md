@@ -129,6 +129,7 @@ Checks run in order below. Implementation should call existing validators (`NuPa
 |----|----------|-----------|
 | `nu.binary.missing_on_path` | `error` | Nu not on PATH and not under `$NUMAN_ROOT/tools/nushell/` → fix: `numan setup nu` |
 | `nu.binary.found_off_path` | `warn` | Nu exists in a known install root (e.g. `~/.cargo/bin`, `%LOCALAPPDATA%\Programs\nushell`) but not on PATH → fix: `numan setup nu use <path>` |
+| `install.multiple_channels` | `warn` | More than one `numan` binary from different install channels (cargo, winget, homebrew, release archive) → fix: uninstall the other channel(s) before reinstalling |
 | `nu.path.version` | `info` | PATH-only Nu version (`PATH Nu: 0.114.1`), `PATH Nu: not found`, or `PATH Nu: found at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Does not treat managed Nu as PATH. Report-only (no automatic repair). |
 | `nu.managed.version` | `info` | Managed binary under `$NUMAN_ROOT/tools/nushell/` with version, `Managed Nu: not installed`, or `Managed Nu: present at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Report-only (no automatic repair). |
 | `nu.active_version.invalid` | `error` | `nu_state/active-version.json` is present but unreadable/invalid JSON. Lookup would otherwise soft-miss the marker and fall back to PATH. **auto:** copy raw bytes to `active-version.json.corrupt` (best-effort, recoverable `binary_path`), then clear via `clear_active_version` so resolution recovers cleanly. |

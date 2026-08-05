@@ -127,13 +127,15 @@ brew tap tonythethompson/numan
 brew install numan
 ```
 
-Uses the public [`homebrew-numan`](https://github.com/tonythethompson/homebrew-numan) tap. Formula digests update automatically after each GitHub Release (see [docs/PACKAGING.md](docs/PACKAGING.md)).
+Uses the public [`homebrew-numan`](https://github.com/tonythethompson/homebrew-numan) tap. Formula digests update automatically after each GitHub Release (see [docs/PACKAGING.md](docs/PACKAGING.md)). If you already have numan from cargo or winget, use `scripts/install-homebrew.sh` so the installer prompts to remove the other copy first.
 
 ### winget (Windows)
 
 ```powershell
 winget install tonythethompson.numan
 ```
+
+If you already have numan from **cargo** or **Homebrew**, use `scripts/install-winget.ps1` (winget) or `cargo install` (automatic guard) so the installer prompts to remove the other copy first.
 
 See [packaging/winget/README.md](packaging/winget/README.md) and [docs/PACKAGING.md](docs/PACKAGING.md).
 
@@ -143,7 +145,7 @@ See [packaging/winget/README.md](packaging/winget/README.md) and [docs/PACKAGING
 cargo install numan-cli
 ```
 
-Requires [Rust](https://rustup.rs/) (stable). The installed binary is named `numan`.
+Requires [Rust](https://rustup.rs/) (stable). The installed binary is named `numan`. During `cargo install`, numan checks for winget/Homebrew/release copies and prompts to uninstall them first; decline cancels the install.
 
 **Requirements:** a [Nushell](https://www.nushell.sh/) binary on `PATH` for `numan init`, `numan activate`, and related commands.
 
