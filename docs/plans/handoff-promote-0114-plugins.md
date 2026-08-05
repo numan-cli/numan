@@ -9,7 +9,7 @@ Numan's official registry has **25 packages** but only **3** work on Nu 0.114.x 
 | Repo | Path | Branch | Role |
 |------|------|--------|------|
 | numan | `d:\Dev\numan` | master | Client CLI (Rust) |
-| numan-plugins | `d:\Dev\numan-plugins` | master | CI build pipeline |
+| numan-plugins | `d:\Dev\numan-plugins` | main | CI build pipeline |
 | numan-registry | `d:\Dev\numan-registry` | main | Signed catalog |
 
 ## Pipeline (serial, per plugin)
