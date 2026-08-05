@@ -1,0 +1,369 @@
+name: Autopilot PR Remediation
+
+# Comment /autopilot on any PR. Fixes land directly on the PR branch.
+#
+# Secrets: GEMINI_API_KEY, COMPOSIO_API_KEY
+#          AUTOPILOT_TOKEN (optional PAT — without it, pushed commits won't
+#          trigger your other workflows, so nothing re-runs CI on the fix)
+# Vars:    AUTOPILOT_TEST_CMD (optional, auto-detected)
+#          AUTOPILOT_MAX_STEPS (default 100)
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: autopilot-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    if: >
+      github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.body, '/autopilot') &&
+      github.event.comment.author_association == 'OWNER'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      head_branch: ${{ steps.check.outputs.head_branch }}
+      base_branch: ${{ steps.check.outputs.base_branch }}
+    steps:
+      - name: Validate PR
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PR_JSON=$(gh pr view "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --json headRefName,baseRefName,state,isCrossRepository)
+
+          if [ "$(jq -r '.state' <<<"$PR_JSON")" != "OPEN" ]; then
+            echo "::error::PR is not open."; exit 1
+          fi
+          # Not a security gate for you — just a clear error instead of a
+          # confusing checkout failure on a branch that isn't in your repo.
+          if [ "$(jq -r '.isCrossRepository' <<<"$PR_JSON")" = "true" ]; then
+            echo "::error::Fork PR — the head branch doesn't exist in this repo."; exit 1
+          fi
+
+          {
+            echo "head_branch=$(jq -r '.headRefName' <<<"$PR_JSON")"
+            echo "base_branch=$(jq -r '.baseRefName' <<<"$PR_JSON")"
+          } >> "$GITHUB_OUTPUT"
+
+  remediate:
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Acknowledge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" \
+            --body "🤖 Autopilot active against \`${{ needs.guard.outputs.head_branch }}\`. [Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.guard.outputs.head_branch }}
+          fetch-depth: 0
+          token: ${{ secrets.AUTOPILOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Fetch unresolved review threads
+        id: threads
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api graphql --paginate -f query='
+            query($owner: String!, $repo: String!, $pr: Int!, $endCursor: String) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $pr) {
+                  reviewThreads(first: 50, after: $endCursor) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes {
+                      id
+                      isResolved
+                      path
+                      line
+                      comments(first: 20) {
+                        nodes { databaseId body author { login } }
+                      }
+                    }
+                  }
+                }
+              }
+            }' \
+            -f owner="${{ github.repository_owner }}" \
+            -f repo="${{ github.event.repository.name }}" \
+            -F pr="${{ github.event.issue.number }}" \
+          | jq -s '[ .[].data.repository.pullRequest.reviewThreads.nodes[] ]
+                   | map(select(.isResolved == false))
+                   | map(select(.comments.nodes[0].author.login // "" | test("\\[bot\\]$") | not))
+                   | map({
+                       thread_id: .id,
+                       reply_to_id: .comments.nodes[0].databaseId,
+                       path: .path,
+                       line: .line,
+                       discussion: [ .comments.nodes[] | {author: .author.login, body: .body} ]
+                     })' > "$RUNNER_TEMP/threads.json"
+
+          COUNT=$(jq 'length' "$RUNNER_TEMP/threads.json")
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "Unresolved threads: $COUNT"
+
+      - name: Exit early if nothing to do
+        if: steps.threads.outputs.count == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" \
+            --body "🤖 Autopilot: everything is already resolved!"
+
+      - name: Configure git identity
+        if: steps.threads.outputs.count != '0'
+        run: |
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge base branch
+        if: steps.threads.outputs.count != '0'
+        run: |
+          git fetch origin "${{ needs.guard.outputs.base_branch }}"
+          git merge --no-edit "origin/${{ needs.guard.outputs.base_branch }}" || true
+
+      - uses: actions/setup-node@v4
+        if: steps.threads.outputs.count != '0'
+        with:
+          node-version: '20'
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        if: steps.threads.outputs.count != '0'
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        if: steps.threads.outputs.count != '0'
+        run: |
+          if   [ -f pnpm-lock.yaml ];    then corepack enable && pnpm install --frozen-lockfile
+          elif [ -f package-lock.json ]; then npm ci
+          elif [ -f yarn.lock ];         then corepack enable && yarn install --frozen-lockfile
+          fi
+          if   [ -f requirements.txt ]; then pip install -r requirements.txt
+          elif [ -f pyproject.toml ];   then pip install -e ".[dev]" || pip install -e . || true
+          fi
+
+      - name: Resolve test command
+        if: steps.threads.outputs.count != '0'
+        id: testcmd
+        run: |
+          set -euo pipefail
+          CMD="${{ vars.AUTOPILOT_TEST_CMD }}"
+          if [ -z "$CMD" ]; then
+            if   [ -f package.json ] && jq -e '.scripts.test' package.json >/dev/null 2>&1; then CMD="npm test"
+            elif [ -f pytest.ini ] || [ -d tests ]; then CMD="pytest -q"
+            fi
+          fi
+          echo "cmd=$CMD" >> "$GITHUB_OUTPUT"
+          if [ -z "$CMD" ]; then
+            echo "::warning::No test suite found — fixes will be pushed unverified."
+          fi
+
+      # Snapshot of whether things worked BEFORE the agent touched anything.
+      # This is what makes the regression check possible: if your suite was
+      # already red, we don't punish the agent for it.
+      - name: Baseline tests
+        if: steps.threads.outputs.count != '0' && steps.testcmd.outputs.cmd != ''
+        id: baseline
+        continue-on-error: true
+        run: ${{ steps.testcmd.outputs.cmd }}
+
+      - name: Install agent tooling
+        if: steps.threads.outputs.count != '0'
+        run: pip install mini-swe-agent composio-core
+
+      - name: Authenticate Composio
+        if: steps.threads.outputs.count != '0'
+        env:
+          COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
+        run: |
+          composio login --api-key "$COMPOSIO_API_KEY"
+          echo "COMPOSIO_HEADERS={\"x-consumer-api-key\":\"$COMPOSIO_API_KEY\"}" >> $GITHUB_ENV
+
+      # Agent has no GitHub token. It edits files and writes a report; the
+      # workflow does all the git and GitHub work below.
+      - name: Run agent
+        if: steps.threads.outputs.count != '0'
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          THREADS_FILE: ${{ runner.temp }}/threads.json
+          REPORT_FILE: ${{ runner.temp }}/report.json
+        run: |
+          mini \
+            --task "$(cat <<'TASK'
+          You are addressing your owner's code review comments.
+
+          INPUT: Read the JSON array at $THREADS_FILE. Each entry has thread_id,
+          reply_to_id, path, line, and the full discussion.
+
+          EXECUTION:
+          1. Fix code issues directly in the files. Resolve any merge conflict
+             markers you find, preserving the intent of both sides.
+          2. Use 'composio run notion search' or
+             'composio run devin ask_question --params
+              {"repoName":"${{ github.repository }}","question":"..."}'
+             if you need codebase context.
+          3. If a comment is unclear or needs a human decision, skip it. Skipping
+             is the right call more often than you'd think — a skipped thread
+             stays open for review, a bad fix gets silently accepted.
+
+          CONSTRAINTS:
+            - Do not run git or gh. You have no GitHub credentials.
+            - Do not edit anything under .github/.
+            - Do not delete or weaken tests to make them pass. If a test fails
+              because your fix is wrong, fix your fix.
+
+          OUTPUT: Write $REPORT_FILE as JSON:
+          { "threads": [ { "thread_id": "...", "reply_to_id": 123,
+                           "action": "fixed" | "skipped",
+                           "summary": "Plain English, one sentence" } ] }
+          Every input thread must appear exactly once.
+          TASK
+          )" \
+            --model "gemini/gemini-3.6-flash" \
+            --max-steps "${{ vars.AUTOPILOT_MAX_STEPS || 100 }}" \
+            --config yolo
+
+      - name: Sanity checks
+        if: steps.threads.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          if git grep -lE '^(<<<<<<<|>>>>>>>) ' -- . | grep -q .; then
+            echo "::error::Conflict markers left in the tree."; exit 1
+          fi
+          # --porcelain, not `git diff`: git diff only sees files git already
+          # tracks, so a workflow file the agent *created* would slip through.
+          if [ -n "$(git status --porcelain -- .github/)" ]; then
+            echo "::error::Agent touched .github/. Aborting."; exit 1
+          fi
+
+      - name: Tests after changes
+        if: steps.threads.outputs.count != '0' && steps.testcmd.outputs.cmd != ''
+        id: after
+        continue-on-error: true
+        run: ${{ steps.testcmd.outputs.cmd }}
+
+      # The one real gate. Pushing only stops if the agent broke something that
+      # was working — a suite that was already red doesn't block anything.
+      - name: Decide
+        if: steps.threads.outputs.count != '0'
+        id: decide
+        run: |
+          set -euo pipefail
+          BASE="${{ steps.baseline.outcome }}"
+          AFTER="${{ steps.after.outcome }}"
+
+          if [ "$BASE" = "success" ] && [ "$AFTER" = "failure" ]; then
+            echo "regression=true" >> "$GITHUB_OUTPUT"
+            echo "status=🔴 Tests passed before and fail now — nothing was pushed." >> "$GITHUB_OUTPUT"
+          elif [ "$AFTER" = "success" ]; then
+            echo "regression=false" >> "$GITHUB_OUTPUT"
+            echo "status=🟢 Tests pass." >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.testcmd.outputs.cmd }}" = "" ]; then
+            echo "regression=false" >> "$GITHUB_OUTPUT"
+            echo "status=⚪ No test suite — changes are unverified." >> "$GITHUB_OUTPUT"
+          else
+            echo "regression=false" >> "$GITHUB_OUTPUT"
+            echo "status=🟡 Tests were already failing before this run." >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push fixes
+        if: steps.threads.outputs.count != '0' && steps.decide.outputs.regression == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.AUTOPILOT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git add -A
+          # Everything below shows up in the Actions log. Skim it on early runs —
+          # this is where agent scratch files (trajectory logs, temp output) will
+          # appear if they aren't gitignored.
+          echo "--- staged for commit ---"
+          git status --short
+          echo "-------------------------"
+          git diff --cached --quiet || git commit -m "Autopilot: addressed review feedback"
+          # Covers new files and the merge commit, both of which `git diff` misses.
+          if [ -n "$(git log --oneline "origin/${{ needs.guard.outputs.head_branch }}..HEAD")" ]; then
+            git push origin "HEAD:${{ needs.guard.outputs.head_branch }}"
+            echo "PUSHED_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          fi
+
+      - name: Reply and resolve
+        if: always() && steps.threads.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -f "${{ runner.temp }}/report.json" ] || { echo "No report — agent didn't finish."; exit 0; }
+
+          jq -c '.threads[]' "${{ runner.temp }}/report.json" | while read -r t; do
+            ACTION=$(jq -r '.action'      <<<"$t")
+            RID=$(jq -r    '.reply_to_id' <<<"$t")
+            TID=$(jq -r    '.thread_id'   <<<"$t")
+            SUM=$(jq -r    '.summary'     <<<"$t")
+
+            # Resolve only when a commit actually landed. Without this, a thread
+            # the agent *believes* it fixed gets closed even though nothing was
+            # committed — and the comment that would have told you is gone.
+            if [ "$ACTION" = "fixed" ] && [ -n "${PUSHED_SHA:-}" ]; then
+              gh api "repos/${{ github.repository }}/pulls/comments/$RID/replies" \
+                -f body="🤖 **Autopilot** — fixed in \`${PUSHED_SHA}\`. $SUM" || true
+              # NB: the input field is threadId, not id. With `id` the mutation
+              # errors out and `|| true` hides it, so nothing ever resolves.
+              gh api graphql -f query='mutation($id: ID!) {
+                resolveReviewThread(input: {threadId: $id}) { thread { isResolved } }
+              }' -f id="$TID" || true
+            elif [ "$ACTION" = "fixed" ]; then
+              gh api "repos/${{ github.repository }}/pulls/comments/$RID/replies" \
+                -f body="🤖 **Autopilot** — attempted a fix but nothing was pushed (${{ steps.decide.outputs.status }}) Left open. $SUM" || true
+            else
+              gh api "repos/${{ github.repository }}/pulls/comments/$RID/replies" \
+                -f body="🤖 **Autopilot** — skipped, left for you. $SUM" || true
+            fi
+          done
+
+      - name: Summary comment
+        if: always() && steps.threads.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -f "${{ runner.temp }}/report.json" ] || exit 0
+          {
+            echo "## 🤖 Autopilot summary"
+            echo
+            echo "${{ steps.decide.outputs.status }}"
+            echo
+            if [ -n "${PUSHED_SHA:-}" ]; then
+              echo "Pushed \`${PUSHED_SHA}\`."
+            else
+              echo "**Nothing was pushed.** Your branch is unchanged."
+            fi
+            echo
+            jq -r '.threads[] | "- **\(.action)** — \(.summary)"' "${{ runner.temp }}/report.json"
+          } > summary.md
+          gh pr comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body-file summary.md
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" \
+            --body "🤖 Autopilot failed — nothing pushed, nothing resolved. [Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
