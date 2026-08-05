@@ -451,7 +451,7 @@ For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 
 | Item | Tracking |
 |------|----------|
-| Source builds (clone/build with consent) | [#20](https://github.com/tonythethompson/numan/issues/20) / Phase 5.2 |
+| Source builds (clone and build each require explicit consent, separate scopes) | [#20](https://github.com/tonythethompson/numan/issues/20) / Phase 5.2 |
 | Active-plugin **update** default-on (today: exact `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` opt-in) | [#22](https://github.com/tonythethompson/numan/issues/22) / [active-plugin-gate.md](docs/active-plugin-gate.md) |
 | Completions/scripts activation contracts | [docs/registry-intake-roadmap.md](docs/registry-intake-roadmap.md) |
 | Scoop manifest | Deferred (low demand) |

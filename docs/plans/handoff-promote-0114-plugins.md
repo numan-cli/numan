@@ -3,6 +3,17 @@
 ## Context
 
 > **Status (2026-08-05):** Wave 1 and Wave 2 Nu 0.114 intakes are in production.
+> Evidence: Wave 1 intake
+> ([numan-registry#43](https://github.com/tonythethompson/numan-registry/pull/43)),
+> Wave 2 intake
+> ([numan-registry#45](https://github.com/tonythethompson/numan-registry/pull/45)),
+> production dispatch
+> ([run 30996546918](https://github.com/tonythethompson/numan-registry/actions/runs/30996546918)),
+> Windows lifecycle-prove
+> ([numan-registry#47](https://github.com/tonythethompson/numan-registry/pull/47),
+> [run 30998507400](https://github.com/tonythethompson/numan-registry/actions/runs/30998507400)),
+> plugins docs/roadmap refresh
+> ([numan-plugins#51](https://github.com/tonythethompson/numan-plugins/pull/51)).
 > The official registry has **~36** packages; about **18** latest versions target
 > Nu **0.114.x** (see
 > [`catalog-compat.md`](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md)).
@@ -29,7 +40,8 @@ Research → Promote to manifest → Build dispatch → Spec download → Regist
 ## Step 1: Find Candidates
 
 **Source of truth for candidates:** `numan-plugins/docs/backlog.json` (~69 entries, demand-ranked).
-**Source of truth for the live catalog:** `numan-registry/registry/index.json` (human overview: `docs/catalog-compat.md`).
+**Live catalog (what `numan registry sync` / `install` fetch):** [`https://tonythethompson.github.io/numan-registry/index.json`](https://tonythethompson.github.io/numan-registry/index.json).
+**Repository source for that catalog:** `numan-registry/registry/index.json` (human overview: [`docs/catalog-compat.md`](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md)).
 
 **Eligibility filter:**
 - `nu-plugin` / `nu-protocol` dependency **>= 0.114.0** on a tagged release
@@ -39,7 +51,7 @@ Research → Promote to manifest → Build dispatch → Spec download → Regist
 
 **Already researched and blocked (skip these):**
 - `PRE_0_112`: clipboard (0.110), dbus (0.101), audio_hook (0.110), vec (0.105), from_beancount (0.76), nuts (0.110)
-- `PROMOTED`: skim, highlight, desktop_notifications, image, port_extension, prometheus, and Wave 2 names in `backlog.json` / `manifest.json` `active[]`
+- `PROMOTED` (skip; already shipped): skim, highlight, desktop_notifications, image, port_extension, prometheus; Wave 1 Nu 0.114 (`highlight`, `port_extension`, `regex`, `file`, `hcl`); Wave 2 Nu 0.114 (`ulid`, `jwalk`, `strutils`, `query_git`, `nutext`). Use this fixed name list for this revision (do not re-derive Wave membership by intersecting or unioning `backlog.json` with `manifest.json` `active[]`).
 - `nu_plugin_bigquery`: nu-plugin 0.112.2 (eligible minor) but needs Google creds for lifecycle proof — skip unless you can prove without credentials
 
 **What to do:**
