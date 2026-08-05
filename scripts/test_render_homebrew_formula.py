@@ -29,7 +29,6 @@ class RenderHomebrewFormulaTests(unittest.TestCase):
     def test_parse_and_render(self):
         sums = """
 4d8fa065b5bc7fcce30af3ca7d5c3cd943701bee168d78fae6120a12689738b8  numan-0.1.5-aarch64-apple-darwin.tar.gz
-1ec90c0036db2ad9fadf2e629f482b5b8b1df48dbe6bfb0befef2ba8b5e9fbf5  numan-0.1.5-x86_64-apple-darwin.tar.gz
 2d855b3b8a9bb3c568051024b8aae9771a63c427cb3edfd3ac3aa3aa6d78468d  numan-0.1.5-x86_64-pc-windows-msvc.zip
 0b113361c189a2062ef6e1fca36795d2347b925c1862b42c4ddeb54773e00ae3  numan-0.1.5-x86_64-unknown-linux-gnu.tar.gz
 """.strip()
@@ -45,12 +44,14 @@ class RenderHomebrewFormulaTests(unittest.TestCase):
             "4d8fa065b5bc7fcce30af3ca7d5c3cd943701bee168d78fae6120a12689738b8", text
         )
         self.assertIn('bin.install "#{arch_dir}/numan"', text)
+        self.assertIn("on_intel do", text)
+        self.assertIn("no longer ships Intel Mac", text)
+        self.assertNotIn("x86_64-apple-darwin.tar.gz", text)
         self.assertNotIn("windows-msvc", text)
 
     def test_parse_prerelease_version(self):
         sums = """
 4D8FA065B5BC7FCCE30AF3CA7D5C3CD943701BEE168D78FAE6120A12689738B8  numan-0.2.0-beta.1-aarch64-apple-darwin.tar.gz
-1ec90c0036db2ad9fadf2e629f482b5b8b1df48dbe6bfb0befef2ba8b5e9fbf5  numan-0.2.0-beta.1-x86_64-apple-darwin.tar.gz
 2d855b3b8a9bb3c568051024b8aae9771a63c427cb3edfd3ac3aa3aa6d78468d  numan-0.2.0-beta.1-x86_64-unknown-linux-gnu.tar.gz
 """.strip()
         digests = self.mod.parse_sha256sums(sums, "0.2.0-beta.1")
@@ -67,7 +68,6 @@ class RenderHomebrewFormulaTests(unittest.TestCase):
     def test_write_roundtrip(self):
         sums = """
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  numan-0.2.0-aarch64-apple-darwin.tar.gz
-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  numan-0.2.0-x86_64-apple-darwin.tar.gz
 cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  numan-0.2.0-x86_64-unknown-linux-gnu.tar.gz
 """.strip()
         with tempfile.TemporaryDirectory() as tmp:
@@ -89,13 +89,12 @@ cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  numan-0.2.0-x8
         self.assertEqual(0, code)
         stdout = buf.getvalue()
         self.assertIn("numan-<version>-aarch64-apple-darwin.tar.gz", stdout)
-        self.assertIn("numan-<version>-x86_64-apple-darwin.tar.gz", stdout)
         self.assertIn("numan-<version>-x86_64-unknown-linux-gnu.tar.gz", stdout)
+        self.assertNotIn("x86_64-apple-darwin", stdout)
 
     def test_cli_full_write(self):
         sums = """
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  numan-0.2.0-aarch64-apple-darwin.tar.gz
-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  numan-0.2.0-x86_64-apple-darwin.tar.gz
 cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  numan-0.2.0-x86_64-unknown-linux-gnu.tar.gz
 """.strip()
         with tempfile.TemporaryDirectory() as tmp:
