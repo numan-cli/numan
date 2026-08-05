@@ -88,7 +88,6 @@ Download the latest archive for your platform from [GitHub Releases](https://git
 | Linux (x86_64) | `numan-<version>-x86_64-unknown-linux-gnu.tar.gz` | `numan` |
 | Windows (x86_64) | `numan-<version>-x86_64-pc-windows-msvc.zip` | `numan.exe` |
 | macOS (Apple Silicon) | `numan-<version>-aarch64-apple-darwin.tar.gz` | `numan` |
-| macOS (Intel) | `numan-<version>-x86_64-apple-darwin.tar.gz` | `numan` |
 
 **Linux / macOS**
 
@@ -197,10 +196,10 @@ numan doctor
 Or pick a package yourself (`numan search` hides incompatible hits by default; use `--all` to see them):
 
 ```bash
-numan search nutest
-numan info vyadh/nutest
-numan install vyadh/nutest
-numan activate vyadh/nutest
+numan search <query>
+numan info owner/package-name
+numan install owner/package-name
+numan activate owner/package-name
 ```
 
 Install is **inert** — nothing is registered with Nu until you run `numan activate` (or `numan try`, which activates after install). If a package needs a different Nu minor, Numan explains the mismatch and can offer `numan setup nu <x.y.z>` (activations are per-Nu; re-activate after switching). When no compatible starter exists, `numan try` suggests installing a matching managed Nu version or searching for another package with `numan search`.

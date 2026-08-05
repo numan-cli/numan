@@ -118,7 +118,7 @@ jobs:
           VERSION="${RELEASE_TAG#v}"
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS
           test -f SHA256SUMS
-          for triple in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu; do
+          for triple in aarch64-apple-darwin x86_64-unknown-linux-gnu; do
             asset="numan-${VERSION}-${triple}.tar.gz"
             # Use gh --jq (built into gh) so we do not depend on a separate jq binary.
             ok="$(

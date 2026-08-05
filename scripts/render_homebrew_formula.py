@@ -18,15 +18,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = REPO_ROOT / "packaging" / "homebrew" / "numan.rb"
 
 # Release asset basename suffix -> Homebrew bottle platform key used in formula.
+# Intel Mac (x86_64-apple-darwin) is intentionally unsupported for shipping.
 REQUIRED_ASSETS = {
     "aarch64-apple-darwin": "macos_arm",
-    "x86_64-apple-darwin": "macos_intel",
     "x86_64-unknown-linux-gnu": "linux_intel",
 }
 
 ASSET_RE = re.compile(
     r"^([0-9a-fA-F]{64})\s+numan-(?P<ver>.+)-(?P<triple>"
-    r"aarch64-apple-darwin|x86_64-apple-darwin|x86_64-unknown-linux-gnu"
+    r"aarch64-apple-darwin|x86_64-unknown-linux-gnu"
     r")\.(?P<ext>tar\.gz|zip)$"
 )
 
@@ -56,7 +56,6 @@ def parse_sha256sums(text: str, version: str) -> dict[str, str]:
 
 def render_formula(version: str, digests: dict[str, str]) -> str:
     mac_arm = digests["aarch64-apple-darwin"]
-    mac_intel = digests["x86_64-apple-darwin"]
     linux_intel = digests["x86_64-unknown-linux-gnu"]
     return f"""# typed: false
 # frozen_string_literal: true
@@ -83,8 +82,7 @@ class Numan < Formula
       sha256 "{mac_arm}"
     end
     on_intel do
-      url "https://github.com/tonythethompson/numan/releases/download/v#{{version}}/numan-#{{version}}-x86_64-apple-darwin.tar.gz"
-      sha256 "{mac_intel}"
+      odie "Numan no longer ships Intel Mac (x86_64) binaries. Use Apple Silicon, or `cargo install numan-cli`."
     end
   end
 
