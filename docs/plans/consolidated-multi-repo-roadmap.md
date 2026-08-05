@@ -3,7 +3,7 @@
 **Authority:** This is the single cross-repo plan for remaining work toward Numan 1.0.
 Repo-local roadmaps keep operational detail and should link here:
 
-- [`numan-plugins/docs/roadmap.md`](https://github.com/tonythethompson/numan-plugins/blob/master/docs/roadmap.md)
+- [`numan-plugins/docs/roadmap.md`](https://github.com/tonythethompson/numan-plugins/blob/main/docs/roadmap.md)
 - [`numan-registry/docs/roadmap.md`](https://github.com/tonythethompson/numan-registry/blob/main/docs/roadmap.md)
 - Prior client draft: [`2026-07-29-remaining-roadmap.md`](2026-07-29-remaining-roadmap.md) (superseded by this doc)
 - Intake automation endgame: [`docs/registry-intake-roadmap.md`](../registry-intake-roadmap.md)
@@ -56,7 +56,7 @@ Do these in order. Registry intake and client smoke wait on plugins publication.
 
 ### A. `numan-plugins` — merge, build, verify
 
-- [x] Merge PR #4 after review and green checks; pull merge commit into `master`.
+- [x] Merge PR #4 after review and green checks; pull merge commit into `main`.
 - [x] Merge Windows Recheck `shell: bash` fix ([PR #8](https://github.com/tonythethompson/numan-plugins/pull/8)).
 - [x] Dispatch `build-plugins` manually with only:
   `nu_plugin_port_extension,nu_plugin_image`.
@@ -72,8 +72,8 @@ Do these in order. Registry intake and client smoke wait on plugins publication.
 
 | Package | Version | Notes |
 |---------|---------|-------|
-| `FMotalleb/nu_plugin_port_extension` | 0.113.1 | On `master` via PR #4 |
-| `FMotalleb/nu_plugin_image` | 0.112.2 | On `master` via PR #4 |
+| `FMotalleb/nu_plugin_port_extension` | 0.113.1 | On `main` via PR #4 |
+| `FMotalleb/nu_plugin_image` | 0.112.2 | On `main` via PR #4 |
 
 **Handoff contract to registry (every successful build wave):**
 
