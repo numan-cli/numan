@@ -99,14 +99,14 @@ Download the latest archive for your platform from [GitHub Releases](https://git
 **Linux / macOS**
 
 ```bash
-tar -xzf numan-<version>-<target>.tar.gz
-install -m 755 numan-<version>-<target>/numan ~/.local/bin/numan
+tar -xzf numan-VERSION-TARGET.tar.gz
+install -m 755 numan-VERSION-TARGET/numan ~/.local/bin/numan
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-Expand-Archive numan-<version>-x86_64-pc-windows-msvc.zip -DestinationPath .
+Expand-Archive numan-VERSION-x86_64-pc-windows-msvc.zip -DestinationPath .
 # Add the extracted folder to your PATH, or copy numan.exe into a directory already on PATH
 ```
 
@@ -203,7 +203,7 @@ numan doctor
 Or pick a package yourself (`numan search` hides incompatible hits by default; use `--all` to see them):
 
 ```bash
-numan search <query>
+numan search your-query
 numan info owner/package-name
 numan install owner/package-name
 numan activate owner/package-name
@@ -279,8 +279,8 @@ numan snapshots activation state before `update`, `remove`, `activate`, and `dea
 
 ```bash
 numan snapshot list
-numan snapshot inspect <id>       # affected packages, digests, payload check
-numan snapshot rollback <id>      # restore exactly that state
+numan snapshot inspect SNAPSHOT-ID       # affected packages, digests, payload check
+numan snapshot rollback SNAPSHOT-ID      # restore exactly that state
 ```
 
 See [docs/snapshots-and-rollback.md](docs/snapshots-and-rollback.md) for scope, retention, and safety guarantees.
