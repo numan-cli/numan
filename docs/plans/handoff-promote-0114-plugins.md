@@ -157,7 +157,7 @@ Lifecycle-prove runs: `init → registry sync → search → info → install �
 
 - Update `backlog.json`: set `blocker: "PROMOTED"`, add `c1_note` with date and details
 - Update `docs/intake-state.json` in numan-registry
-- Update `d:\Dev\numan\docs\plans\consolidated-multi-repo-roadmap.md` Wave 2 research queue checkboxes
+- Update plugins `docs/roadmap.md` / backlog for PROMOTED. Do **not** edit `docs/plans/consolidated-multi-repo-roadmap.md` casually (CI `roadmap-drift` contract pin); coordinate a contract bump if needed.
 
 ## Constraints & Gotchas
 
@@ -172,13 +172,17 @@ Lifecycle-prove runs: `init → registry sync → search → info → install �
 
 ## Success Criteria
 
-- [ ] 2–3 new plugins in `manifest.json` `active[]` with `nu_version: ">=0.114.0 <0.115.0"`
-- [ ] Successful build run with spec artifacts downloaded
-- [ ] Registry PR(s) merged, staging green
-- [ ] Production dispatched and live
-- [ ] Lifecycle-prove passes on Windows x64 / Nu 0.114.1 for each plugin
-- [ ] `numan search` on Nu 0.114.1 shows the new plugins as compatible
-- [ ] Backlog + roadmap docs updated
+Wave 1 (5) and wave 2 (5) completed through production. Lifecycle-prove green on **Linux** and **Windows** x86_64 / Nu 0.114.1.
+
+- [x] 2–3+ new plugins in `manifest.json` `active[]` with `nu_version: ">=0.114.0 <0.115.0"` (wave1+wave2 = 10)
+- [x] Successful build run with spec artifacts downloaded
+- [x] Registry PR(s) merged, staging green ([numan-registry#43](https://github.com/tonythethompson/numan-registry/pull/43), [#45](https://github.com/tonythethompson/numan-registry/pull/45))
+- [x] Production dispatched and live
+- [x] Lifecycle-prove passes on Linux x86_64 / Nu 0.114.1 for each plugin
+- [x] Lifecycle-prove passes on Windows x86_64 / Nu 0.114.1 for each wave2 plugin ([numan-registry#47](https://github.com/tonythethompson/numan-registry/pull/47); [run 30998507400](https://github.com/tonythethompson/numan-registry/actions/runs/30998507400)). Done when every wave package under prove exits 0 on `windows-latest` with Nu 0.114.x on PATH.
+- [x] `numan search` on Nu 0.114.1 shows the new plugins as compatible
+- [x] Backlog + roadmap docs updated: [numan-plugins#42](https://github.com/tonythethompson/numan-plugins/pull/42) merged (`PROMOTED` + plugins roadmap); this file records handoff criteria. Consolidated multi-repo roadmap stays contract-pinned (bump separately if editing it).
+
 
 ## Time Estimate
 
