@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Homebrew tap packaging restored: `brew tap tonythethompson/numan && brew install numan`, with `Publish to Homebrew tap` updating [`homebrew-numan`](https://github.com/tonythethompson/homebrew-numan) from release `SHA256SUMS` (requires `HOMEBREW_TAP_TOKEN`)
+
 ### Changed (breaking)
 
 - **`numan setup nu` CLI redesign**: action flags (`--remove`, `--use-path`, `--use-existing`) are replaced by subcommands:

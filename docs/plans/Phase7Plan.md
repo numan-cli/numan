@@ -15,7 +15,7 @@ Take Numan from feature-complete core (Phases 1–6) to a distributable, polishe
 | 7.3 | Daily-driver polish | ✅ Done |
 | 7.4 | Onboarding path | ✅ Done |
 | 7.5 | CI / release hardening | ✅ Done |
-| 7.6 | Wider distribution | ✅ Done (winget community listing + automated update PRs) |
+| 7.6 | Wider distribution | ✅ Done (winget + Homebrew tap; Homebrew auto-update needs HOMEBREW_TAP_TOKEN) |
 
 ---
 

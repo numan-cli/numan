@@ -1,0 +1,185 @@
+name: Publish to Homebrew tap
+
+# After a successful v*.*.* Release workflow finishes, regenerate Formula/numan.rb
+# from SHA256SUMS and push it to tonythethompson/homebrew-numan.
+#
+# Requires repository secret HOMEBREW_TAP_TOKEN on tonythethompson/numan: a PAT
+# (classic or fine-grained) with contents:write on tonythethompson/homebrew-numan.
+# Without it the job fails closed so a missing secret cannot silently skip updates.
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to publish (must be v*.*.*, for example v0.2.0)
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  publish:
+    name: Update homebrew-numan formula
+    # Restrict to success only: failed Release runs never emit homebrew-release-ready,
+    # so allowing conclusion == failure only produced redundant red Homebrew jobs.
+    # Do not gate on head_branch here: for some tag-triggered runs it can be null;
+    # Resolve release tag + SemVer check + marker verification handle that below.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    env:
+      TAP_REPO: tonythethompson/homebrew-numan
+    steps:
+      - name: Verify required tools
+        shell: bash
+        run: |
+          command -v gh >/dev/null || { echo "::error::GitHub CLI is required"; exit 1; }
+          command -v python3 >/dev/null || { echo "::error::python3 is required"; exit 1; }
+
+      - name: Verify HOMEBREW_TAP_TOKEN
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        shell: bash
+        run: |
+          if [[ -z "${HOMEBREW_TAP_TOKEN:-}" ]]; then
+            echo "::error::HOMEBREW_TAP_TOKEN secret is not set on the numan repo; cannot update ${TAP_REPO}"
+            exit 1
+          fi
+
+      - name: Resolve release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TAG: ${{ inputs.release_tag }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=""
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="${DISPATCH_TAG:-}"
+          else
+            tag="${HEAD_BRANCH:-}"
+            # Fallback: read the tag from the Release job's marker artifact when
+            # head_branch is empty/null (tag pushes sometimes leave it unset).
+            if [[ -z "$tag" ]]; then
+              mkdir -p /tmp/homebrew-marker
+              if gh run download "$RELEASE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+                  --name homebrew-release-ready --dir /tmp/homebrew-marker; then
+                tag="$(tr -d '[:space:]' < /tmp/homebrew-marker/release-tag.txt)"
+              fi
+            fi
+          fi
+          if [[ -z "$tag" ]]; then
+            echo "::error::Could not resolve RELEASE_TAG (head_branch empty and marker missing)"
+            exit 1
+          fi
+          if [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "::error::RELEASE_TAG must be a v-prefixed SemVer tag (got: ${tag})"
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Resolved RELEASE_TAG=${tag}"
+
+      - name: Verify originating release marker
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_RUN_ID}/artifacts?per_page=100" \
+            --jq 'any(.artifacts[]; .name == "homebrew-release-ready" and .expired == false)' \
+            | grep -Fx true
+
+      - name: Checkout numan (formula renderer)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Download SHA256SUMS and render formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS
+          test -f SHA256SUMS
+          for triple in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu; do
+            asset="numan-${VERSION}-${triple}.tar.gz"
+            # Use gh --jq (built into gh) so we do not depend on a separate jq binary.
+            ok="$(
+              gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,assets \
+                --jq ".isDraft == false and any(.assets[]; .name == \"${asset}\" and .state == \"uploaded\")"
+            )"
+            if [[ "$ok" != "true" ]]; then
+              echo "::error::Release ${RELEASE_TAG} is draft or missing uploaded asset ${asset}"
+              exit 1
+            fi
+          done
+          python3 scripts/render_homebrew_formula.py \
+            --version "$VERSION" \
+            --sha256sums SHA256SUMS \
+            --write \
+            --out /tmp/numan.rb
+          cp /tmp/numan.rb packaging/homebrew/numan.rb
+
+      - name: Push formula to homebrew-numan tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          # GH_TOKEN authenticates gh(1), but git push needs a credential helper.
+          gh auth setup-git --hostname github.com --force
+          rm -rf /tmp/homebrew-numan
+          gh repo clone "$TAP_REPO" /tmp/homebrew-numan
+          mkdir -p /tmp/homebrew-numan/Formula
+          cp /tmp/numan.rb /tmp/homebrew-numan/Formula/numan.rb
+          # Seed README only when missing so the tap can customize docs independently.
+          if [[ ! -f /tmp/homebrew-numan/README.md ]]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          Path("/tmp/homebrew-numan/README.md").write_text(
+              "# homebrew-numan\n\n"
+              "Homebrew tap for [Numan](https://github.com/tonythethompson/numan).\n\n"
+              "```bash\n"
+              "brew tap tonythethompson/numan\n"
+              "brew install numan\n"
+              "```\n\n"
+              "This repository must stay **public**. Formula digests are updated\n"
+              "automatically by the Numan `Publish to Homebrew tap` workflow after\n"
+              "each `v*.*.*` GitHub Release.\n",
+              encoding="utf-8",
+          )
+          PY
+          fi
+          cd /tmp/homebrew-numan
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/numan.rb
+          if [[ -f README.md ]]; then
+            git add README.md
+          fi
+          if git diff --cached --quiet; then
+            echo "Tap already at numan ${VERSION}; nothing to commit"
+            exit 0
+          fi
+          git commit -m "numan ${VERSION}"
+          git push origin HEAD
+          echo "Updated ${TAP_REPO} Formula/numan.rb to ${VERSION}"
