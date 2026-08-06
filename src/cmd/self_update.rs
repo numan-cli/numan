@@ -285,6 +285,29 @@ pub fn execute_with_client(
     let method = detect_install_method(exe);
 
     if let Some(hint) = method.upgrade_hint() {
+        if check {
+            // Report whether a newer release exists, then point at the package manager.
+            let (tag, _assets) = client
+                .fetch_latest()
+                .context("Failed to fetch latest numan release")?;
+            let latest = parse_release_version(&tag)?;
+            if !is_newer_than(&latest, current_version)? {
+                println!("numan is up to date ({current_version}).");
+                println!(
+                    "This install is managed by {}; use that tool if you need to reinstall.",
+                    method.display_name()
+                );
+                return Ok(());
+            }
+            println!("Update available: {current_version} → {latest}");
+            println!(
+                "This numan binary looks like a {} install.",
+                method.display_name()
+            );
+            println!("Upgrade with:");
+            println!("  {hint}");
+            return Ok(());
+        }
         println!(
             "This numan binary looks like a {} install.",
             method.display_name()
@@ -893,6 +916,47 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  good.tar.gz
             &client,
             Path::new("/opt/homebrew/bin/numan"),
             false,
+            false,
+            "0.2.0",
+            "unused",
+        )
+        .unwrap();
+        assert!(client.downloads.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn managed_install_check_reports_update_then_hint() {
+        let client = FakeClient {
+            tag: "v9.9.9".into(),
+            assets: vec![],
+            downloads: Mutex::new(Vec::new()),
+            files: HashMap::new(),
+        };
+        execute_with_client(
+            &client,
+            Path::new("/opt/homebrew/bin/numan"),
+            true,
+            false,
+            "0.2.0",
+            "unused",
+        )
+        .unwrap();
+        // check fetches release metadata but must not download assets
+        assert!(client.downloads.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn managed_install_check_reports_up_to_date() {
+        let client = FakeClient {
+            tag: "v0.2.0".into(),
+            assets: vec![],
+            downloads: Mutex::new(Vec::new()),
+            files: HashMap::new(),
+        };
+        execute_with_client(
+            &client,
+            Path::new("/home/me/.cargo/bin/numan"),
+            true,
             false,
             "0.2.0",
             "unused",
