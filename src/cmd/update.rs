@@ -640,6 +640,32 @@ mod tests {
     use std::collections::BTreeMap;
     use tempfile::TempDir;
 
+    #[test]
+    fn self_update_rejects_combined_package_name() {
+        let args = UpdateArgs {
+            package: Some("owner/pkg".to_string()),
+            check: false,
+            self_update: true,
+            verbose: false,
+        };
+        let root = PathBuf::from("/tmp/numan-self-update-unused-root");
+        let lifecycle = CommandPluginLifecycle;
+        let err = execute_with_hooks(
+            &args,
+            &root,
+            &UpdateHooks {
+                lifecycle: &lifecycle,
+                install: None,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("--self cannot be combined with a package name"),
+            "{err}"
+        );
+    }
+
     struct SuccessfulPluginLifecycle;
 
     impl PluginLifecycle for SuccessfulPluginLifecycle {

@@ -283,13 +283,14 @@ numan deactivate owner/module-name
 ```bash
 numan update --check              # see available package upgrades
 numan update                      # apply package upgrades
-numan update --self --check       # see if a newer numan binary is available
-numan update --self               # replace this numan binary (or print brew/winget/cargo upgrade)
+numan update --self --check       # standalone: report if a newer binary is available
+numan update --self               # standalone: download, checksum-verify, replace binary
 numan remove owner/package-name
 numan gc --dry-run                # preview orphaned payload dirs
 numan gc                          # delete unreferenced payloads
 ```
 
+For Homebrew, winget, or `cargo install` installs, `numan update --self` and `--self --check` both print the matching upgrade command (`brew upgrade numan`, `winget upgrade tonythethompson.numan`, or `cargo install --locked --force numan-cli`) instead of downloading a release asset. Standalone checksum verification guards against truncated or corrupted downloads; release assets are not separately signed.
 numan snapshots activation state before `update`, `remove`, `activate`, and `deactivate`, so a bad change can be undone:
 
 ```bash
