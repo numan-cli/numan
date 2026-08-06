@@ -1,15 +1,21 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::io::{BufReader, Read};
 use std::path::Path;
 
 fn hash_file(path: &Path) -> Result<String> {
-    let file = std::fs::File::open(path)?;
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("Failed to open '{}' for SHA-256 hashing", path.display()))?;
     let mut reader = BufReader::new(file);
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 8192];
     loop {
-        let read = reader.read(&mut buffer)?;
+        let read = reader.read(&mut buffer).with_context(|| {
+            format!(
+                "Failed to read '{}' while computing SHA-256",
+                path.display()
+            )
+        })?;
         if read == 0 {
             break;
         }
