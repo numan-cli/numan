@@ -199,6 +199,21 @@ jobs:
           sha256sum numan-* > SHA256SUMS
           cat SHA256SUMS
 
+      - name: Sign SHA256SUMS for self-update
+        working-directory: dist
+        env:
+          NUMAN_RELEASE_SIGNING_KEY: ${{ secrets.NUMAN_RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${NUMAN_RELEASE_SIGNING_KEY}" ]]; then
+            echo "::warning::NUMAN_RELEASE_SIGNING_KEY is unset; publishing without SHA256SUMS.sig. \
+          numan update --self will refuse this release until a signed checksum is present."
+            exit 0
+          fi
+          python3 -m pip install --user pynacl
+          python3 "${GITHUB_WORKSPACE}/scripts/sign-sha256sums.py" SHA256SUMS SHA256SUMS.sig
+          cat SHA256SUMS.sig
+
       - name: Prepare release notes from CHANGELOG
         env:
           RELEASE_TAG: ${{ steps.meta.outputs.tag }}
