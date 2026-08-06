@@ -38,7 +38,10 @@ pub fn download_file(url: &str, dest: &Path) -> Result<()> {
 
     // Preserve HTTPS for callers using a secure URL; never follow a downgrade.
     if url.starts_with("https://") && response.url().scheme() != "https" {
-        anyhow::bail!("Refusing HTTPS download redirected to non-HTTPS URL: {}", response.url());
+        anyhow::bail!(
+            "Refusing HTTPS download redirected to non-HTTPS URL: {}",
+            response.url()
+        );
     }
 
     if !response.status().is_success() {
