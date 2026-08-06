@@ -28,7 +28,7 @@ impl InstallMethod {
         match self {
             InstallMethod::Homebrew => Some("brew upgrade numan"),
             InstallMethod::Winget => Some("winget upgrade tonythethompson.numan"),
-            InstallMethod::Cargo => Some("cargo install numan-cli"),
+            InstallMethod::Cargo => Some("cargo install --locked --force numan-cli"),
             InstallMethod::Standalone => None,
         }
     }
@@ -151,6 +151,13 @@ pub fn is_newer_than(latest: &semver::Version, current: &str) -> Result<bool> {
     Ok(latest > &current)
 }
 
+fn require_https(url: &str, what: &str) -> Result<()> {
+    if !url.starts_with("https://") {
+        bail!("{what} URL must use https (got '{url}')");
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
     tag_name: String,
@@ -205,18 +212,19 @@ impl ReleaseClient for HttpReleaseClient {
 
 /// Run `numan update --self` (optionally `--check`).
 pub fn execute(check: bool, verbose: bool) -> Result<()> {
-    execute_with_client(&HttpReleaseClient, check, verbose, CURRENT_VERSION)
+    let exe = std::env::current_exe().context("Failed to resolve current numan executable path")?;
+    execute_with_client(&HttpReleaseClient, &exe, check, verbose, CURRENT_VERSION)
 }
 
-/// Test seam: inject release client and current version string.
+/// Test seam: inject release client, executable path, and current version string.
 pub fn execute_with_client(
     client: &dyn ReleaseClient,
+    exe: &Path,
     check: bool,
     verbose: bool,
     current_version: &str,
 ) -> Result<()> {
-    let exe = std::env::current_exe().context("Failed to resolve current numan executable path")?;
-    let method = detect_install_method(&exe);
+    let method = detect_install_method(exe);
 
     if let Some(hint) = method.upgrade_hint() {
         println!(
@@ -240,7 +248,6 @@ pub fn execute_with_client(
         .fetch_latest()
         .context("Failed to fetch latest numan release")?;
     let latest = parse_release_version(&tag)?;
-    let asset_name = release_asset_name(&latest.to_string(), &platform)?;
 
     if !is_newer_than(&latest, current_version)? {
         println!("numan is up to date ({current_version}).");
@@ -252,6 +259,10 @@ pub fn execute_with_client(
         println!("Run `numan update --self` to install.");
         return Ok(());
     }
+
+    // Asset naming is only needed on the apply path so --check works on every
+    // detected platform (including triples without published release archives).
+    let asset_name = release_asset_name(&latest.to_string(), &platform)?;
 
     let asset_url = assets
         .iter()
@@ -270,14 +281,8 @@ pub fn execute_with_client(
         .context(
             "Release is missing SHA256SUMS. Refusing to self-update without checksum verification.",
         )?;
-
-    for (label, url) in [("asset", asset_url), ("checksum", sums_url)] {
-        let parsed = reqwest::Url::parse(url)
-            .with_context(|| format!("Invalid self-update {label} URL"))?;
-        if parsed.scheme() != "https" {
-            bail!("Self-update {label} downloads require HTTPS URLs; refusing '{}'.", url);
-        }
-    }
+    require_https(asset_url, "Release asset")?;
+    require_https(sums_url, "SHA256SUMS")?;
 
     let temp = tempfile::tempdir().context("Failed to create temp dir for self-update")?;
     let archive_path = temp.path().join(&asset_name);
@@ -297,9 +302,13 @@ pub fn execute_with_client(
         format!("SHA256SUMS does not list '{asset_name}'. Refusing to install.")
     })?;
     integrity::verify_and_report(&archive_path, expected, &asset_name)?;
+    // SHA256SUMS arrives from the same GitHub Release as the archive, so this
+    // check detects truncation/corruption, not an independently authenticated
+    // publisher identity. Release-channel compromise remains out of scope until
+    // signed release artifacts land (same trust model as a manual download).
 
     let new_bytes = extract_numan_binary(&archive_path, &asset_name, temp.path())?;
-    let dest = std::fs::canonicalize(&exe).unwrap_or(exe);
+    let dest = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
     replace_binary(&dest, &new_bytes)?;
 
     println!("Updated numan: {current_version} → {latest}");
@@ -363,7 +372,7 @@ fn replace_binary(dest: &Path, new_bytes: &[u8]) -> Result<()> {
     {
         replace_binary_windows(dest, new_bytes)
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
         replace_binary_unix(dest, new_bytes)
     }
@@ -371,18 +380,70 @@ fn replace_binary(dest: &Path, new_bytes: &[u8]) -> Result<()> {
 
 #[cfg(unix)]
 fn replace_binary_unix(dest: &Path, new_bytes: &[u8]) -> Result<()> {
-    use crate::util::atomic::write_bytes_atomic;
-    write_bytes_atomic(dest, new_bytes)
-        .with_context(|| format!("Failed to replace numan binary at '{}'", dest.display()))?;
-    make_executable(dest)?;
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    // Preserve existing mode bits (group/other), ensure owner-execute.
+    // Apply mode on the staged temp file BEFORE renaming into place so a
+    // permission failure never leaves dest replaced by a non-executable inode.
+    let mode = std::fs::metadata(dest)
+        .map(|m| m.permissions().mode())
+        .unwrap_or(0o755)
+        | 0o100;
+
+    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("Failed to create parent directory for '{}'", dest.display()))?;
+    let mut staged = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("Failed to create temp file in '{}'", parent.display()))?;
+    staged
+        .write_all(new_bytes)
+        .context("Failed to write staged numan binary")?;
+    staged
+        .flush()
+        .context("Failed to flush staged numan binary")?;
+
+    let mut perms = std::fs::metadata(staged.path())
+        .with_context(|| {
+            format!(
+                "Failed to read permissions for staged binary '{}'",
+                staged.path().display()
+            )
+        })?
+        .permissions();
+    perms.set_mode(mode);
+    std::fs::set_permissions(staged.path(), perms).with_context(|| {
+        format!(
+            "Failed to set permissions on staged numan at '{}'",
+            staged.path().display()
+        )
+    })?;
+
+    staged.persist(dest).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to replace numan binary at '{}': {}",
+            dest.display(),
+            e.error
+        )
+    })?;
     Ok(())
 }
 
 #[cfg(windows)]
 fn replace_binary_windows(dest: &Path, new_bytes: &[u8]) -> Result<()> {
     use std::io::Write;
-    // Running executables cannot be overwritten in place on Windows. Move the
-    // current binary aside, write the new one, then best-effort delete the old.
+    // Stage the full replacement first, then move the running binary aside.
+    // That way a write failure never leaves the destination missing.
+    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("Failed to create parent directory for '{}'", dest.display()))?;
+    let mut staged = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("Failed to create temp file in '{}'", parent.display()))?;
+    staged
+        .write_all(new_bytes)
+        .context("Failed to write new numan binary")?;
+    staged.flush().context("Failed to flush new numan binary")?;
+
     let backup = dest.with_extension("exe.old");
     let _ = std::fs::remove_file(&backup);
     std::fs::rename(dest, &backup).with_context(|| {
@@ -391,48 +452,38 @@ fn replace_binary_windows(dest: &Path, new_bytes: &[u8]) -> Result<()> {
             backup.display()
         )
     })?;
-    let write_result = (|| -> Result<()> {
-        let parent = dest.parent().unwrap_or_else(|| Path::new("."));
-        std::fs::create_dir_all(parent)?;
-        let mut tmp = tempfile::NamedTempFile::new_in(parent)
-            .with_context(|| format!("Failed to create temp file in '{}'", parent.display()))?;
-        tmp.write_all(new_bytes)
-            .context("Failed to write new numan binary")?;
-        tmp.flush().context("Failed to flush new numan binary")?;
-        tmp.persist(dest).map_err(|e| {
-            anyhow::anyhow!(
+
+    match staged.persist(dest) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&backup);
+            Ok(())
+        }
+        Err(e) => match std::fs::rename(&backup, dest) {
+            Ok(()) => Err(anyhow::anyhow!(
                 "Failed to install new numan at '{}': {}",
                 dest.display(),
                 e.error
-            )
-        })?;
-        Ok(())
-    })();
-    if let Err(e) = write_result {
-        // Attempt to restore the previous binary.
-        let _ = std::fs::rename(&backup, dest);
-        return Err(e);
+            )),
+            Err(restore_err) => Err(anyhow::anyhow!(
+                "Failed to install new numan at '{}': {}. \
+                 Also failed to restore the previous binary from '{}': {}. \
+                 Manually rename that backup back to '{}' to recover.",
+                dest.display(),
+                e.error,
+                backup.display(),
+                restore_err,
+                dest.display()
+            )),
+        },
     }
-    let _ = std::fs::remove_file(&backup);
-    Ok(())
-}
-
-#[cfg(unix)]
-fn make_executable(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = std::fs::metadata(path)
-        .with_context(|| format!("Failed to read permissions for '{}'", path.display()))?
-        .permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(path, perms)
-        .with_context(|| format!("Failed to mark numan executable at '{}'", path.display()))?;
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    const STANDALONE_EXE: &str = "/usr/local/bin/numan";
 
     #[test]
     fn detect_homebrew_cellar() {
@@ -471,8 +522,16 @@ mod tests {
     #[test]
     fn detect_standalone() {
         assert_eq!(
-            detect_install_method(Path::new("/usr/local/bin/numan")),
+            detect_install_method(Path::new(STANDALONE_EXE)),
             InstallMethod::Standalone
+        );
+    }
+
+    #[test]
+    fn cargo_upgrade_hint_uses_locked_force() {
+        assert_eq!(
+            InstallMethod::Cargo.upgrade_hint(),
+            Some("cargo install --locked --force numan-cli")
         );
     }
 
@@ -564,11 +623,93 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  numan-0.2.0-x8
     }
 
     #[test]
+    fn parse_sha256sums_rejects_short_and_non_hex() {
+        let text = "\
+abcd  short.tar.gz
+notahex64charshere!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!  bad.tar.gz
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  good.tar.gz
+";
+        let map = parse_sha256sums(text);
+        assert!(map.get("short.tar.gz").is_none());
+        assert!(map.get("bad.tar.gz").is_none());
+        assert!(map.get("good.tar.gz").is_some());
+    }
+
+    #[test]
     fn is_newer_compares_semver() {
         let latest = parse_release_version("v0.2.1").unwrap();
         assert!(is_newer_than(&latest, "0.2.0").unwrap());
         assert!(!is_newer_than(&latest, "0.2.1").unwrap());
         assert!(!is_newer_than(&latest, "0.3.0").unwrap());
+    }
+
+    #[test]
+    fn parse_release_version_rejects_malformed() {
+        let err = parse_release_version("not-a-version")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Invalid release version"), "{err}");
+    }
+
+    #[test]
+    fn require_https_rejects_http() {
+        let err = require_https("http://example.test/a", "asset")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("must use https"), "{err}");
+    }
+
+    #[test]
+    fn locate_extracted_numan_at_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join(numan_binary_name());
+        std::fs::write(&bin, b"bin").unwrap();
+        assert_eq!(locate_extracted_numan(dir.path()).unwrap(), bin);
+    }
+
+    #[test]
+    fn locate_extracted_numan_one_dir_deep() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("numan-0.2.0-x86_64-unknown-linux-gnu");
+        std::fs::create_dir_all(&nested).unwrap();
+        let bin = nested.join(numan_binary_name());
+        std::fs::write(&bin, b"bin").unwrap();
+        assert_eq!(locate_extracted_numan(dir.path()).unwrap(), bin);
+    }
+
+    #[test]
+    fn locate_extracted_numan_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = locate_extracted_numan(dir.path()).unwrap_err().to_string();
+        assert!(err.contains("Could not find"), "{err}");
+    }
+
+    #[test]
+    fn replace_binary_rejects_empty_without_modifying_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join(numan_binary_name());
+        std::fs::write(&dest, b"old-bytes").unwrap();
+        let err = replace_binary(&dest, b"").unwrap_err().to_string();
+        assert!(err.contains("empty"), "{err}");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"old-bytes");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replace_binary_unix_preserves_mode_and_owner_execute() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join(numan_binary_name());
+        std::fs::write(&dest, b"old").unwrap();
+        let mut perms = std::fs::metadata(&dest).unwrap().permissions();
+        perms.set_mode(0o640);
+        std::fs::set_permissions(&dest, perms).unwrap();
+
+        replace_binary(&dest, b"new-binary").unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new-binary");
+        let mode = std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o740, "mode={mode:#o}");
     }
 
     struct FakeClient {
@@ -597,13 +738,12 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  numan-0.2.0-x8
         }
     }
 
+    fn platform_asset_name(version: &str) -> Option<String> {
+        release_asset_name(version, &Platform::detect()).ok()
+    }
+
     #[test]
     fn check_reports_update_without_download() {
-        // Only exercised when this test binary is detected as standalone.
-        let exe = std::env::current_exe().unwrap();
-        if detect_install_method(&exe) != InstallMethod::Standalone {
-            return;
-        }
         let client = FakeClient {
             tag: "v9.9.9".into(),
             assets: vec![
@@ -616,7 +756,7 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  numan-0.2.0-x8
             downloads: Mutex::new(Vec::new()),
             files: HashMap::new(),
         };
-        execute_with_client(&client, true, false, "0.2.0").unwrap();
+        execute_with_client(&client, Path::new(STANDALONE_EXE), true, false, "0.2.0").unwrap();
         assert!(
             client.downloads.lock().unwrap().is_empty(),
             "check must not download"
@@ -625,17 +765,168 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  numan-0.2.0-x8
 
     #[test]
     fn check_up_to_date_skips_download() {
-        let exe = std::env::current_exe().unwrap();
-        if detect_install_method(&exe) != InstallMethod::Standalone {
-            return;
-        }
         let client = FakeClient {
             tag: "v0.2.0".into(),
             assets: vec![],
             downloads: Mutex::new(Vec::new()),
             files: HashMap::new(),
         };
-        execute_with_client(&client, true, false, "0.2.0").unwrap();
+        execute_with_client(&client, Path::new(STANDALONE_EXE), true, false, "0.2.0").unwrap();
+        assert!(client.downloads.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn managed_install_prints_hint_without_fetch() {
+        let client = FakeClient {
+            tag: "v9.9.9".into(),
+            assets: vec![],
+            downloads: Mutex::new(Vec::new()),
+            files: HashMap::new(),
+        };
+        execute_with_client(
+            &client,
+            Path::new("/opt/homebrew/bin/numan"),
+            false,
+            false,
+            "0.2.0",
+        )
+        .unwrap();
+        assert!(client.downloads.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn apply_rejects_missing_platform_asset() {
+        let Some(_) = platform_asset_name("9.9.9") else {
+            // Unsupported host triple: apply path correctly fails at asset naming.
+            let client = FakeClient {
+                tag: "v9.9.9".into(),
+                assets: vec![("SHA256SUMS".into(), "https://example.test/sums".into())],
+                downloads: Mutex::new(Vec::new()),
+                files: HashMap::new(),
+            };
+            let err =
+                execute_with_client(&client, Path::new(STANDALONE_EXE), false, false, "0.2.0")
+                    .unwrap_err()
+                    .to_string();
+            assert!(err.contains("No GitHub Release asset"), "{err}");
+            return;
+        };
+
+        let client = FakeClient {
+            tag: "v9.9.9".into(),
+            assets: vec![("SHA256SUMS".into(), "https://example.test/sums".into())],
+            downloads: Mutex::new(Vec::new()),
+            files: HashMap::new(),
+        };
+        let err = execute_with_client(&client, Path::new(STANDALONE_EXE), false, false, "0.2.0")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("has no asset named"), "{err}");
+        assert!(client.downloads.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn apply_rejects_missing_sha256sums_asset() {
+        let Some(asset_name) = platform_asset_name("9.9.9") else {
+            return;
+        };
+        let client = FakeClient {
+            tag: "v9.9.9".into(),
+            assets: vec![(asset_name, "https://example.test/archive".into())],
+            downloads: Mutex::new(Vec::new()),
+            files: HashMap::new(),
+        };
+        let err = execute_with_client(&client, Path::new(STANDALONE_EXE), false, false, "0.2.0")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("missing SHA256SUMS"), "{err}");
+    }
+
+    #[test]
+    fn apply_rejects_asset_absent_from_sha256sums() {
+        let Some(asset_name) = platform_asset_name("9.9.9") else {
+            return;
+        };
+        let archive_url = "https://example.test/archive";
+        let sums_url = "https://example.test/sums";
+        let mut files = HashMap::new();
+        files.insert(archive_url.to_string(), b"archive-bytes".to_vec());
+        files.insert(
+            sums_url.to_string(),
+            b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  other.tar.gz\n"
+                .to_vec(),
+        );
+        let client = FakeClient {
+            tag: "v9.9.9".into(),
+            assets: vec![
+                (asset_name.clone(), archive_url.into()),
+                ("SHA256SUMS".into(), sums_url.into()),
+            ],
+            downloads: Mutex::new(Vec::new()),
+            files,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let fake_exe = dir.path().join(numan_binary_name());
+        std::fs::write(&fake_exe, b"old").unwrap();
+        let err = execute_with_client(&client, &fake_exe, false, false, "0.2.0")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("SHA256SUMS does not list") || err.contains(&asset_name),
+            "{err}"
+        );
+        assert_eq!(std::fs::read(&fake_exe).unwrap(), b"old");
+    }
+
+    #[test]
+    fn apply_rejects_checksum_mismatch() {
+        let Some(asset_name) = platform_asset_name("9.9.9") else {
+            return;
+        };
+        let archive_url = "https://example.test/archive";
+        let sums_url = "https://example.test/sums";
+        let wrong = "0000000000000000000000000000000000000000000000000000000000000000";
+        let sums = format!("{wrong}  {asset_name}\n");
+        let mut files = HashMap::new();
+        files.insert(archive_url.to_string(), b"archive-bytes".to_vec());
+        files.insert(sums_url.to_string(), sums.into_bytes());
+        let client = FakeClient {
+            tag: "v9.9.9".into(),
+            assets: vec![
+                (asset_name, archive_url.into()),
+                ("SHA256SUMS".into(), sums_url.into()),
+            ],
+            downloads: Mutex::new(Vec::new()),
+            files,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let fake_exe = dir.path().join(numan_binary_name());
+        std::fs::write(&fake_exe, b"old").unwrap();
+        let err = execute_with_client(&client, &fake_exe, false, false, "0.2.0")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Integrity check failed"), "{err}");
+        assert_eq!(std::fs::read(&fake_exe).unwrap(), b"old");
+    }
+
+    #[test]
+    fn apply_rejects_non_https_asset_url() {
+        let Some(asset_name) = platform_asset_name("9.9.9") else {
+            return;
+        };
+        let client = FakeClient {
+            tag: "v9.9.9".into(),
+            assets: vec![
+                (asset_name, "http://example.test/archive".into()),
+                ("SHA256SUMS".into(), "https://example.test/sums".into()),
+            ],
+            downloads: Mutex::new(Vec::new()),
+            files: HashMap::new(),
+        };
+        let err = execute_with_client(&client, Path::new(STANDALONE_EXE), false, false, "0.2.0")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("must use https"), "{err}");
         assert!(client.downloads.lock().unwrap().is_empty());
     }
 }
