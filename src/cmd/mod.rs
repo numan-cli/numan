@@ -13,6 +13,7 @@ pub mod plugin_lifecycle;
 pub mod registry;
 pub mod remove;
 pub mod search;
+pub mod self_update;
 pub mod setup;
 pub mod snapshot;
 pub mod try_cmd;

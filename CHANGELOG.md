@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`numan update --self`**: upgrade the numan CLI itself. Standalone installs download the matching GitHub Release asset, verify `SHA256SUMS`, and replace the binary in place. Homebrew / winget / cargo installs print the exact upgrade command instead of self-replacing. Pair with `--check` to report without applying.
+
 ## [0.2.0] - 2026-08-05
 
 ### Added

@@ -281,8 +281,10 @@ numan deactivate owner/module-name
 #### 5. Maintain installs
 
 ```bash
-numan update --check              # see available upgrades
-numan update                      # apply upgrades
+numan update --check              # see available package upgrades
+numan update                      # apply package upgrades
+numan update --self --check       # see if a newer numan binary is available
+numan update --self               # replace this numan binary (or print brew/winget/cargo upgrade)
 numan remove owner/package-name
 numan gc --dry-run                # preview orphaned payload dirs
 numan gc                          # delete unreferenced payloads
@@ -348,6 +350,7 @@ Global flag: `--root <path>` — override the numan root directory (all commands
 | `numan activate [pkg...]` | Register plugins / write module autoloads (scripts and completion packages are deferred) |
 | `numan deactivate [pkg...]` | Remove module autoload entries |
 | `numan update [--check] [pkg]` | Upgrade installed packages |
+| `numan update --self [--check]` | Upgrade the numan binary (GitHub Release self-replace, or print brew/winget/cargo command) |
 | `numan remove [--force] <pkg>` | Remove from lockfile and delete payload |
 | `numan gc [--dry-run]` | Delete orphaned package directories |
 | `numan snapshot list` | List all committed activation snapshots |
@@ -377,7 +380,7 @@ Global flag: `--root <path>` — override the numan root directory (all commands
 | `install` | `--force` reinstall; `-v` / `--verbose` |
 | `activate` | `--verbose`; `--list` status only; `--check` integrity only |
 | `deactivate` | `--verbose` |
-| `update` | `--check` report only; `-v` / `--verbose` |
+| `update` | `--check` report only; `--self` update the numan binary; `-v` / `--verbose` |
 | `remove` | `--force` remove despite active activation |
 | `gc` | `--dry-run` preview only |
 | `registry add` | `--key <base64-public-key>` (required for custom registries; official is auto-configured on `init`) |
