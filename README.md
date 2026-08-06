@@ -290,7 +290,7 @@ numan gc --dry-run                # preview orphaned payload dirs
 numan gc                          # delete unreferenced payloads
 ```
 
-For Homebrew, winget, or `cargo install` installs, `numan update --self` and `--self --check` both print the matching upgrade command (`brew upgrade numan`, `winget upgrade tonythethompson.numan`, or `cargo install --locked --force numan-cli`) instead of downloading a release asset. Standalone checksum verification guards against truncated or corrupted downloads; release assets are not separately signed.
+For Homebrew, winget, or `cargo install` installs, `numan update --self` and `--self --check` both print the matching upgrade command (`brew upgrade numan`, `winget upgrade tonythethompson.numan`, or `cargo install --locked --force numan-cli`) instead of downloading a release asset. Standalone apply downloads the archive plus `SHA256SUMS` and `SHA256SUMS.sig`, verifies the Ed25519 signature with a public key baked into the binary, then checks the archive digest.
 numan snapshots activation state before `update`, `remove`, `activate`, and `deactivate`, so a bad change can be undone:
 
 ```bash

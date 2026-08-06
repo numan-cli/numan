@@ -1,6 +1,7 @@
 //! Self-update the `numan` binary from GitHub Releases (`numan update --self`).
 
 use anyhow::{bail, Context, Result};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -13,6 +14,11 @@ use crate::install::extract::{extract_archive, ArchiveFormat, ExtractConfig};
 const RELEASES_LATEST: &str = "https://api.github.com/repos/tonythethompson/numan/releases/latest";
 const USER_AGENT: &str = "numan-cli (https://github.com/tonythethompson/numan)";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Ed25519 public key (standard base64) that must sign `SHA256SUMS` for
+/// `numan update --self`. The matching 32-byte seed is stored only as the
+/// GitHub Actions secret `NUMAN_RELEASE_SIGNING_KEY` (see docs/RELEASING.md).
+pub const RELEASE_SUMS_PUBLIC_KEY_B64: &str = "ZyxTCLZyE1xDNnxiHmkSlUe8Y1IIvFoT+XR/+PgVcpw=";
 
 /// How this `numan` binary was installed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,6 +164,50 @@ fn require_https(url: &str, what: &str) -> Result<()> {
     Ok(())
 }
 
+/// Verify a detached base64 Ed25519 signature over exact `SHA256SUMS` bytes.
+pub fn verify_sha256sums_signature(
+    sums_bytes: &[u8],
+    signature_b64: &str,
+    public_key_b64: &str,
+) -> Result<()> {
+    let key_bytes = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        public_key_b64.trim(),
+    )
+    .context("Invalid base64 release public key")?;
+    if key_bytes.len() != 32 {
+        bail!(
+            "Release public key must be 32 bytes, got {}",
+            key_bytes.len()
+        );
+    }
+    let mut key_array = [0u8; 32];
+    key_array.copy_from_slice(&key_bytes);
+    let verifying_key =
+        VerifyingKey::from_bytes(&key_array).context("Invalid Ed25519 release public key")?;
+
+    let sig_bytes = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        signature_b64.trim(),
+    )
+    .context("Invalid base64 SHA256SUMS signature")?;
+    if sig_bytes.len() != 64 {
+        bail!(
+            "Ed25519 SHA256SUMS signature must be 64 bytes, got {}",
+            sig_bytes.len()
+        );
+    }
+    let mut sig_array = [0u8; 64];
+    sig_array.copy_from_slice(&sig_bytes);
+    let signature = Signature::from_bytes(&sig_array);
+
+    verifying_key.verify(sums_bytes, &signature).context(
+        "SHA256SUMS signature verification failed. The checksum file may have been \
+             tampered with, or this release was not signed with the Numan release key.",
+    )?;
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
     tag_name: String,
@@ -213,16 +263,24 @@ impl ReleaseClient for HttpReleaseClient {
 /// Run `numan update --self` (optionally `--check`).
 pub fn execute(check: bool, verbose: bool) -> Result<()> {
     let exe = std::env::current_exe().context("Failed to resolve current numan executable path")?;
-    execute_with_client(&HttpReleaseClient, &exe, check, verbose, CURRENT_VERSION)
+    execute_with_client(
+        &HttpReleaseClient,
+        &exe,
+        check,
+        verbose,
+        CURRENT_VERSION,
+        RELEASE_SUMS_PUBLIC_KEY_B64,
+    )
 }
 
-/// Test seam: inject release client, executable path, and current version string.
+/// Test seam: inject release client, executable path, version, and sums pubkey.
 pub fn execute_with_client(
     client: &dyn ReleaseClient,
     exe: &Path,
     check: bool,
     verbose: bool,
     current_version: &str,
+    sums_public_key_b64: &str,
 ) -> Result<()> {
     let method = detect_install_method(exe);
 
@@ -281,12 +339,22 @@ pub fn execute_with_client(
         .context(
             "Release is missing SHA256SUMS. Refusing to self-update without checksum verification.",
         )?;
+    let sig_url = assets
+        .iter()
+        .find(|(name, _)| name == "SHA256SUMS.sig")
+        .map(|(_, url)| url.as_str())
+        .context(
+            "Release is missing SHA256SUMS.sig. Refusing to self-update without an \
+             independently signed checksum file.",
+        )?;
     require_https(asset_url, "Release asset")?;
     require_https(sums_url, "SHA256SUMS")?;
+    require_https(sig_url, "SHA256SUMS.sig")?;
 
     let temp = tempfile::tempdir().context("Failed to create temp dir for self-update")?;
     let archive_path = temp.path().join(&asset_name);
     let sums_path = temp.path().join("SHA256SUMS");
+    let sig_path = temp.path().join("SHA256SUMS.sig");
 
     println!("Downloading {asset_name}...");
     client
@@ -295,17 +363,20 @@ pub fn execute_with_client(
     client
         .download(sums_url, &sums_path)
         .context("Failed to download SHA256SUMS")?;
+    client
+        .download(sig_url, &sig_path)
+        .context("Failed to download SHA256SUMS.sig")?;
 
-    let sums_text = std::fs::read_to_string(&sums_path).context("Failed to read SHA256SUMS")?;
+    let sums_bytes = std::fs::read(&sums_path).context("Failed to read SHA256SUMS")?;
+    let sig_b64 = std::fs::read_to_string(&sig_path).context("Failed to read SHA256SUMS.sig")?;
+    verify_sha256sums_signature(&sums_bytes, &sig_b64, sums_public_key_b64)?;
+
+    let sums_text = String::from_utf8(sums_bytes).context("SHA256SUMS is not valid UTF-8")?;
     let sums = parse_sha256sums(&sums_text);
     let expected = sums.get(&asset_name).with_context(|| {
         format!("SHA256SUMS does not list '{asset_name}'. Refusing to install.")
     })?;
     integrity::verify_and_report(&archive_path, expected, &asset_name)?;
-    // SHA256SUMS arrives from the same GitHub Release as the archive, so this
-    // check detects truncation/corruption, not an independently authenticated
-    // publisher identity. Release-channel compromise remains out of scope until
-    // signed release artifacts land (same trust model as a manual download).
 
     let new_bytes = extract_numan_binary(&archive_path, &asset_name, temp.path())?;
     let dest = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
@@ -742,6 +813,25 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  good.tar.gz
         release_asset_name(version, &Platform::detect()).ok()
     }
 
+    fn test_signing_keypair() -> (String, ed25519_dalek::SigningKey) {
+        use ed25519_dalek::SigningKey;
+        use rand_core::OsRng;
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let pub_b64 = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            signing_key.verifying_key().as_bytes(),
+        );
+        (pub_b64, signing_key)
+    }
+
+    fn sign_sums(signing_key: &ed25519_dalek::SigningKey, sums: &[u8]) -> String {
+        use ed25519_dalek::Signer;
+        base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            signing_key.sign(sums).to_bytes(),
+        )
+    }
+
     #[test]
     fn check_reports_update_without_download() {
         let client = FakeClient {
@@ -756,7 +846,15 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  good.tar.gz
             downloads: Mutex::new(Vec::new()),
             files: HashMap::new(),
         };
-        execute_with_client(&client, Path::new(STANDALONE_EXE), true, false, "0.2.0").unwrap();
+        execute_with_client(
+            &client,
+            Path::new(STANDALONE_EXE),
+            true,
+            false,
+            "0.2.0",
+            "unused",
+        )
+        .unwrap();
         assert!(
             client.downloads.lock().unwrap().is_empty(),
             "check must not download"
@@ -771,7 +869,15 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  good.tar.gz
             downloads: Mutex::new(Vec::new()),
             files: HashMap::new(),
         };
-        execute_with_client(&client, Path::new(STANDALONE_EXE), true, false, "0.2.0").unwrap();
+        execute_with_client(
+            &client,
+            Path::new(STANDALONE_EXE),
+            true,
+            false,
+            "0.2.0",
+            "unused",
+        )
+        .unwrap();
         assert!(client.downloads.lock().unwrap().is_empty());
     }
 
@@ -789,6 +895,7 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  good.tar.gz
             false,
             false,
             "0.2.0",
+            "unused",
         )
         .unwrap();
         assert!(client.downloads.lock().unwrap().is_empty());
@@ -804,10 +911,16 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  good.tar.gz
                 downloads: Mutex::new(Vec::new()),
                 files: HashMap::new(),
             };
-            let err =
-                execute_with_client(&client, Path::new(STANDALONE_EXE), false, false, "0.2.0")
-                    .unwrap_err()
-                    .to_string();
+            let err = execute_with_client(
+                &client,
+                Path::new(STANDALONE_EXE),
+                false,
+                false,
+                "0.2.0",
+                "unused",
+            )
+            .unwrap_err()
+            .to_string();
             assert!(err.contains("No GitHub Release asset"), "{err}");
             return;
         };
@@ -818,9 +931,16 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  good.tar.gz
             downloads: Mutex::new(Vec::new()),
             files: HashMap::new(),
         };
-        let err = execute_with_client(&client, Path::new(STANDALONE_EXE), false, false, "0.2.0")
-            .unwrap_err()
-            .to_string();
+        let err = execute_with_client(
+            &client,
+            Path::new(STANDALONE_EXE),
+            false,
+            false,
+            "0.2.0",
+            "unused",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("has no asset named"), "{err}");
         assert!(client.downloads.lock().unwrap().is_empty());
     }
@@ -836,10 +956,44 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  good.tar.gz
             downloads: Mutex::new(Vec::new()),
             files: HashMap::new(),
         };
-        let err = execute_with_client(&client, Path::new(STANDALONE_EXE), false, false, "0.2.0")
-            .unwrap_err()
-            .to_string();
+        let err = execute_with_client(
+            &client,
+            Path::new(STANDALONE_EXE),
+            false,
+            false,
+            "0.2.0",
+            "unused",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("missing SHA256SUMS"), "{err}");
+    }
+
+    #[test]
+    fn apply_rejects_missing_sha256sums_sig() {
+        let Some(asset_name) = platform_asset_name("9.9.9") else {
+            return;
+        };
+        let client = FakeClient {
+            tag: "v9.9.9".into(),
+            assets: vec![
+                (asset_name, "https://example.test/archive".into()),
+                ("SHA256SUMS".into(), "https://example.test/sums".into()),
+            ],
+            downloads: Mutex::new(Vec::new()),
+            files: HashMap::new(),
+        };
+        let err = execute_with_client(
+            &client,
+            Path::new(STANDALONE_EXE),
+            false,
+            false,
+            "0.2.0",
+            "unused",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("missing SHA256SUMS.sig"), "{err}");
     }
 
     #[test]
@@ -847,20 +1001,24 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  good.tar.gz
         let Some(asset_name) = platform_asset_name("9.9.9") else {
             return;
         };
+        let (pub_b64, signing_key) = test_signing_keypair();
         let archive_url = "https://example.test/archive";
         let sums_url = "https://example.test/sums";
+        let sig_url = "https://example.test/sums.sig";
+        let sums =
+            b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  other.tar.gz\n"
+                .to_vec();
+        let sig = sign_sums(&signing_key, &sums);
         let mut files = HashMap::new();
         files.insert(archive_url.to_string(), b"archive-bytes".to_vec());
-        files.insert(
-            sums_url.to_string(),
-            b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  other.tar.gz\n"
-                .to_vec(),
-        );
+        files.insert(sums_url.to_string(), sums);
+        files.insert(sig_url.to_string(), sig.into_bytes());
         let client = FakeClient {
             tag: "v9.9.9".into(),
             assets: vec![
                 (asset_name.clone(), archive_url.into()),
                 ("SHA256SUMS".into(), sums_url.into()),
+                ("SHA256SUMS.sig".into(), sig_url.into()),
             ],
             downloads: Mutex::new(Vec::new()),
             files,
@@ -868,7 +1026,7 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  good.tar.gz
         let dir = tempfile::tempdir().unwrap();
         let fake_exe = dir.path().join(numan_binary_name());
         std::fs::write(&fake_exe, b"old").unwrap();
-        let err = execute_with_client(&client, &fake_exe, false, false, "0.2.0")
+        let err = execute_with_client(&client, &fake_exe, false, false, "0.2.0", &pub_b64)
             .unwrap_err()
             .to_string();
         assert!(
@@ -883,18 +1041,23 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  good.tar.gz
         let Some(asset_name) = platform_asset_name("9.9.9") else {
             return;
         };
+        let (pub_b64, signing_key) = test_signing_keypair();
         let archive_url = "https://example.test/archive";
         let sums_url = "https://example.test/sums";
+        let sig_url = "https://example.test/sums.sig";
         let wrong = "0000000000000000000000000000000000000000000000000000000000000000";
-        let sums = format!("{wrong}  {asset_name}\n");
+        let sums = format!("{wrong}  {asset_name}\n").into_bytes();
+        let sig = sign_sums(&signing_key, &sums);
         let mut files = HashMap::new();
         files.insert(archive_url.to_string(), b"archive-bytes".to_vec());
-        files.insert(sums_url.to_string(), sums.into_bytes());
+        files.insert(sums_url.to_string(), sums);
+        files.insert(sig_url.to_string(), sig.into_bytes());
         let client = FakeClient {
             tag: "v9.9.9".into(),
             assets: vec![
                 (asset_name, archive_url.into()),
                 ("SHA256SUMS".into(), sums_url.into()),
+                ("SHA256SUMS.sig".into(), sig_url.into()),
             ],
             downloads: Mutex::new(Vec::new()),
             files,
@@ -902,11 +1065,54 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  good.tar.gz
         let dir = tempfile::tempdir().unwrap();
         let fake_exe = dir.path().join(numan_binary_name());
         std::fs::write(&fake_exe, b"old").unwrap();
-        let err = execute_with_client(&client, &fake_exe, false, false, "0.2.0")
+        let err = execute_with_client(&client, &fake_exe, false, false, "0.2.0", &pub_b64)
             .unwrap_err()
             .to_string();
         assert!(err.contains("Integrity check failed"), "{err}");
         assert_eq!(std::fs::read(&fake_exe).unwrap(), b"old");
+    }
+
+    #[test]
+    fn apply_rejects_bad_sums_signature() {
+        let Some(asset_name) = platform_asset_name("9.9.9") else {
+            return;
+        };
+        let (pub_b64, _signing_key) = test_signing_keypair();
+        let (_other_pub, other_key) = test_signing_keypair();
+        let archive_url = "https://example.test/archive";
+        let sums_url = "https://example.test/sums";
+        let sig_url = "https://example.test/sums.sig";
+        let sums = format!(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  {asset_name}\n"
+        )
+        .into_bytes();
+        // Sign with a different key than the injected verifying key.
+        let sig = sign_sums(&other_key, &sums);
+        let mut files = HashMap::new();
+        files.insert(archive_url.to_string(), b"archive-bytes".to_vec());
+        files.insert(sums_url.to_string(), sums);
+        files.insert(sig_url.to_string(), sig.into_bytes());
+        let client = FakeClient {
+            tag: "v9.9.9".into(),
+            assets: vec![
+                (asset_name, archive_url.into()),
+                ("SHA256SUMS".into(), sums_url.into()),
+                ("SHA256SUMS.sig".into(), sig_url.into()),
+            ],
+            downloads: Mutex::new(Vec::new()),
+            files,
+        };
+        let err = execute_with_client(
+            &client,
+            Path::new(STANDALONE_EXE),
+            false,
+            false,
+            "0.2.0",
+            &pub_b64,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("signature verification failed"), "{err}");
     }
 
     #[test]
@@ -919,14 +1125,37 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  good.tar.gz
             assets: vec![
                 (asset_name, "http://example.test/archive".into()),
                 ("SHA256SUMS".into(), "https://example.test/sums".into()),
+                (
+                    "SHA256SUMS.sig".into(),
+                    "https://example.test/sums.sig".into(),
+                ),
             ],
             downloads: Mutex::new(Vec::new()),
             files: HashMap::new(),
         };
-        let err = execute_with_client(&client, Path::new(STANDALONE_EXE), false, false, "0.2.0")
-            .unwrap_err()
-            .to_string();
+        let err = execute_with_client(
+            &client,
+            Path::new(STANDALONE_EXE),
+            false,
+            false,
+            "0.2.0",
+            "unused",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("must use https"), "{err}");
         assert!(client.downloads.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn verify_sha256sums_signature_round_trip() {
+        let (pub_b64, signing_key) = test_signing_keypair();
+        let sums = b"deadbeef  numan.tar.gz\n";
+        let sig = sign_sums(&signing_key, sums);
+        verify_sha256sums_signature(sums, &sig, &pub_b64).unwrap();
+        let err = verify_sha256sums_signature(b"tampered", &sig, &pub_b64)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("signature verification failed"), "{err}");
     }
 }
