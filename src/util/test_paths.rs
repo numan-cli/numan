@@ -5,11 +5,13 @@
 //! on the process-global environment and so a developer shell is not left with
 //! a poisoned PATH after the test binary exits.
 //!
-//! On Windows, the guard prevents test-triggered persistent User PATH writes.
-//! Production `numan setup nu use` / doctor off-PATH repair call
+//! On Windows, [`PathRestoreGuard`] also snapshots and restores the **User**
+//! PATH registry value (distinguishing absent `$null` from an explicit empty
+//! string). Production `numan setup nu use` / doctor off-PATH repair call
 //! [`crate::nu::bootstrap::persist_path_dir`], which writes the User PATH via
-//! PowerShell; the test-only environment flag prevents those writes during
-//! guarded tests.
+//! PowerShell; the test-only `NUMAN_TEST_NO_PERSIST_USER_PATH` flag blocks those
+//! writes while the guard is held, and Drop restores the snapshotted User PATH
+//! if anything still mutated it.
 
 use std::ffi::OsString;
 use std::sync::{Mutex, MutexGuard};
@@ -21,6 +23,9 @@ static PATH_MUTEX: Mutex<()> = Mutex::new(());
 /// RAII guard that snapshots the process PATH on construction and
 /// restores it on drop. Acquires a shared process-wide mutex so callers
 /// never need a separate `Mutex` for PATH serialization.
+///
+/// On Windows, also snapshots/restores the User PATH environment variable
+/// stored in the registry (what `persist_path_dir` mutates).
 ///
 /// Use this around any test that mutates PATH so real-Nu runs from a
 /// developer terminal are not poisoned by the test process, and so
@@ -35,13 +40,25 @@ static PATH_MUTEX: Mutex<()> = Mutex::new(());
 /// ```text
 /// let _path_guard = PathRestoreGuard::new();
 /// // mutate PATH...
-/// // drop restores the original process PATH
+/// // drop restores original process PATH (and Windows User PATH)
 /// ```
 pub struct PathRestoreGuard {
     original: Option<OsString>,
     /// Pre-existing `NUMAN_TEST_NO_PERSIST_USER_PATH` value (or `None` if absent).
     previous_no_persist: Option<OsString>,
+    #[cfg(windows)]
+    original_user_path: Option<WindowsUserPathSnapshot>,
     _lock: MutexGuard<'static, ()>,
+}
+
+/// Windows User PATH registry snapshot distinguishing absent vs empty.
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WindowsUserPathSnapshot {
+    /// `[Environment]::GetEnvironmentVariable('Path','User')` returned `$null`.
+    Absent,
+    /// Present registry value, including the empty string.
+    Value(OsString),
 }
 
 impl PathRestoreGuard {
@@ -60,6 +77,17 @@ impl PathRestoreGuard {
         Self {
             original: std::env::var_os("PATH"),
             previous_no_persist,
+            #[cfg(windows)]
+            original_user_path: match read_windows_user_path() {
+                Ok(snapshot) => Some(snapshot),
+                Err(err) => {
+                    eprintln!(
+                        "PathRestoreGuard: warning: could not snapshot Windows User PATH ({err}); \
+                         restore-on-drop may be skipped"
+                    );
+                    None
+                }
+            },
             _lock: lock,
         }
     }
@@ -75,6 +103,19 @@ impl Drop for PathRestoreGuard {
             Some(prev) => std::env::set_var("NUMAN_TEST_NO_PERSIST_USER_PATH", prev),
             None => std::env::remove_var("NUMAN_TEST_NO_PERSIST_USER_PATH"),
         }
+        #[cfg(windows)]
+        {
+            if let Some(snapshot) = self.original_user_path.as_ref() {
+                if let Err(err) = write_windows_user_path(snapshot) {
+                    // Never panic in Drop; surface the leak clearly on stderr.
+                    eprintln!(
+                        "PathRestoreGuard: failed to restore Windows User PATH: {err:#}\n\
+                         Remove leftover Temp\\.tmp*\\off (or existing-nu) entries from \
+                         System Properties → Environment Variables → User Path."
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -82,6 +123,93 @@ impl Default for PathRestoreGuard {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Snapshot wire format from PowerShell (unambiguous for `$null` vs `""`):
+/// - `A` → User PATH absent (`$null`)
+/// - `P<decimal-len>\n<exact-bytes>` → present value (len may be 0)
+#[cfg(windows)]
+fn read_windows_user_path() -> Result<WindowsUserPathSnapshot, String> {
+    let script = concat!(
+        "$v = [Environment]::GetEnvironmentVariable('Path', 'User'); ",
+        "if ($null -eq $v) { ",
+        "Write-Output 'A' ",
+        "} else { ",
+        "Write-Output ('P' + $v.Length); ",
+        "[Console]::Out.Write($v) ",
+        "}"
+    );
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .output()
+        .map_err(|e| format!("failed to invoke PowerShell: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "PowerShell User PATH read failed (status {}): {stderr}",
+            output.status
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.split_inclusive('\n');
+    let first = lines
+        .next()
+        .map(|l| l.trim_end_matches(['\r', '\n']))
+        .unwrap_or("");
+    if first == "A" {
+        return Ok(WindowsUserPathSnapshot::Absent);
+    }
+    let Some(len_str) = first.strip_prefix('P') else {
+        return Err(format!(
+            "unexpected PowerShell User PATH snapshot marker: {first:?}"
+        ));
+    };
+    let expected_len: usize = len_str
+        .parse()
+        .map_err(|_| format!("invalid User PATH length prefix: {len_str:?}"))?;
+    let rest: String = lines.collect();
+    if rest.len() < expected_len {
+        return Err(format!(
+            "User PATH snapshot length mismatch: expected {expected_len}, got {}",
+            rest.len()
+        ));
+    }
+    let value = rest[..expected_len].to_string();
+    Ok(WindowsUserPathSnapshot::Value(OsString::from(value)))
+}
+
+#[cfg(windows)]
+fn write_windows_user_path(snapshot: &WindowsUserPathSnapshot) -> anyhow::Result<()> {
+    use anyhow::{bail, Context};
+    let (script, maybe_env): (&str, Option<&str>) = match snapshot {
+        // $null clears the User Path variable (absent), distinct from "".
+        WindowsUserPathSnapshot::Absent => (
+            "[Environment]::SetEnvironmentVariable('Path', $null, 'User')",
+            None,
+        ),
+        WindowsUserPathSnapshot::Value(value) => {
+            let value_str = value
+                .to_str()
+                .context("Windows User PATH snapshot is not valid UTF-8")?;
+            (
+                "[Environment]::SetEnvironmentVariable('Path', $env:NUMAN_RESTORE_USER_PATH, 'User')",
+                Some(value_str),
+            )
+        }
+    };
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+    if let Some(value_str) = maybe_env {
+        cmd.env("NUMAN_RESTORE_USER_PATH", value_str);
+    }
+    let output = cmd
+        .output()
+        .context("Failed to invoke PowerShell to restore user PATH")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("Failed to restore user PATH: {stderr}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -103,6 +231,8 @@ mod tests {
         PathRestoreGuard {
             original: std::env::var_os("PATH"),
             previous_no_persist,
+            #[cfg(windows)]
+            original_user_path: None,
             _lock: lock,
         }
     }
@@ -143,5 +273,33 @@ mod tests {
                 "flag must be removed when it was originally absent"
             );
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_user_path_tests {
+    use super::*;
+
+    #[test]
+    fn read_windows_user_path_distinguishes_absent_and_empty() {
+        // Snapshot+restore the developer's real User PATH around mutations.
+        let _guard = PathRestoreGuard::new();
+
+        write_windows_user_path(&WindowsUserPathSnapshot::Value(OsString::from("")))
+            .expect("set empty User PATH");
+        let empty = read_windows_user_path().expect("read empty User PATH");
+        assert_eq!(
+            empty,
+            WindowsUserPathSnapshot::Value(OsString::from("")),
+            "empty string must not be treated as absent"
+        );
+
+        write_windows_user_path(&WindowsUserPathSnapshot::Absent).expect("clear User PATH");
+        let absent = read_windows_user_path().expect("read absent User PATH");
+        assert_eq!(
+            absent,
+            WindowsUserPathSnapshot::Absent,
+            "absent ($null) must not be treated as empty string"
+        );
     }
 }
