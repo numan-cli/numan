@@ -601,13 +601,23 @@ fn persist_path_dir_windows(dir: &Path) -> Result<()> {
 }
 
 fn path_is_under_temp_dir(dir: &Path) -> bool {
-    let Ok(temp) = std::env::temp_dir().canonicalize() else {
-        return false;
+    path_is_under_temp_dir_with(dir, &std::env::temp_dir())
+}
+
+/// Returns true when `dir` sits under `temp_raw`, failing closed if either
+/// path cannot be canonicalized (lexical `starts_with` fallback).
+fn path_is_under_temp_dir_with(dir: &Path, temp_raw: &Path) -> bool {
+    let Ok(temp) = temp_raw.canonicalize() else {
+        // Fail closed: an unresolvable temp root must still refuse lexical
+        // children (same fallback as an uncanonicalizable `dir`).
+        return match dir.canonicalize() {
+            Ok(d) => d.starts_with(temp_raw),
+            Err(_) => dir.starts_with(temp_raw),
+        };
     };
     let Ok(dir) = dir.canonicalize() else {
         // If the dir vanished, still treat literal temp prefixes as unsafe.
-        let temp_raw = std::env::temp_dir();
-        return dir.starts_with(&temp_raw);
+        return dir.starts_with(temp_raw);
     };
     dir.starts_with(&temp)
 }
@@ -1150,6 +1160,32 @@ mod tests {
         assert!(
             msg.contains("temporary directory") || msg.contains("Refusing"),
             "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn path_is_under_temp_dir_fails_closed_when_temp_uncanonicalizable() {
+        // A temp root that does not exist cannot be canonicalized; the helper
+        // must still refuse lexical children (fail closed), not return false.
+        let missing_temp =
+            std::env::temp_dir().join(format!("numan-missing-temp-root-{}", std::process::id()));
+        assert!(
+            !missing_temp.exists(),
+            "precondition: missing temp root must not exist"
+        );
+        let nested = missing_temp.join("off");
+        assert!(
+            path_is_under_temp_dir_with(&nested, &missing_temp),
+            "lexical child of an uncanonicalizable temp root must be refused"
+        );
+        let outside = PathBuf::from(if cfg!(windows) {
+            r"C:\Windows\System32"
+        } else {
+            "/usr/bin"
+        });
+        assert!(
+            !path_is_under_temp_dir_with(&outside, &missing_temp),
+            "unrelated paths must not match an uncanonicalizable temp root"
         );
     }
 

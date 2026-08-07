@@ -39,6 +39,8 @@ static PATH_MUTEX: Mutex<()> = Mutex::new(());
 /// ```
 pub struct PathRestoreGuard {
     original: Option<OsString>,
+    /// Pre-existing `NUMAN_TEST_NO_PERSIST_USER_PATH` value (or `None` if absent).
+    previous_no_persist: Option<OsString>,
     _lock: MutexGuard<'static, ()>,
 }
 
@@ -47,21 +49,17 @@ impl PathRestoreGuard {
         let lock = PATH_MUTEX
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        #[cfg(windows)]
-        {
-            // Block persistent User PATH writes for the duration of the guard.
-            // Production `persist_path_dir` checks this; without it, ignored
-            // acceptance tests permanently pollute developer User PATH with
-            // tempfile fixture dirs.
-            std::env::set_var("NUMAN_TEST_NO_PERSIST_USER_PATH", "1");
-        }
-        #[cfg(unix)]
-        {
-            // Same for Unix shell-profile PATH appends from off-path registration.
-            std::env::set_var("NUMAN_TEST_NO_PERSIST_USER_PATH", "1");
-        }
+        // Capture then set so Drop can restore a pre-existing value (or remove
+        // only when the variable was originally absent).
+        let previous_no_persist = std::env::var_os("NUMAN_TEST_NO_PERSIST_USER_PATH");
+        // Block durable PATH writes for the duration of the guard.
+        // Production `persist_path_dir` checks this; without it, ignored
+        // acceptance tests permanently pollute developer User PATH / shell
+        // profiles with tempfile fixture dirs.
+        std::env::set_var("NUMAN_TEST_NO_PERSIST_USER_PATH", "1");
         Self {
             original: std::env::var_os("PATH"),
+            previous_no_persist,
             _lock: lock,
         }
     }
@@ -73,7 +71,10 @@ impl Drop for PathRestoreGuard {
             Some(path) => std::env::set_var("PATH", path),
             None => std::env::remove_var("PATH"),
         }
-        std::env::remove_var("NUMAN_TEST_NO_PERSIST_USER_PATH");
+        match self.previous_no_persist.as_ref() {
+            Some(prev) => std::env::set_var("NUMAN_TEST_NO_PERSIST_USER_PATH", prev),
+            None => std::env::remove_var("NUMAN_TEST_NO_PERSIST_USER_PATH"),
+        }
     }
 }
 
@@ -83,3 +84,64 @@ impl Default for PathRestoreGuard {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Like [`PathRestoreGuard::new`], but installs `previous` under the PATH
+    /// mutex before capturing so parallel tests cannot race the set/capture window.
+    fn guard_with_previous_no_persist(previous: Option<&str>) -> PathRestoreGuard {
+        let lock = PATH_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match previous {
+            Some(v) => std::env::set_var("NUMAN_TEST_NO_PERSIST_USER_PATH", v),
+            None => std::env::remove_var("NUMAN_TEST_NO_PERSIST_USER_PATH"),
+        }
+        let previous_no_persist = std::env::var_os("NUMAN_TEST_NO_PERSIST_USER_PATH");
+        std::env::set_var("NUMAN_TEST_NO_PERSIST_USER_PATH", "1");
+        PathRestoreGuard {
+            original: std::env::var_os("PATH"),
+            previous_no_persist,
+            _lock: lock,
+        }
+    }
+
+    #[test]
+    fn path_restore_guard_preserves_no_persist_flag_across_drop() {
+        {
+            let guard = guard_with_previous_no_persist(Some("preexisting"));
+            assert_eq!(
+                std::env::var("NUMAN_TEST_NO_PERSIST_USER_PATH").as_deref(),
+                Ok("1")
+            );
+            drop(guard);
+            // Re-acquire so parallel PathRestoreGuard users cannot flip the flag
+            // between Drop restore and our assertion.
+            let _lock = PATH_MUTEX
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            assert_eq!(
+                std::env::var("NUMAN_TEST_NO_PERSIST_USER_PATH").as_deref(),
+                Ok("preexisting")
+            );
+            std::env::remove_var("NUMAN_TEST_NO_PERSIST_USER_PATH");
+        }
+
+        {
+            let guard = guard_with_previous_no_persist(None);
+            assert_eq!(
+                std::env::var("NUMAN_TEST_NO_PERSIST_USER_PATH").as_deref(),
+                Ok("1")
+            );
+            drop(guard);
+            let _lock = PATH_MUTEX
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            assert!(
+                std::env::var_os("NUMAN_TEST_NO_PERSIST_USER_PATH").is_none(),
+                "flag must be removed when it was originally absent"
+            );
+        }
+    }
+}
