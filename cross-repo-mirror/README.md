@@ -38,7 +38,7 @@ at the start of the job, then runs the exact same
 canonical `numan` `.github/workflows/ci.yml` fetch uses
 `/tmp/consolidated-roadmap.md` for a pin-diff against the local copy.)
 The contract SHA is recorded as
-`CONTRACT_SHA: 2cd6f5a4d5e831d1248d3fe3fd924944823510a1`
+`CONTRACT_SHA: 14f8e8c0934049c0030626b4a0d917255e988105`
 in each workflow so a force-push to the contract tag can never
 silently change the guardrail. Bumping the contract is a coordinated
 operation across all three repos — see `scripts/bump-contract.sh` in
@@ -54,7 +54,7 @@ tree lives only in `numan`.
 ```bash
 # In the numan checkout:
 NUMAN_ROOT=$(pwd)   # path to tonythethompson/numan
-CONTRACT_SHA=2cd6f5a4d5e831d1248d3fe3fd924944823510a1
+CONTRACT_SHA=14f8e8c0934049c0030626b4a0d917255e988105
 SIBLING=numan-plugins   # or numan-registry
 SIBLING_ROOT=/path/to/$SIBLING
 

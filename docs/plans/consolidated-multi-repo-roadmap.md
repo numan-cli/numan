@@ -322,6 +322,38 @@ Nu version that has the plugins they need, and switching is instant.
 
 **Backfill data:** `numan-plugins/docs/backlog.json` (schema v1; verified outside this repo) tracks ALL release versions per plugin with their Nu minor compatibility. The `backfill_targets` field lists Nu minors that have eligible plugin versions not yet in the registry. Source: awesome-nu + manual discovery. Entries marked `NEEDS_RESEARCH` need their version history filled in before promotion.
 
+### Optional TUI (`numan` client)
+
+> **Vision only — not yet shipped.** Consider only after the unified 1.0 gate
+> above is green. A TUI must not paper over thin catalog depth or dishonest
+> compat surfaces.
+
+**Prerequisites (same as 1.0 gate, restated for the TUI decision):**
+
+- Catalog depth and first-use demos feel real on Windows, macOS, and Linux
+- Compat UX is boring: filtered `search` by default, clear `--all` / `info` /
+  `try` / install messaging that agrees across surfaces
+- Provenance and trust copy in `info` (and search annotations) do not imply
+  security approval
+- Routine intake and activatable-package lifecycle evidence are boring
+- Active-plugin update remains exact opt-in, or default-on only after the
+  real-Nu matrix is boring
+
+**Shape if pursued:**
+
+- Thin, optional, TTY-only browse/pick surface (for example `numan browse`)
+- Calls the same resolve / install / activate (and related) paths as the CLI
+- Full non-TTY / scripted CLI fallback remains the supported path; TUI is never
+  the only way to complete a task
+- Prefer a feature gate or clear capability check over a hard dependency on a
+  TUI crate for headless installs
+
+**Out of scope for this bullet:**
+
+- A registry website (separate product surface; still deferred)
+- Replacing CLI commands with TUI-only flows
+- Using the TUI to work around Nu-minor / ABI mismatch (no silent Nu switch)
+
 ### Explicitly NOT in scope for post-1.0 (requires Nu upstream)
 
 - Simultaneous multi-version plugin hosting (running 0.113 and 0.114 plugins in
@@ -350,3 +382,4 @@ Nu version that has the plugins they need, and switching is instant.
 5. **Done:** Intake Stages 3–6 ([numan-registry#37](https://github.com/tonythethompson/numan-registry/pull/37) merged 2026-07-31).
 6. **Later:** Install-only activation contracts; active-update default-on decision; Phase 5.2 source builds only after intake is steady.
 7. **1.0:** When the unified gate above is green.
+8. **Post-1.0 (optional):** Thin TTY-only TUI browse/pick only after the 1.0 gate is green; CLI remains complete without it.
