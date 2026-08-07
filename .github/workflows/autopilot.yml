@@ -5,8 +5,12 @@ name: Autopilot PR Remediation
 # Secrets: GEMINI_API_KEY, COMPOSIO_API_KEY
 #          AUTOPILOT_TOKEN (optional PAT — without it, pushed commits won't
 #          trigger your other workflows, so nothing re-runs CI on the fix)
-# Vars:    AUTOPILOT_TEST_CMD (optional, auto-detected)
+# Vars:    AUTOPILOT_TEST_CMD (optional; default: pnpm test when pnpm-lock.yaml)
 #          AUTOPILOT_MAX_STEPS (default 100)
+#
+# Olive Studio: Node 22 + pnpm to match ci.yml. Unresolved human and bot
+# review threads are included. Keep AUTOPILOT_TEST_CMD light (unit tests);
+# do not point it at the full CI matrix inside a 30m job.
 
 on:
   issue_comment:
@@ -28,7 +32,6 @@ jobs:
     outputs:
       head_branch: ${{ steps.check.outputs.head_branch }}
       base_branch: ${{ steps.check.outputs.base_branch }}
-      head_sha: ${{ steps.check.outputs.head_sha }}
     steps:
       - name: Validate PR
         id: check
@@ -38,7 +41,7 @@ jobs:
           set -euo pipefail
           PR_JSON=$(gh pr view "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
-            --json headRefName,baseRefName,state,isCrossRepository,headRefOid)
+            --json headRefName,baseRefName,state,isCrossRepository)
 
           if [ "$(jq -r '.state' <<<"$PR_JSON")" != "OPEN" ]; then
             echo "::error::PR is not open."; exit 1
@@ -52,7 +55,6 @@ jobs:
           {
             echo "head_branch=$(jq -r '.headRefName' <<<"$PR_JSON")"
             echo "base_branch=$(jq -r '.baseRefName' <<<"$PR_JSON")"
-            echo "head_sha=$(jq -r '.headRefOid' <<<"$PR_JSON")"
           } >> "$GITHUB_OUTPUT"
 
   remediate:
@@ -70,9 +72,9 @@ jobs:
           gh pr comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" \
             --body "🤖 Autopilot active against \`${{ needs.guard.outputs.head_branch }}\`. [Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ needs.guard.outputs.head_sha }}
+          ref: ${{ needs.guard.outputs.head_branch }}
           fetch-depth: 0
           token: ${{ secrets.AUTOPILOT_TOKEN || secrets.GITHUB_TOKEN }}
 
@@ -106,7 +108,6 @@ jobs:
             -F pr="${{ github.event.issue.number }}" \
           | jq -s '[ .[].data.repository.pullRequest.reviewThreads.nodes[] ]
                    | map(select(.isResolved == false))
-                   | map(select(.comments.nodes[0].author.login // "" | test("\\[bot\\]$") | not))
                    | map({
                        thread_id: .id,
                        reply_to_id: .comments.nodes[0].databaseId,
@@ -139,13 +140,17 @@ jobs:
           git fetch origin "${{ needs.guard.outputs.base_branch }}"
           git merge --no-edit "origin/${{ needs.guard.outputs.base_branch }}" || true
 
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+        if: steps.threads.outputs.count != '0'
+
+      - uses: actions/setup-node@v6
         if: steps.threads.outputs.count != '0'
         with:
-          node-version: '20'
-          cache: npm
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         if: steps.threads.outputs.count != '0'
         with:
           python-version: '3.11'
@@ -154,12 +159,16 @@ jobs:
       - name: Install dependencies
         if: steps.threads.outputs.count != '0'
         run: |
-          if   [ -f pnpm-lock.yaml ];    then corepack enable && pnpm install --frozen-lockfile
+          if   [ -f pnpm-lock.yaml ];    then pnpm install --frozen-lockfile
           elif [ -f package-lock.json ]; then npm ci
           elif [ -f yarn.lock ];         then corepack enable && yarn install --frozen-lockfile
           fi
-          if   [ -f requirements.txt ]; then pip install -r requirements.txt
-          elif [ -f pyproject.toml ];   then pip install -e ".[dev]" || pip install -e . || true
+          if [ -f olive-mcp-server/pyproject.toml ]; then
+            pip install -e "olive-mcp-server/[dev]" "mcp<2" || pip install -e "olive-mcp-server/" || true
+          elif [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          elif [ -f pyproject.toml ]; then
+            pip install -e ".[dev]" || pip install -e . || true
           fi
 
       - name: Resolve test command
@@ -169,8 +178,12 @@ jobs:
           set -euo pipefail
           CMD="${{ vars.AUTOPILOT_TEST_CMD }}"
           if [ -z "$CMD" ]; then
-            if   [ -f package.json ] && jq -e '.scripts.test' package.json >/dev/null 2>&1; then CMD="npm test"
-            elif [ -f pytest.ini ] || [ -d tests ]; then CMD="pytest -q"
+            if [ -f pnpm-lock.yaml ] && [ -f package.json ] && jq -e '.scripts.test' package.json >/dev/null 2>&1; then
+              CMD="pnpm test"
+            elif [ -f package.json ] && jq -e '.scripts.test' package.json >/dev/null 2>&1; then
+              CMD="npm test"
+            elif [ -f pytest.ini ] || [ -d tests ] || [ -d olive-mcp-server/tests ]; then
+              CMD="pytest -q"
             fi
           fi
           echo "cmd=$CMD" >> "$GITHUB_OUTPUT"
@@ -189,14 +202,13 @@ jobs:
 
       - name: Install agent tooling
         if: steps.threads.outputs.count != '0'
-        run: pip install mini-swe-agent composio-core
+        run: pip install "mini-swe-agent==2.4.6" composio-core
 
       - name: Authenticate Composio
         if: steps.threads.outputs.count != '0'
         env:
           COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
         run: |
-          composio login --api-key "$COMPOSIO_API_KEY"
           echo "COMPOSIO_HEADERS={\"x-consumer-api-key\":\"$COMPOSIO_API_KEY\"}" >> $GITHUB_ENV
 
       # Agent has no GitHub token. It edits files and writes a report; the
@@ -205,12 +217,13 @@ jobs:
         if: steps.threads.outputs.count != '0'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MSWEA_CONFIGURED: "true"
           THREADS_FILE: ${{ runner.temp }}/threads.json
           REPORT_FILE: ${{ runner.temp }}/report.json
         run: |
           mini \
             --task "$(cat <<'TASK'
-          You are addressing your owner's code review comments.
+          You are addressing unresolved PR review comments (human and bot).
 
           INPUT: Read the JSON array at $THREADS_FILE. Each entry has thread_id,
           reply_to_id, path, line, and the full discussion.
@@ -240,8 +253,10 @@ jobs:
           TASK
           )" \
             --model "gemini/gemini-3.6-flash" \
-            --max-steps "${{ vars.AUTOPILOT_MAX_STEPS || 100 }}" \
-            --config yolo
+            -c mini.yaml \
+            -c "agent.step_limit=${{ vars.AUTOPILOT_MAX_STEPS || 100 }}" \
+            --yolo \
+            --exit-immediately
 
       - name: Sanity checks
         if: steps.threads.outputs.count != '0'
