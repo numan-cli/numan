@@ -404,7 +404,7 @@ fn run_module_deactivate_lane(
 
 /// Deactivate named modules without acquiring the mutation lock, snapshotting, or
 /// syncing the activation profile. Caller must hold the root mutation lock.
-pub fn deactivate_modules_unlocked(
+pub(crate) fn deactivate_modules_unlocked(
     root: &Path,
     package_ids: &[String],
     runner: Option<&dyn CandidateRunner>,

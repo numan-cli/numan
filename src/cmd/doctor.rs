@@ -2379,6 +2379,37 @@ mod tests {
     }
 
     #[test]
+    fn doctor_reports_versioned_managed_nu_absent_binary() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        version_manager::write_active_version(root, "0.114.1").unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: true,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let managed = report
+            .findings
+            .iter()
+            .find(|f| f.id == "nu.managed.version")
+            .expect("nu.managed.version");
+        assert_eq!(managed.severity, Severity::Warn);
+        assert_eq!(managed.repair, RepairTier::Manual);
+        assert!(
+            !managed.message.contains("not installed"),
+            "should not report 'not installed' when marker exists: {}",
+            managed.message
+        );
+    }
+
+    #[test]
     fn doctor_reports_managed_nu_not_installed() {
         let dir = TempDir::new().unwrap();
         let root = dir.path();

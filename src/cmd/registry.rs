@@ -207,14 +207,23 @@ fn list_packages(root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Convert terminal column count to usable description width.
+fn terminal_cols_to_description_width(terminal_cols: usize) -> usize {
+    let available = terminal_cols.saturating_sub(4);
+    if available >= 40 {
+        available.max(40)
+    } else {
+        available
+    }
+}
+
 /// Usable width for indented package descriptions (leave room for `    ` prefix).
 fn package_description_width() -> usize {
-    console::Term::stdout()
+    let cols = console::Term::stdout()
         .size_checked()
         .map(|(_, cols)| cols as usize)
-        .unwrap_or(80)
-        .saturating_sub(4)
-        .max(40)
+        .unwrap_or(80);
+    terminal_cols_to_description_width(cols)
 }
 
 /// Soft-wrap `text` on whitespace so the terminal does not split mid-word.
@@ -229,7 +238,9 @@ fn wrap_words(text: &str, width: usize) -> Vec<String> {
             current.push_str(word);
             continue;
         }
-        if current.len() + 1 + word.len() <= width {
+        let current_width = console::measure_text_width(&current);
+        let word_width = console::measure_text_width(word);
+        if current_width + 1 + word_width <= width {
             current.push(' ');
             current.push_str(word);
         } else {
@@ -279,5 +290,34 @@ mod tests {
             wrap_words("   spaced   out  ", 40),
             vec!["spaced out".to_string()]
         );
+    }
+
+    #[test]
+    fn terminal_cols_to_description_width_narrow_terminal() {
+        assert_eq!(terminal_cols_to_description_width(30), 26);
+        assert_eq!(terminal_cols_to_description_width(20), 16);
+        assert_eq!(terminal_cols_to_description_width(4), 0);
+        assert_eq!(terminal_cols_to_description_width(0), 0);
+    }
+
+    #[test]
+    fn terminal_cols_to_description_width_applies_minimum_when_spacious() {
+        assert_eq!(terminal_cols_to_description_width(44), 40);
+        assert_eq!(terminal_cols_to_description_width(50), 46);
+        assert_eq!(terminal_cols_to_description_width(80), 76);
+    }
+
+    #[test]
+    fn wrap_words_non_ascii_display_width() {
+        let text = "日本語 test 中文";
+        let lines = wrap_words(text, 15);
+        for line in &lines {
+            let width = console::measure_text_width(line);
+            assert!(
+                width <= 15,
+                "line display width {width} exceeds limit: {line:?}"
+            );
+        }
+        assert_eq!(lines.join(" "), text);
     }
 }
