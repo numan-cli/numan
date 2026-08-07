@@ -7,6 +7,7 @@ use clap_complete_nushell::Nushell;
 
 use crate::cli::Cli;
 use crate::util::atomic::write_bytes_atomic;
+use crate::util::fs_safety::{assert_managed_file_owned, assert_not_symlink, OWNERSHIP_MARKER};
 
 /// Install (default) or print shell completion scripts
 #[derive(clap::Parser)]
@@ -106,11 +107,28 @@ fn require_home_dir() -> Result<PathBuf> {
 }
 
 /// Write the completion script to `path`, creating parent directories as needed.
+///
+/// Existing destinations must already carry [`OWNERSHIP_MARKER`]; foreign files
+/// are refused. The written content always begins with the ownership header.
 pub fn install_to(shell: CompletionShell, path: &Path) -> Result<()> {
     if path.file_name().is_none_or(|name| name.is_empty()) {
         bail!("completion install path must be a file path");
     }
-    let script = generate_script(shell)?;
+    if let Some(parent) = path.parent() {
+        if parent.as_os_str().is_empty() {
+            bail!("completion install path must be a file path");
+        }
+        if parent.exists() {
+            assert_not_symlink(parent, "completions directory")?;
+        }
+    }
+    if path.exists() {
+        assert_managed_file_owned(path)?;
+    } else {
+        assert_not_symlink(path, "completions file")?;
+    }
+
+    let script = format!("{}{}", OWNERSHIP_MARKER, generate_script(shell)?);
     write_bytes_atomic(path, script.as_bytes())
         .with_context(|| format!("Failed to write completions to {}", path.display()))?;
     Ok(())
@@ -299,7 +317,36 @@ mod tests {
         install_to(CompletionShell::Bash, &path).expect("install_to");
         assert!(path.is_file());
         let written = std::fs::read_to_string(&path).expect("read");
+        assert!(written.starts_with(OWNERSHIP_MARKER));
         assert!(written.contains("_numan"));
+    }
+
+    #[test]
+    fn install_to_refuses_foreign_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("numan");
+        std::fs::write(&path, "# not owned by numan\n").expect("seed");
+        let err = install_to(CompletionShell::Bash, &path).expect_err("foreign");
+        assert!(
+            err.to_string().contains("managed-file drift"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            "# not owned by numan\n"
+        );
+    }
+
+    #[test]
+    fn install_to_overwrites_owned_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("numan");
+        std::fs::write(&path, format!("{OWNERSHIP_MARKER}# stale\n")).expect("seed");
+        install_to(CompletionShell::Bash, &path).expect("overwrite");
+        let written = std::fs::read_to_string(&path).expect("read");
+        assert!(written.starts_with(OWNERSHIP_MARKER));
+        assert!(written.contains("_numan"));
+        assert!(!written.contains("# stale"));
     }
 
     #[test]
