@@ -175,6 +175,15 @@ mod tests {
     }
 
     #[test]
+    fn format_info_marks_completion_install_only() {
+        let mut pkg = sample_plugin(false);
+        pkg.package_type = PackageType::Completion;
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(out.contains("Activation: install-only"), "{out}");
+        assert!(out.contains("Type:       completion"), "{out}");
+    }
+
+    #[test]
     fn format_info_prints_source_when_present() {
         let pkg = sample_plugin(true);
         let out = format_info(&pkg, &linux_platform(), None);

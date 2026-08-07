@@ -82,6 +82,8 @@ pub fn execute(args: &SearchArgs, root: &Path) -> Result<()> {
 
         // Status when Nu is known and the row needs a verdict: incompatibles,
         // --all listings, and all non-plugin compatible rows (asymmetric label).
+        // Install-only labels do not depend on Nu detection, so script/completion
+        // rows stay labeled even when the resolver is absent.
         let status = if resolver.is_some() {
             format_row_status(
                 &pkg.package_type,
@@ -91,7 +93,12 @@ pub fn execute(args: &SearchArgs, root: &Path) -> Result<()> {
                 verified_with,
             )
         } else {
-            String::new()
+            match pkg.package_type {
+                PackageType::Script | PackageType::Completion => {
+                    format_row_status(&pkg.package_type, true, args.all, None, verified_with)
+                }
+                PackageType::Plugin | PackageType::Module => String::new(),
+            }
         };
 
         println!(

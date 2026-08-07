@@ -329,26 +329,31 @@ fn print_usage_hint(package_id: &str, packages: &[Package]) {
     }
 }
 
+/// Nu `overlay use` hint with the same path-literal escaping as
+/// [`crate::nu::autoload::render_use_statement`].
+fn format_overlay_use_hint(path: &Path) -> Result<String> {
+    let path_str = path
+        .to_str()
+        .with_context(|| format!("Installed path '{}' is not valid UTF-8", path.display()))?;
+    let escaped = path_str.replace('\\', "\\\\").replace('"', "\\\"");
+    Ok(format!("overlay use \"{escaped}\""))
+}
+
 fn print_install_only_hint(root: &Path, package_id: &str) -> Result<()> {
-    println!("Installed '{package_id}' (install-only; activation deferred).");
     let lockfile = Lockfile::load(root)
         .with_context(|| format!("Failed to load lockfile for installed package '{package_id}'"))?;
-    let (payload, entry) = lockfile
-        .packages
-        .get(package_id)
-        .map(|e| (Some(e.payload_path.clone()), e.entry.as_deref()))
-        .unwrap_or((None, None));
-    match (payload, entry) {
-        (Some(rel), Some(entry_name)) => {
-            let full: PathBuf = root.join(rel).join(entry_name);
-            println!("In Nu:  overlay use {}", full.display());
+    let installed = lockfile.packages.get(package_id).with_context(|| {
+        format!("Installed '{package_id}' but no lockfile record was found; refuse usage hint")
+    })?;
+    println!("Installed '{package_id}' (install-only; activation deferred).");
+    match installed.entry.as_deref() {
+        Some(entry_name) => {
+            let full: PathBuf = root.join(&installed.payload_path).join(entry_name);
+            println!("In Nu:  {}", format_overlay_use_hint(&full)?);
         }
-        (Some(rel), None) => {
-            let full: PathBuf = root.join(rel);
+        None => {
+            let full: PathBuf = root.join(&installed.payload_path);
             println!("Installed under {}", full.display());
-        }
-        _ => {
-            println!("Use `numan list` to find the installed payload path.");
         }
     }
     Ok(())
@@ -541,6 +546,92 @@ mod tests {
             StarterSelection::Compatible(id) => assert_eq!(id, "SuaveIV/nu_script_wttr"),
             other => panic!("unexpected selection: {other:?}"),
         }
+    }
+
+    fn script_lock_entry(
+        payload_path: &str,
+        entry: Option<&str>,
+    ) -> crate::state::lockfile::LockfileEntry {
+        crate::state::lockfile::LockfileEntry {
+            version: "0.1.0".to_string(),
+            package_type: "script".to_string(),
+            source: "registry".to_string(),
+            target: None,
+            artifact_url: None,
+            artifact_sha256: None,
+            executable_path: None,
+            archive_root: None,
+            include: None,
+            entry: entry.map(str::to_string),
+            installed_at: "now".to_string(),
+            nu_version_at_install: None,
+            activation: None,
+            registry_url: None,
+            registry_revision: None,
+            index_sha256: None,
+            signing_key_fingerprint: None,
+            git_url: None,
+            git_rev: None,
+            cargo_name: None,
+            cargo_lock_sha256: None,
+            built_sha256: None,
+            payload_path: payload_path.to_string(),
+            revision_id: None,
+            payload_sha256: None,
+            executable_sha256: None,
+            selection_reason: None,
+            origin: None,
+            module_activation: None,
+            module_import_mode: None,
+            locked_dependencies: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn format_overlay_use_hint_quotes_and_escapes_path() {
+        let path = PathBuf::from(r#"C:\Numan Root\pkg\wttr.nu"#);
+        let hint = format_overlay_use_hint(&path).unwrap();
+        assert_eq!(hint, r#"overlay use "C:\\Numan Root\\pkg\\wttr.nu""#);
+    }
+
+    #[test]
+    fn print_install_only_hint_uses_lockfile_entry_and_quotes_path() {
+        let root = tempfile::tempdir().unwrap();
+        let mut lock = Lockfile::empty();
+        lock.packages.insert(
+            "SuaveIV/nu_script_wttr".to_string(),
+            script_lock_entry(
+                "packages/scripts/SuaveIV/nu_script_wttr/0.1.0-deadbeef",
+                Some("wttr.nu"),
+            ),
+        );
+        lock.save(root.path()).unwrap();
+
+        let err = print_install_only_hint(root.path(), "missing/pkg").unwrap_err();
+        assert!(
+            err.to_string().contains("no lockfile record"),
+            "missing record must fail: {err:#}"
+        );
+
+        print_install_only_hint(root.path(), "SuaveIV/nu_script_wttr").unwrap();
+        let full = root
+            .path()
+            .join("packages/scripts/SuaveIV/nu_script_wttr/0.1.0-deadbeef/wttr.nu");
+        let expected = format_overlay_use_hint(&full).unwrap();
+        assert!(expected.starts_with("overlay use \""));
+        assert!(expected.contains("wttr.nu"));
+    }
+
+    #[test]
+    fn print_install_only_hint_rejects_malformed_lockfile() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("lockfile"), "{not-json").unwrap();
+        let err = print_install_only_hint(root.path(), "any/pkg").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Failed to load lockfile") || msg.contains("expected"),
+            "malformed lockfile must surface: {msg}"
+        );
     }
 
     #[test]
