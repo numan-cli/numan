@@ -10,13 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Windows User PATH pollution from acceptance tests**: `PathRestoreGuard` sets
-  a test-only flag that makes `persist_path_dir` skip durable User PATH / shell
-  profile writes while the guard is held, and on Windows also snapshots/restores
-  the User PATH registry value (absent `$null` vs empty string). `numan setup nu
-  use` also refuses to persist directories under the system temp folder (fail
-  closed if the temp root cannot be canonicalized), so tempfile fixtures like
-  `Temp\.tmp*\off` cannot land on PATH again. If you already have those
-  leftovers, clean User PATH (PowerShell):
+  a test-only flag that makes `persist_path_dir` / Unix `persist_user_path`
+  skip durable User PATH, `~/.local/bin/nu`, and shell-profile writes while the
+  guard is held, and on Windows also snapshots/restores the User PATH registry
+  value (absent `$null` vs empty string). `numan setup nu` / `use` also refuse
+  to persist paths under the system temp folder (fail closed if the temp root
+  cannot be canonicalized), so tempfile fixtures like `Temp\.tmp*\off` cannot
+  land on PATH again. If you already have those leftovers, clean User PATH
+  (PowerShell):
 
   ```powershell
   $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
