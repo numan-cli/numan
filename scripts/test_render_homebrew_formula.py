@@ -52,7 +52,9 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  numan-0.1.5-aa
         self.assertIn(
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", text
         )
-        self.assertIn('bin.install "#{arch_dir}/numan"', text)
+        self.assertIn('bin.install "numan"', text)
+        self.assertNotIn("arch_dir", text)
+        self.assertNotIn("expected numan-* directory", text)
         self.assertIn("on_intel do", text)
         self.assertIn("no longer ships Intel Mac", text)
         self.assertNotIn("x86_64-apple-darwin.tar.gz", text)

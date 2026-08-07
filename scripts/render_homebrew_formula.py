@@ -100,10 +100,9 @@ class Numan < Formula
   end
 
   def install
-    arch_dir = Dir["numan-*"].first
-    odie "expected numan-* directory in archive" if arch_dir.nil?
-
-    bin.install "#{{arch_dir}}/numan"
+    # Homebrew stages into the archive's sole top-level directory, so the
+    # binary is ./numan (not ./numan-*/numan).
+    bin.install "numan"
   end
 
   test do
