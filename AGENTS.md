@@ -1,9 +1,11 @@
 # Numan — Nushell Package Manager
 
 ## Overview
+
 Numan is a cross-platform, production-grade Nushell package manager CLI written in Rust. It handles plugins, modules, scripts, and completions with verified artifacts, compatibility resolution, lockfiles, rollback, and interoperability with nupm.
 
 ## Build & Test
+
 ```bash
 # Build
 cargo build
@@ -33,7 +35,8 @@ cargo fmt
 CI runs `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check`, and a real-Nu acceptance job (`cargo test -- --ignored` with Nu 0.113 on PATH) on Ubuntu, Windows, and macOS.
 
 ## Project Structure
-```
+
+```text
 src/
   main.rs              — CLI entry point (clap-based)
   config.rs            — Config load/save, root resolution
@@ -126,6 +129,7 @@ tests/
 ```
 
 ## Key Conventions
+
 - **Crate name**: `numan-cli`, **binary name**: `numan`
 - **Product name**: Numan (capital N in prose, lowercase `numan` for CLI)
 - **Edition**: Rust 2021
@@ -154,6 +158,7 @@ tests/
 - **Function signatures**: use `&Path` not `&PathBuf` in function parameters (clippy::ptr_arg is CI-enforced)
 
 ## Architecture Rules
+
 1. **Install is always inert** — no Nu integration, only writes to `$NUMAN_ROOT`
 2. **Nu integration is activate/deactivate-owned** — only the activate/deactivate lifecycle boundary invokes plugin register/unregister; an explicitly opted-in `update` may coordinate that boundary but must not own or invoke Nu callbacks directly
 3. **Source builds require consent** — prompt before clone/build, separate consent scope
@@ -164,6 +169,7 @@ tests/
 8. **Platform triple** — comes from `#[cfg(target_env)]` at compile time, not `std::env::consts` (see `core/platform.rs`; `LIBC` is a compile-time const)
 
 ## Development Workflow
+
 1. Create feature branch from `master`
 2. Implement with tests
 3. `cargo test` — all 419 tests must pass
@@ -175,11 +181,13 @@ tests/
 Automated and human PR reviewers should follow [`REVIEW.md`](REVIEW.md) for review checklists, severity expectations, and architecture invariants to flag. Keep that file updated when review conventions change; link here rather than duplicating review rules in this doc. Copilot apply-to instructions remain at [`.github/instructions/review.instructions.md`](.github/instructions/review.instructions.md) and must stay aligned with `REVIEW.md`.
 
 ## Dependencies
+
 - clap (CLI), clap_complete + clap_complete_nushell (shell completions), serde/serde_json/toml (serialization), reqwest (HTTP), tar/flate2/xz2/zip (archives)
 - sha2/hex (integrity), ed25519-dalek/base64 (signatures), semver (versioning)
 - dirs (platform paths), git2 (source builds), tempfile (safe extraction)
 
 ## Phase Status
+
 - [x] Phase 1: Foundation (types, platform, config, lockfile, registry, trust, CLI skeleton)
 - [x] Phase 2: Install transaction (download, verify, extract, lockfile write)
 - [x] Phase 3: Activate command (plugin-only; `plugin add` via env-vars; journal recovery; drift detection)
@@ -202,18 +210,21 @@ Automated and human PR reviewers should follow [`REVIEW.md`](REVIEW.md) for revi
 - [x] Phase 7 complete (polish, CI, distribution) — see [Phase7Plan.md](docs/plans/Phase7Plan.md); toward 1.0: winget merge, registry intake, Phase 5.2/5.5
 
 ## Testing
+
 - Unit tests inline with source modules
 - Integration tests in `tests/`
 - Test-first approach: write test, verify failure, implement, verify pass
 - All platform-specific code tested with mock platforms
 
 ## Error Patterns
+
 - Use `anyhow::Result` for application code
 - Use `thiserror` for library types that callers match on
 - Include context with `.context("what failed")` or `?`
 - Never panic in library code — return errors
 
 ## Git Conventions
+
 - Commits: imperative mood, <72 chars
 - Branches: `feature/description`, `fix/description`
 - No force-push to `master`
@@ -231,6 +242,7 @@ Standard build/test/lint/run commands live in "Build & Test" above and in the RE
 - **Isolated runs**: pass `--root <tmpdir>` (or set `NUMAN_ROOT`) to keep experiments out of the real Numan root. `registry sync` and `install` require network access to `https://tonythethompson.github.io/numan-registry/`. For live package counts and Nu bands, see [catalog-compat.md](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md). Many Linux-installable CI-built plugins target Nu **0.114.x**. Older Windows-only upstream assets (e.g. `abusch/nu_plugin_semver` on 0.113) remain in the catalog with honest Nu/platform constraints.
 
 ## Learned User Preferences
+
 - Prefers streamlining Nu-compat onboarding as honest search/install UX, a one-shot starter, and an offer-based managed Nu pin (never silent auto-switch of Nu).
 - `numan try <owner/name>` is the compatibility-aware install path: it attempts the package for the current Nu, and if incompatible it explains which managed Nu versions the package works with (never auto-switches Nu).
 - Product north star for Numan: make the Nushell package ecosystem more inviting for less experienced users.
@@ -238,6 +250,7 @@ Standard build/test/lint/run commands live in "Build & Test" above and in the RE
 - Prefers strategy work saved as code-grounded audit plus next-steps plan docs (concrete paths and checkboxes), not abstract strategy alone.
 
 ## Learned Workspace Facts
+
 - Plugin ABI is Nu-minor-scoped: mixed plugin ABIs cannot run inside one Nu process; side-by-side Nu profiles would be a separate future product shape, not a near-term substitute for compat UX.
 - PATH Nu can be newer than official-registry Windows plugin Nu constraints, so `search` can look fine while `install` fails; use compat-filtered search, `numan try <owner/name>`, or `numan use <version>` followed by `numan try <owner/name>`.
 - `numan setup nu <x.y.z>` pins a managed Nu release; bare `numan setup nu` installs latest. Subcommands: `remove`, `path`, `use <path>`.

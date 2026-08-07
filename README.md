@@ -4,8 +4,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 <a href="https://github.com/tonythethompson/homebrew-numan"><img alt="Homebrew Package Version" src="https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Ftonythethompson%2Fhomebrew-numan%2Fmaster%2FFormula%2Fnuman.rb&search=version%20%22(%5B%5E%22%5D%2B)%22&replace=%241&label=homebrew&logo=homebrew&color=fbb040"></a>
 ![WinGet Package Version](https://img.shields.io/winget/v/tonythethompson.numan)
-<img alt="Crates.io Version" src="https://img.shields.io/crates/v/numan-cli"> 
-<img alt="Crates.io Version" src="https://img.shields.io/crates/d/numan-cli"> 
+<img alt="Crates.io Version" src="https://img.shields.io/crates/v/numan-cli">
+<img alt="Crates.io Version" src="https://img.shields.io/crates/d/numan-cli">
 
 **numan** is a cross-platform package manager for [Nushell](https://www.nushell.sh/). It installs plugins, modules, scripts, and completion packages from signed registries, verifies downloaded artifacts, and records immutable install state in a lockfile.
 Packages remain inert after installation. Plugins and modules are only registered with Nushell when you explicitly run `numan activate`.
@@ -23,7 +23,7 @@ nupm handles local package installation well. Registry-based workflows also need
 numan provides those guarantees:
 
 | Concern | How numan handles it |
-|--------|----------------------|
+| -------- | ---------------------- |
 | **Trust** | Verifies registry indexes with Ed25519 signatures, includes a built-in trust root for the `official` registry, and validates plugin binaries with SHA-256 |
 | **Reproducibility** | Lockfile v2 pins version, payload hash, and install origin |
 | **Platform safety** | Resolves artifacts for the current compile-time OS, architecture, and libc target |
@@ -58,7 +58,7 @@ These workflows are covered by unit tests, hermetic integration tests, and real-
 ## Registry package support
 
 | Registry package type | Install, verify, and lock | `numan activate` | Support tier |
-|-----------------------|----------------------------|------------------|--------------|
+| ----------------------- | ---------------------------- | ------------------ | -------------- |
 | Plugin | Yes | Yes, through Nu's plugin registry | Supported |
 | Module | Yes | Yes, through a numan-managed vendor autoload file | Supported |
 | Script | Yes | No | Install-only; activation is deferred |
@@ -91,21 +91,21 @@ The binary is named `numan`.
 Download the latest archive for your platform from [GitHub Releases](https://github.com/tonythethompson/numan/releases). Each release ships:
 
 | Platform | Archive | Binary |
-|----------|---------|--------|
+| ---------- | --------- | -------- |
 | Linux (x86_64) | `numan-<version>-x86_64-unknown-linux-gnu.tar.gz` | `numan` |
 | Linux (aarch64) | `numan-<version>-aarch64-unknown-linux-gnu.tar.gz` | `numan` |
 | Windows (x86_64) | `numan-<version>-x86_64-pc-windows-msvc.zip` | `numan.exe` |
 | Windows (ARM64) | `numan-<version>-aarch64-pc-windows-msvc.zip` | `numan.exe` |
 | macOS (Apple Silicon) | `numan-<version>-aarch64-apple-darwin.tar.gz` | `numan` |
 
-**Linux / macOS**
+#### Linux / macOS
 
 ```bash
 tar -xzf numan-VERSION-TARGET.tar.gz
 install -m 755 numan-VERSION-TARGET/numan ~/.local/bin/numan
 ```
 
-**Windows (PowerShell)**
+#### Windows (PowerShell)
 
 ```powershell
 Expand-Archive numan-VERSION-TARGET.zip -DestinationPath .
@@ -167,26 +167,25 @@ numan completions powershell --print | Add-Content -Encoding utf8 $PROFILE
 
 PowerShell completions are safe to place after other statements in `$PROFILE`.
 
-
 ---
 
 ## Quick start
 
 Install with **one** of the options below, then run the activation path.
 
-**Homebrew (macOS / Linux)**
+### Homebrew (macOS / Linux)
 
 ```bash
 brew tap tonythethompson/numan && brew install numan
 ```
 
-**winget (Windows)**
+### winget (Windows)
 
 ```powershell
 winget install tonythethompson.numan
 ```
 
-**crates.io (any platform with Rust)**
+### crates.io (any platform with Rust)
 
 ```bash
 cargo install numan-cli
@@ -306,7 +305,7 @@ numan doctor --scan               # report-only diagnosis
 By default, numan stores state under a platform-specific root (override with `NUMAN_ROOT` or `--root`):
 
 | Platform | Default root |
-|----------|--------------|
+| ---------- | -------------- |
 | Linux | `~/.local/share/numan` |
 | macOS | `~/Library/Application Support/numan` |
 | Windows | `%LOCALAPPDATA%\numan` |
@@ -332,7 +331,7 @@ Payload paths are immutable: `packages/<type>/<owner>/<name>/<version>-<hash>/`.
 Global flag: `--root <path>` — override the numan root directory (all commands).
 
 | Command | Description |
-|---------|-------------|
+| --------- | ------------- |
 | `numan init [--refresh]` | Probe Nu and cache paths for activation |
 | `numan try <owner/name[@version]> [--no-activate]` | Try a package against your current Nu and platform; lists compatible managed Nu versions and recommends one if it does not work now |
 | `numan search <query>` | Search registry by name, description, or tags |
@@ -368,7 +367,7 @@ Global flag: `--root <path>` — override the numan root directory (all commands
 ### Common flags (by command)
 
 | Command | Flags |
-|---------|-------|
+| --------- | ------- |
 | `install` | `--force` reinstall; `-v` / `--verbose` |
 | `activate` | `--verbose`; `--list` status only; `--check` integrity only |
 | `deactivate` | `--verbose` |
@@ -455,7 +454,7 @@ For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 [superseded](docs/plans/2026-07-29-remaining-roadmap.md).
 
 | Phase | Scope | Status |
-|-------|--------|--------|
+| ------- | -------- | -------- |
 | **1–2** | Types, platform, lockfile, signed registry, install transaction | ✅ |
 | **3–4** | Plugin + module activation, journals, managed autoloads | ✅ |
 | **5** | `update` / `remove` / `gc`, lockfile v2, [snapshots + rollback](docs/snapshots-and-rollback.md) | ✅ (source builds deferred; active-plugin update opt-in) |
@@ -466,7 +465,7 @@ For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 ### Next (toward 1.0)
 
 | Item | Tracking |
-|------|----------|
+| ------ | ---------- |
 | Curated **official registry** depth + multi-OS first-use demos | 🔄 [#18](https://github.com/tonythethompson/numan/issues/18), [catalog-compat](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md), [intake roadmap](docs/registry-intake-roadmap.md) |
 | Cross-platform **fresh-install** dogfooding + lifecycle evidence | 🔄 `init` → `registry sync` → `search` → `install` → `activate` → `doctor` on Linux, macOS, Windows |
 | Ship **0.2.0** (`setup nu` redesign + `numan use`) | ✅ [CHANGELOG](CHANGELOG.md) |
@@ -477,7 +476,7 @@ For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 ### Later
 
 | Item | Tracking |
-|------|----------|
+| ------ | ---------- |
 | Source builds (clone and build each require explicit consent, separate scopes) | [#20](https://github.com/tonythethompson/numan/issues/20) / Phase 5.2 |
 | Active-plugin **update** default-on (today: exact `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` opt-in) | [#22](https://github.com/tonythethompson/numan/issues/22) / [active-plugin-gate.md](docs/active-plugin-gate.md) |
 | Completions/scripts activation contracts | [docs/registry-intake-roadmap.md](docs/registry-intake-roadmap.md) |
@@ -487,7 +486,7 @@ For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 <summary>Phase 7 detail (complete)</summary>
 
 | Slice | Status |
-|-------|--------|
+| ------- | -------- |
 | 7.1 Distribution baseline (releases, crates.io, `numan init`) | ✅ |
 | 7.2 `numan doctor` | ✅ |
 | 7.3 Completions + error UX | ✅ |
