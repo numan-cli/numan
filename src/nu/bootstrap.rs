@@ -1131,18 +1131,14 @@ mod tests {
             let nu_inner = format!("nu-0.0.0-test/{}", nu_binary_name());
             zip.start_file(&nu_inner, options).unwrap();
             zip.write_all(b"fake nu binary").unwrap();
-            // Sibling plugin payload larger than the old 256 MiB bootstrap
-            // cap would be if counted; keep this modest in CI and rely on
-            // the include filter + size-cap unit checks above for the bomb
-            // limit. Content still proves plugins are not required.
             zip.start_file("nu-0.0.0-test/nu_plugin_polars", options)
                 .unwrap();
             zip.write_all(&vec![0u8; 64 * 1024]).unwrap();
             zip.finish().unwrap();
         }
 
-        // Even with a tiny uncompressed cap, include-filtered extract of
-        // only `nu` must succeed when siblings are huge relative to the cap.
+        // Include filter must skip writing plugin payloads; bomb accounting
+        // still charges them (covered in extract.rs).
         let extract_root = root.join("tools/.manual-extract");
         std::fs::create_dir_all(&extract_root).unwrap();
         let result = extract_archive(
@@ -1150,14 +1146,17 @@ mod tests {
             &extract_root,
             &ExtractConfig {
                 include: Some(vec![format!("**/{}", nu_binary_name())]),
-                max_uncompressed_bytes: Some(1024),
                 ..ExtractConfig::default()
             },
             ArchiveFormat::Zip,
         )
-        .expect("include filter must skip plugin bytes under the size cap");
+        .expect("include-filtered extract must succeed under the default size cap");
         assert_eq!(result.files.len(), 1);
         assert!(result.files[0].ends_with(nu_binary_name()));
+        assert!(
+            !extract_root.join("nu-0.0.0-test/nu_plugin_polars").exists(),
+            "bundled plugin must not be written to disk"
+        );
 
         let installed = install_from_archive(&zip_path, root, "0.0.0-plugins").unwrap();
         assert_eq!(

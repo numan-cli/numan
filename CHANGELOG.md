@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   256 MiB extract cap (~279 MiB uncompressed on linux-gnu). Bootstrap now
   extracts only the `nu` binary (skipping bundled plugins) and raises the
   uncompressed-size limit to 512 MiB so managed installs succeed again.
+  Archive-bomb `file_count` / `total_bytes` accounting still charges every
+  regular-file entry scanned, including those skipped by the include filter.
 
 ## [0.2.1] - 2026-08-07
 

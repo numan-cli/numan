@@ -161,6 +161,23 @@ fn extract_zip(
             continue;
         }
 
+        // Archive bomb limits apply to every regular-file entry scanned in the
+        // archive, not only entries that pass archive_root / include filters.
+        file_count += 1;
+        if file_count > MAX_FILE_COUNT {
+            bail!(
+                "Archive contains more than {MAX_FILE_COUNT} files. \
+                 This may be an archive bomb."
+            );
+        }
+        total_bytes += entry.size();
+        if total_bytes > max_bytes {
+            bail!(
+                "Archive uncompressed size exceeds {max_bytes} bytes. \
+                 This may be an archive bomb."
+            );
+        }
+
         let entry_path = entry.mangled_name().to_owned();
 
         // Get relative path (strip archive_root if present)
@@ -175,7 +192,7 @@ fn extract_zip(
             None => continue,
         };
 
-        // Check include filter
+        // Include filter only decides whether to write the entry to disk.
         if !include_checker.matches(&relative_path) {
             continue;
         }
@@ -183,22 +200,6 @@ fn extract_zip(
         // Validate resolved path (no traversal after stripping root)
         if has_path_traversal(&relative_path) {
             bail!("Path traversal detected in archive: {}", raw_name);
-        }
-
-        // Archive bomb limits
-        file_count += 1;
-        if file_count > MAX_FILE_COUNT {
-            bail!(
-                "Archive contains more than {MAX_FILE_COUNT} files. \
-                 This may be an archive bomb."
-            );
-        }
-        total_bytes += entry.size();
-        if total_bytes > max_bytes {
-            bail!(
-                "Archive uncompressed size exceeds {max_bytes} bytes. \
-                 This may be an archive bomb."
-            );
         }
 
         let out_path = dest_dir.join(&relative_path);
@@ -278,6 +279,23 @@ fn extract_tar_inner<R: Read>(
             }
         }
 
+        // Archive bomb limits apply to every regular-file entry scanned in the
+        // archive, not only entries that pass archive_root / include filters.
+        file_count += 1;
+        if file_count > MAX_FILE_COUNT {
+            bail!(
+                "Archive contains more than {MAX_FILE_COUNT} files. \
+                 This may be an archive bomb."
+            );
+        }
+        total_bytes += entry.header().size().unwrap_or(0);
+        if total_bytes > max_bytes {
+            bail!(
+                "Archive uncompressed size exceeds {max_bytes} bytes. \
+                 This may be an archive bomb."
+            );
+        }
+
         // Get relative path (strip archive_root if present)
         let relative_path = if let Some(root) = archive_root {
             strip_leading_component(&entry_path, root)
@@ -298,25 +316,9 @@ fn extract_tar_inner<R: Read>(
             );
         }
 
-        // Check include filter
+        // Include filter only decides whether to write the entry to disk.
         if !include_checker.matches(&relative_path) {
             continue;
-        }
-
-        // Archive bomb limits
-        file_count += 1;
-        if file_count > MAX_FILE_COUNT {
-            bail!(
-                "Archive contains more than {MAX_FILE_COUNT} files. \
-                 This may be an archive bomb."
-            );
-        }
-        total_bytes += entry.header().size().unwrap_or(0);
-        if total_bytes > max_bytes {
-            bail!(
-                "Archive uncompressed size exceeds {max_bytes} bytes. \
-                 This may be an archive bomb."
-            );
         }
 
         let out_path = dest_dir.join(&relative_path);
@@ -596,6 +598,45 @@ mod tests {
         assert!(dest.join("main.nu").exists());
         assert!(dest.join("lib.nu").exists());
         assert!(!dest.join("README.md").exists());
+    }
+
+    #[test]
+    fn extract_zip_include_filter_still_enforces_uncompressed_size_cap() {
+        let tmp = TempDir::new().unwrap();
+        // Excluded sibling is listed first so the size cap trips before any
+        // included entry is written.
+        let zip_path = create_test_zip(
+            tmp.path(),
+            &[("nu_plugin_polars", &[0u8; 2048]), ("nu", b"shell")],
+        );
+
+        let dest = tmp.path().join("extracted");
+        std::fs::create_dir(&dest).unwrap();
+
+        let err = extract_archive(
+            &zip_path,
+            &dest,
+            &ExtractConfig {
+                include: Some(vec!["nu".to_string()]),
+                max_uncompressed_bytes: Some(1024),
+                ..ExtractConfig::default()
+            },
+            ArchiveFormat::Zip,
+        )
+        .expect_err("excluded siblings must still count toward the archive bomb cap");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Archive uncompressed size exceeds"),
+            "unexpected error: {msg}"
+        );
+        assert!(
+            !dest.join("nu").exists(),
+            "included entry must not be written after the size cap fails"
+        );
+        assert!(
+            !dest.join("nu_plugin_polars").exists(),
+            "excluded plugin must never be written"
+        );
     }
 
     #[test]
