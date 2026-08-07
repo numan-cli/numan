@@ -167,7 +167,7 @@ pub fn execute(args: &TryArgs, root: &Path) -> Result<()> {
 
     if args.no_activate || install_only {
         if install_only {
-            print_install_only_hint(root, &package_id, selected);
+            print_install_only_hint(root, &package_id)?;
         } else {
             println!(
                 "Installed '{package_id}' (not activated). Run `numan activate {package_id}`."
@@ -329,14 +329,15 @@ fn print_usage_hint(package_id: &str, packages: &[Package]) {
     }
 }
 
-fn print_install_only_hint(root: &Path, package_id: &str, pkg: Option<&Package>) {
+fn print_install_only_hint(root: &Path, package_id: &str) -> Result<()> {
     println!("Installed '{package_id}' (install-only; activation deferred).");
-    let entry = pkg
-        .and_then(|p| p.versions.last())
-        .and_then(|v| v.artifact.entry.as_deref());
-    let payload = Lockfile::load(root)
-        .ok()
-        .and_then(|lf| lf.packages.get(package_id).map(|e| e.payload_path.clone()));
+    let lockfile = Lockfile::load(root)
+        .with_context(|| format!("Failed to load lockfile for installed package '{package_id}'"))?;
+    let (payload, entry) = lockfile
+        .packages
+        .get(package_id)
+        .map(|e| (Some(e.payload_path.clone()), e.entry.as_deref()))
+        .unwrap_or((None, None));
     match (payload, entry) {
         (Some(rel), Some(entry_name)) => {
             let full: PathBuf = root.join(rel).join(entry_name);
@@ -350,6 +351,7 @@ fn print_install_only_hint(root: &Path, package_id: &str, pkg: Option<&Package>)
             println!("Use `numan list` to find the installed payload path.");
         }
     }
+    Ok(())
 }
 
 fn detect_nu(root: &Path) -> Result<NuVersion> {
