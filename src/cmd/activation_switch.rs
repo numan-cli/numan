@@ -362,35 +362,19 @@ fn classify_restore_target(
     if entry.package_type != expected_type {
         return RestoreClass::Missing;
     }
-    if expected_type == "plugin" {
-        if let Some(reg) = registry {
-            if let Ok(Some(pkg)) = reg.find_package(id) {
-                if let Some(ver) = pkg
-                    .versions
-                    .iter()
-                    .find(|v| v.version.to_string() == entry.version)
-                {
-                    if !resolver.is_compatible(ver) {
-                        return RestoreClass::Incompatible;
-                    }
-                } else if !resolver.has_compatible_version(&pkg) {
-                    // Installed version not in index; still refuse if no version works.
+    if let Some(reg) = registry {
+        if let Ok(Some(pkg)) = reg.find_package(id) {
+            if let Some(ver) = pkg
+                .versions
+                .iter()
+                .find(|v| v.version.to_string() == entry.version)
+            {
+                if !resolver.is_compatible(ver) {
                     return RestoreClass::Incompatible;
                 }
-            }
-        }
-    } else if expected_type == "module" {
-        if let Some(reg) = registry {
-            if let Ok(Some(pkg)) = reg.find_package(id) {
-                if let Some(ver) = pkg
-                    .versions
-                    .iter()
-                    .find(|v| v.version.to_string() == entry.version)
-                {
-                    if !resolver.is_compatible(ver) {
-                        return RestoreClass::Incompatible;
-                    }
-                }
+            } else if expected_type == "plugin" && !resolver.has_compatible_version(&pkg) {
+                // Installed version not in index; still refuse if no version works.
+                return RestoreClass::Incompatible;
             }
         }
     }
@@ -857,12 +841,29 @@ mod tests {
 
         let order: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
         let o1 = Rc::clone(&order);
+        let o2 = Rc::clone(&order);
         let unreg = move |_a: &str, _b: &str, _c: &str| -> Result<()> {
             o1.borrow_mut().push("plugin");
             Ok(())
         };
         let reg = |_a: &str, _b: &str, _c: &str| Ok(());
-        let runner = FakeCandidateRunner::success();
+        let inner_runner = FakeCandidateRunner::success();
+
+        struct TrackingRunner<'a> {
+            inner: &'a FakeCandidateRunner,
+            order: Rc<RefCell<Vec<&'static str>>>,
+        }
+        impl CandidateRunner for TrackingRunner<'_> {
+            fn run(&self, candidate: &Path) -> Result<()> {
+                self.order.borrow_mut().push("module");
+                self.inner.run(candidate)
+            }
+        }
+
+        let runner = TrackingRunner {
+            inner: &inner_runner,
+            order: o2,
+        };
         let hooks = SwitchHooks {
             registrar: &reg,
             unregistrar: &unreg,
@@ -874,8 +875,8 @@ mod tests {
         leave_current_nu(root, "0.113", &hooks).unwrap();
         assert_eq!(
             order.borrow().as_slice(),
-            &["plugin"][..],
-            "plugin unreg runs after module lane"
+            &["module", "plugin"][..],
+            "module lane executes before plugin unreg"
         );
         let lockfile = Lockfile::load(root).unwrap();
         assert!(lockfile

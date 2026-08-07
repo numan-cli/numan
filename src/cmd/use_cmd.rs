@@ -511,4 +511,151 @@ mod tests {
         )
         .unwrap();
     }
+
+    #[test]
+    fn execute_with_hooks_and_refresh_integration() {
+        use crate::core::integrity;
+        use crate::nu::autoload::FakeCandidateRunner;
+        use crate::state::activation_profile::{ActivationProfile, ProfileKind};
+        use crate::state::lockfile::{Lockfile, LockfileEntry, PluginActivation};
+        use std::cell::RefCell;
+        use std::collections::BTreeMap;
+        use std::rc::Rc;
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        create_fake_version(root, "0.113.1");
+        create_fake_version(root, "0.114.0");
+        version_manager::write_active_version(root, "0.113.1").unwrap();
+
+        let (nu_exe_113, hash_113) = {
+            let binary = version_manager::version_binary(root, "0.113.1");
+            let hash = integrity::compute_sha256(b"fake");
+            (binary.to_string_lossy().into_owned(), hash)
+        };
+
+        let vendor = root.join("vendor");
+        std::fs::create_dir_all(&vendor).unwrap();
+        let registry = root.join("plugin-registry.msgpack.z");
+        std::fs::write(&registry, b"reg").unwrap();
+
+        let paths = NuPaths {
+            nu_executable: nu_exe_113.clone(),
+            nu_version: "0.113.1".to_string(),
+            plugin_registry_path: registry.to_string_lossy().into_owned(),
+            nu_executable_hash: hash_113.clone(),
+            platform: "test".to_string(),
+            data_dir: None,
+            vendor_autoload_dirs: vec![vendor.to_string_lossy().into_owned()],
+            vendor_autoload_dir: Some(vendor.to_string_lossy().into_owned()),
+        };
+        paths.save(root).unwrap();
+
+        let payload = "packages/plugins/o/plug/1.0.0-aaa";
+        let payload_dir = root.join(payload);
+        std::fs::create_dir_all(&payload_dir).unwrap();
+        std::fs::write(payload_dir.join("nu_plugin_x"), b"fake").unwrap();
+
+        let mut lockfile = Lockfile::empty();
+        lockfile.packages.insert(
+            "o/plug".into(),
+            LockfileEntry {
+                version: "1.0.0".to_string(),
+                package_type: "plugin".to_string(),
+                source: "binary".to_string(),
+                target: None,
+                artifact_url: None,
+                artifact_sha256: None,
+                executable_path: Some("nu_plugin_x".to_string()),
+                archive_root: None,
+                include: None,
+                entry: None,
+                installed_at: "0".to_string(),
+                nu_version_at_install: None,
+                activation: Some(PluginActivation {
+                    plugin_registry_path: paths.plugin_registry_path.clone(),
+                    nu_executable_sha256: hash_113.clone(),
+                    nu_version: "0.113.1".to_string(),
+                    activated_at: "0".to_string(),
+                }),
+                registry_url: None,
+                registry_revision: None,
+                index_sha256: None,
+                signing_key_fingerprint: None,
+                git_url: None,
+                git_rev: None,
+                cargo_name: None,
+                cargo_lock_sha256: None,
+                built_sha256: None,
+                payload_path: payload.to_string(),
+                revision_id: None,
+                payload_sha256: None,
+                executable_sha256: None,
+                selection_reason: None,
+                origin: None,
+                module_activation: None,
+                module_import_mode: None,
+                locked_dependencies: BTreeMap::new(),
+            },
+        );
+        lockfile.save(root).unwrap();
+
+        let mut profile = ActivationProfile::new();
+        profile.ensure_contains("0.113", ProfileKind::Plugin, "o/plug");
+        profile.save(root).unwrap();
+
+        let hook_order: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+        let o1 = Rc::clone(&hook_order);
+        let o2 = Rc::clone(&hook_order);
+        let o3 = Rc::clone(&hook_order);
+
+        let unregistrar = move |_a: &str, _b: &str, _c: &str| -> Result<()> {
+            o1.borrow_mut().push("unregister");
+            Ok(())
+        };
+        let registrar = move |_a: &str, _b: &str, _c: &str| -> Result<()> {
+            o2.borrow_mut().push("register");
+            Ok(())
+        };
+        let path_refresh = move || -> Result<()> {
+            o3.borrow_mut().push("path_refresh");
+            Ok(())
+        };
+        let runner = FakeCandidateRunner::success();
+
+        execute_with_hooks_and_refresh(
+            &UseArgs {
+                version: "0.114.0".to_string(),
+            },
+            root,
+            &registrar,
+            &unregistrar,
+            Some(&runner),
+            Some(&path_refresh),
+        )
+        .unwrap();
+
+        let order = hook_order.borrow();
+        assert!(
+            order.contains(&"unregister"),
+            "unregistrar must be invoked"
+        );
+        assert!(order.contains(&"register"), "registrar must be invoked");
+        assert!(
+            order.contains(&"path_refresh"),
+            "path_refresh must be invoked"
+        );
+        let unreg_pos = order.iter().position(|&x| x == "unregister").unwrap();
+        let version_changed_pos = order.len();
+        assert!(
+            unreg_pos < version_changed_pos,
+            "unregistrar must execute before active-version marker changes"
+        );
+
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.114.0", "switch must complete");
+
+        assert_pre_mutation_snapshot(root);
+    }
 }

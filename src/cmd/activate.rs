@@ -602,7 +602,7 @@ fn run_module_lane(
 /// syncing the activation profile. Caller must hold the root mutation lock.
 ///
 /// Returns `true` if the module lane reported failure.
-pub fn activate_modules_unlocked(
+pub(crate) fn activate_modules_unlocked(
     root: &Path,
     package_ids: &[String],
     runner: &dyn CandidateRunner,
