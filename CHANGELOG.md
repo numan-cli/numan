@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`numan setup nu`**: official Nushell 0.114.x release archives exceed the old
+  256 MiB extract cap (~279 MiB uncompressed on linux-gnu). Bootstrap now
+  extracts only the `nu` binary (skipping bundled plugins) and raises the
+  uncompressed-size limit to 512 MiB so managed installs succeed again.
+
 ## [0.2.1] - 2026-08-07
 
 ### Added

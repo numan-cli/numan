@@ -21,6 +21,11 @@ const RELEASES_LATEST: &str = "https://api.github.com/repos/nushell/nushell/rele
 const RELEASES_TAGS_BASE: &str = "https://api.github.com/repos/nushell/nushell/releases/tags/";
 const USER_AGENT: &str = "numan-cli (https://github.com/tonythethompson/numan)";
 
+/// Official Nushell release archives (nu + bundled plugins) exceeded 256 MiB
+/// uncompressed as of 0.114.1 (~279 MiB on linux-gnu). Cap with headroom; we
+/// also filter to the `nu` binary so plugin payloads are not extracted.
+const NU_RELEASE_MAX_UNCOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
+
 /// Snapshot established Numan state before a `setup nu` install/PATH mutation.
 fn snapshot_before_nu_setup(root: &Path, context: &'static str) -> Result<()> {
     create_snapshot(
@@ -63,6 +68,16 @@ fn nu_binary_name() -> &'static str {
         "nu.exe"
     } else {
         "nu"
+    }
+}
+
+fn nu_release_extract_config() -> ExtractConfig {
+    ExtractConfig {
+        // Official releases ship nu plus large bundled plugins (e.g. polars).
+        // Managed install only needs the shell binary.
+        include: Some(vec![format!("**/{}", nu_binary_name())]),
+        max_uncompressed_bytes: Some(NU_RELEASE_MAX_UNCOMPRESSED_BYTES),
+        ..ExtractConfig::default()
     }
 }
 
@@ -219,10 +234,7 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
     extract_archive(
         archive_path,
         &extract_root,
-        &ExtractConfig {
-            max_uncompressed_bytes: Some(256 * 1024 * 1024),
-            ..ExtractConfig::default()
-        },
+        &nu_release_extract_config(),
         format,
     )
     .with_context(|| format!("Failed to extract '{}'", archive_path.display()))?;
@@ -1084,6 +1096,99 @@ mod tests {
         assert!(
             !managed_nu_binary(root).exists(),
             "legacy single-binary path must not be produced by new installs"
+        );
+    }
+
+    #[test]
+    fn nu_release_size_cap_exceeds_known_official_archive() {
+        // Nu 0.114.1 x86_64-unknown-linux-gnu was ~279 MiB uncompressed and
+        // tripped the previous 256 MiB bootstrap cap.
+        assert!(
+            NU_RELEASE_MAX_UNCOMPRESSED_BYTES > 279 * 1024 * 1024,
+            "cap must clear known official Nu release sizes"
+        );
+        let cfg = nu_release_extract_config();
+        assert_eq!(
+            cfg.max_uncompressed_bytes,
+            Some(NU_RELEASE_MAX_UNCOMPRESSED_BYTES)
+        );
+        assert_eq!(
+            cfg.include.as_ref().unwrap(),
+            &vec![format!("**/{}", nu_binary_name())]
+        );
+    }
+
+    #[test]
+    fn install_from_archive_skips_bundled_plugin_payloads() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let zip_path = root.join("nu-with-plugins.zip");
+
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zip = ZipWriter::new(file);
+            let options = SimpleFileOptions::default();
+            let nu_inner = format!("nu-0.0.0-test/{}", nu_binary_name());
+            zip.start_file(&nu_inner, options).unwrap();
+            zip.write_all(b"fake nu binary").unwrap();
+            // Sibling plugin payload larger than the old 256 MiB bootstrap
+            // cap would be if counted; keep this modest in CI and rely on
+            // the include filter + size-cap unit checks above for the bomb
+            // limit. Content still proves plugins are not required.
+            zip.start_file("nu-0.0.0-test/nu_plugin_polars", options)
+                .unwrap();
+            zip.write_all(&vec![0u8; 64 * 1024]).unwrap();
+            zip.finish().unwrap();
+        }
+
+        // Even with a tiny uncompressed cap, include-filtered extract of
+        // only `nu` must succeed when siblings are huge relative to the cap.
+        let extract_root = root.join("tools/.manual-extract");
+        std::fs::create_dir_all(&extract_root).unwrap();
+        let result = extract_archive(
+            &zip_path,
+            &extract_root,
+            &ExtractConfig {
+                include: Some(vec![format!("**/{}", nu_binary_name())]),
+                max_uncompressed_bytes: Some(1024),
+                ..ExtractConfig::default()
+            },
+            ArchiveFormat::Zip,
+        )
+        .expect("include filter must skip plugin bytes under the size cap");
+        assert_eq!(result.files.len(), 1);
+        assert!(result.files[0].ends_with(nu_binary_name()));
+
+        let installed = install_from_archive(&zip_path, root, "0.0.0-plugins").unwrap();
+        assert_eq!(
+            std::fs::read(&installed).unwrap(),
+            b"fake nu binary".as_slice()
+        );
+    }
+
+    /// Manual smoke: `NUMAN_SMOKE_NU_ARCHIVE=/path/to/nu-*.tar.gz cargo test --lib \
+    /// install_from_real_nu_release_archive_smoke -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn install_from_real_nu_release_archive_smoke() {
+        let archive = match std::env::var_os("NUMAN_SMOKE_NU_ARCHIVE") {
+            Some(p) => PathBuf::from(p),
+            None => return,
+        };
+        assert!(
+            archive.is_file(),
+            "NUMAN_SMOKE_NU_ARCHIVE does not exist: {}",
+            archive.display()
+        );
+        let dir = TempDir::new().unwrap();
+        let installed = install_from_archive(&archive, dir.path(), "0.114.1").unwrap();
+        assert!(installed.is_file());
+        assert!(installed.ends_with(nu_binary_name()));
+        // Must be the real shell binary, not a tiny plugin stub.
+        assert!(
+            std::fs::metadata(&installed).unwrap().len() > 1_000_000,
+            "installed nu looks too small: {}",
+            installed.display()
         );
     }
 

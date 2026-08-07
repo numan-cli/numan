@@ -78,7 +78,8 @@ pub struct ExtractConfig {
     pub archive_root: Option<String>,
     pub include: Option<Vec<String>>,
     pub entry: Option<String>,
-    /// Override the default 100 MiB uncompressed-size cap (e.g. official Nushell releases).
+    /// Override the default 100 MiB uncompressed-size cap (e.g. official Nushell
+    /// releases; bootstrap uses 512 MiB and also filters to the `nu` binary).
     pub max_uncompressed_bytes: Option<u64>,
 }
 
