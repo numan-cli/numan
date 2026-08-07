@@ -206,9 +206,9 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${NUMAN_RELEASE_SIGNING_KEY}" ]]; then
-            echo "::warning::NUMAN_RELEASE_SIGNING_KEY is unset; publishing without SHA256SUMS.sig. \
-          numan update --self will refuse this release until a signed checksum is present."
-            exit 0
+            echo "::error::NUMAN_RELEASE_SIGNING_KEY is unset. Refusing to publish: \
+          standalone numan update --self requires SHA256SUMS.sig on every release."
+            exit 1
           fi
           python3 -m pip install --user pynacl
           python3 "${GITHUB_WORKSPACE}/scripts/sign-sha256sums.py" SHA256SUMS SHA256SUMS.sig

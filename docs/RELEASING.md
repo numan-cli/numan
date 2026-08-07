@@ -60,7 +60,7 @@ Then:
 `numan update --self` refuses to install unless `SHA256SUMS.sig` verifies with the baked-in `RELEASE_SUMS_PUBLIC_KEY_B64` in `src/cmd/self_update.rs`.
 
 1. Keep the matching 32-byte Ed25519 seed only in the repository secret `NUMAN_RELEASE_SIGNING_KEY` (standard base64). Never commit the seed.
-2. The Release workflow runs `scripts/sign-sha256sums.py` when that secret is set and uploads `SHA256SUMS.sig` alongside the archives.
+2. The Release workflow requires that secret and fails the publish job if it is unset, so every public release includes `SHA256SUMS.sig` for `numan update --self`.
 3. To rotate: generate a new seed, update the secret, bump `RELEASE_SUMS_PUBLIC_KEY_B64`, and cut a new release. Older unsigned releases remain installable via brew / winget / cargo / manual download.
 
 Generate a seed and matching public key (local machine only):
