@@ -17,7 +17,7 @@ After a GitHub Release is published (see [RELEASING.md](RELEASING.md)):
 4. Spot-check on a Mac or Linux Homebrew host:
 
    ```bash
-   brew tap tonythethompson/numan
+   brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan
    brew update
    brew install numan
    numan --version
@@ -37,7 +37,7 @@ python3 scripts/render_homebrew_formula.py --version X.Y.Z --sha256sums SHA256SU
 | GitHub Release | Download archive from [Releases](https://github.com/tonythethompson/numan/releases) |
 | crates.io | `cargo install numan-cli` |
 | From git | `cargo install --git https://github.com/tonythethompson/numan` |
-| Homebrew (tap) | `brew tap tonythethompson/numan && brew install numan` |
+| Homebrew (tap) | `brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan && brew install numan` |
 | winget (community) | `winget install tonythethompson.numan` |
 
 ## Archive layout
@@ -63,5 +63,15 @@ Release archives extract to `numan-<version>-<target>/` containing the `numan`
 
 The Homebrew tap repository must stay **public**. Private visibility is why
 `brew tap tonythethompson/numan` previously failed for most users.
+
+If `brew update` fails with `Host key verification failed` for this tap, the
+local clone is on an SSH remote and can leave an old formula installed. Recover
+with:
+
+```bash
+brew untap tonythethompson/numan
+brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan
+brew install tonythethompson/numan/numan
+```
 
 Scoop is not packaged yet; see [Phase7Plan.md](plans/Phase7Plan.md).

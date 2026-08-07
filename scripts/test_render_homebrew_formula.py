@@ -53,6 +53,10 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  numan-0.1.5-aa
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", text
         )
         self.assertIn('bin.install "numan"', text)
+        self.assertIn(
+            "brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan",
+            text,
+        )
         self.assertNotIn("arch_dir", text)
         self.assertNotIn("expected numan-* directory", text)
         self.assertIn("on_intel do", text)
