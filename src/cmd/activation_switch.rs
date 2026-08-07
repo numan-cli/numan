@@ -400,6 +400,7 @@ fn classify_restore_target(
 fn restore_one_plugin(
     root: &Path,
     lockfile: &Lockfile,
+    nu_paths: &NuPaths,
     registry: Option<&RegistryManager>,
     resolver: &Resolver<'_>,
     id: &str,
@@ -411,10 +412,6 @@ fn restore_one_plugin(
         RestoreClass::Ok => {}
     }
 
-    let nu_paths = match NuPaths::load(root) {
-        Ok(p) => p,
-        Err(e) => return RestoreOutcome::Failed(e.to_string()),
-    };
     if let Some(entry) = lockfile.packages.get(id) {
         if entry.is_active_for(
             &nu_paths.nu_executable_hash,
