@@ -508,6 +508,14 @@ For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 
 ---
 
+## Security
+
+To report a vulnerability in the Numan CLI, see [SECURITY.md](SECURITY.md).
+Registry catalog and signing incidents are covered by
+[numan-registry SECURITY.md](https://github.com/tonythethompson/numan-registry/blob/main/SECURITY.md).
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
