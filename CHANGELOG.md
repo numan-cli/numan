@@ -7,9 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-07
+
 ### Added
 
 - **`numan update --self`**: upgrade the numan CLI itself. Standalone installs download the matching GitHub Release asset, verify the Ed25519 signature over `SHA256SUMS` (`SHA256SUMS.sig` + baked-in release public key), then check the archive digest and replace the binary. Homebrew / winget / cargo installs print the exact upgrade command instead of self-replacing; `--check` still queries GitHub Releases to report whether a newer version exists before printing that hint.
+- **`SECURITY.md`**: vulnerability reporting, scope, and cross-repo trust summary (linked from the README)
+
+### Changed
+
+- **`numan search` / `numan info`**: scripts and completions are labeled install-only (activation deferred) instead of module-style "not ABI-locked" wording; install-only labels still appear when Nu is unknown
+- **`numan try`**: prefers activatable curated starters (plugin/module), then falls back to Nu-agnostic install-only scripts (`SuaveIV/nu_script_wttr`, `Sanceilaks/nufetch`) without calling activate; prints a quoted `overlay use` path from the installed lockfile entry
 
 ## [0.2.0] - 2026-08-05
 
@@ -140,7 +148,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Release binaries for Linux, Windows, and macOS
 - Real-Nu acceptance CI job
 
-[Unreleased]: https://github.com/tonythethompson/numan/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/tonythethompson/numan/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/tonythethompson/numan/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/tonythethompson/numan/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/tonythethompson/numan/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/tonythethompson/numan/compare/v0.1.3...v0.1.4
