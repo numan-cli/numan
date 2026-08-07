@@ -435,6 +435,21 @@ pub fn persist_user_path(binary: &Path) -> Result<()> {
     }
     #[cfg(unix)]
     {
+        // Same test harness skip as `persist_path_dir_*`: PathRestoreGuard sets
+        // this so ignored acceptance tests cannot leave a dangling
+        // `~/.local/bin/nu` or shell-profile export after a tempfile fixture.
+        if std::env::var_os("NUMAN_TEST_NO_PERSIST_USER_PATH").is_some() {
+            return Ok(());
+        }
+        // Match Windows `persist_path_dir` temp refuse: never durable-link a
+        // tempfile-rooted binary into `~/.local/bin/nu`.
+        if path_is_under_temp_dir(binary) {
+            bail!(
+                "Refusing to add temporary directory '{}' to the user PATH. \
+                 Install or register a stable Nushell location instead.",
+                binary.display()
+            );
+        }
         persist_user_path_unix(binary)?;
         ensure_local_bin_on_path()?;
         Ok(())
@@ -1156,6 +1171,54 @@ mod tests {
         // Clear the test harness skip flag so we exercise the production refuse.
         std::env::remove_var("NUMAN_TEST_NO_PERSIST_USER_PATH");
         let err = persist_path_dir(&nested).expect_err("temp dirs must not be persisted");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("temporary directory") || msg.contains("Refusing"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persist_user_path_honors_test_no_persist_flag() {
+        use crate::util::test_paths::PathRestoreGuard;
+        let _guard = PathRestoreGuard::new();
+        let home = TempDir::new().unwrap();
+        let original_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
+
+        let binary = home.path().join("fixture-nu");
+        std::fs::write(&binary, b"fake").unwrap();
+        persist_user_path(&binary).expect("flag must no-op durable Unix PATH writes");
+
+        assert!(
+            !home.path().join(".local").join("bin").join("nu").exists(),
+            "must not create ~/.local/bin/nu while PathRestoreGuard is held"
+        );
+        // No shell-profile export either.
+        for name in [".zshrc", ".bashrc", ".profile"] {
+            assert!(
+                !home.path().join(name).exists(),
+                "must not create {name} while PathRestoreGuard is held"
+            );
+        }
+
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persist_user_path_refuses_temp_binaries_without_flag() {
+        use crate::util::test_paths::PathRestoreGuard;
+        let _guard = PathRestoreGuard::new();
+        std::env::remove_var("NUMAN_TEST_NO_PERSIST_USER_PATH");
+        let dir = TempDir::new().unwrap();
+        let binary = dir.path().join("nu");
+        std::fs::write(&binary, b"fake").unwrap();
+        let err = persist_user_path(&binary).expect_err("temp binaries must not be persisted");
         let msg = format!("{err:#}");
         assert!(
             msg.contains("temporary directory") || msg.contains("Refusing"),
