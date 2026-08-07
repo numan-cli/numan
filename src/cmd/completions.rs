@@ -50,9 +50,20 @@ pub fn execute(args: &CompletionsArgs) -> Result<()> {
         path.display()
     );
     if matches!(args.shell, CompletionShell::PowerShell) {
-        println!("Add to $PROFILE (once): . {}", path.display());
+        println!(
+            "Add to $PROFILE (once): . {}",
+            powershell_single_quote(&path)
+        );
     }
     Ok(())
+}
+
+/// Quote a path for a copy-pasteable PowerShell single-quoted string.
+///
+/// Always wraps in `'…'` and doubles embedded `'` as `''`, so spaces and
+/// quotes in home paths cannot break the `. path` instruction.
+fn powershell_single_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "''"))
 }
 
 fn shell_label(shell: CompletionShell) -> &'static str {
@@ -257,6 +268,22 @@ mod tests {
             print_hint(CompletionShell::Nushell).contains("vendor/autoload/numan-completions.nu")
         );
         assert!(print_hint(CompletionShell::Nushell).contains("numan completions nushell --print"));
+    }
+
+    #[test]
+    fn powershell_single_quote_is_copy_paste_safe() {
+        assert_eq!(
+            powershell_single_quote(Path::new(r"C:\Users\Alice\.numan\completions.ps1")),
+            r"'C:\Users\Alice\.numan\completions.ps1'"
+        );
+        assert_eq!(
+            powershell_single_quote(Path::new(r"C:\Users\Alice Smith\.numan\completions.ps1")),
+            r"'C:\Users\Alice Smith\.numan\completions.ps1'"
+        );
+        assert_eq!(
+            powershell_single_quote(Path::new(r"C:\Users\O'Brien\.numan\completions.ps1")),
+            r"'C:\Users\O''Brien\.numan\completions.ps1'"
+        );
     }
 
     #[test]
