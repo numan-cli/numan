@@ -72,15 +72,40 @@ fn powershell_completions_can_append_to_existing_profile() {
 }
 
 #[test]
-fn powershell_install_hint_is_ready_to_copy() {
-    use numan_cli::cmd::completions::install_hint;
+fn print_hint_is_ready_to_copy() {
+    use numan_cli::cmd::completions::print_hint;
 
-    let hint = install_hint(CompletionShell::PowerShell);
+    let hint = print_hint(CompletionShell::PowerShell);
     assert!(hint.contains("Add-Content -Encoding utf8 $PROFILE"));
+    assert!(hint.contains("numan completions powershell --print"));
     assert!(
         !generate_script(CompletionShell::PowerShell)
             .expect("generate")
             .contains("Add-Content"),
         "hint must stay on stderr / separate from script stdout"
     );
+}
+
+#[test]
+fn install_to_creates_parent_dirs_for_each_shell() {
+    use numan_cli::cmd::completions::install_to;
+    use std::fs;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cases = [
+        (CompletionShell::Bash, "bash/completions/numan"),
+        (CompletionShell::Zsh, "zsh/.zfunc/_numan"),
+        (CompletionShell::Fish, "fish/completions/numan.fish"),
+        (CompletionShell::PowerShell, "ps/.numan/completions.ps1"),
+        (
+            CompletionShell::Nushell,
+            "nu/vendor/autoload/numan-completions.nu",
+        ),
+    ];
+    for (shell, rel) in cases {
+        let path = dir.path().join(rel);
+        install_to(shell, &path).unwrap_or_else(|e| panic!("install {shell:?}: {e}"));
+        assert!(path.is_file(), "{shell:?} missing at {}", path.display());
+        assert!(!fs::read_to_string(&path).expect("read").is_empty());
+    }
 }

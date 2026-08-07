@@ -1,16 +1,24 @@
-use anyhow::{Context, Result};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{bail, Context, Result};
 use clap::{CommandFactory, ValueEnum};
 use clap_complete::{generate, Shell};
 use clap_complete_nushell::Nushell;
 
 use crate::cli::Cli;
 
-/// Generate shell completion scripts
+/// Install (default) or print shell completion scripts
 #[derive(clap::Parser)]
 pub struct CompletionsArgs {
     /// Shell to generate completions for
     #[arg(value_enum)]
     pub shell: CompletionShell,
+
+    /// Print the script on stdout instead of installing it
+    /// (pipe-safe; copy-ready redirect hints go to stderr)
+    #[arg(long)]
+    pub print: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -26,43 +34,122 @@ pub enum CompletionShell {
 }
 
 pub fn execute(args: &CompletionsArgs) -> Result<()> {
-    let script = generate_script(args.shell)?;
-    print!("{script}");
-    // stderr so `numan completions … | Add-Content` / redirects stay script-only
-    eprint!("{}", install_hint(args.shell));
+    if args.print {
+        let script = generate_script(args.shell)?;
+        print!("{script}");
+        // stderr so redirects / pipes stay script-only
+        eprint!("{}", print_hint(args.shell));
+        return Ok(());
+    }
+
+    let path = default_install_path(args.shell)?;
+    install_to(args.shell, &path)?;
+    println!(
+        "Installed {} completions to {}",
+        shell_label(args.shell),
+        path.display()
+    );
+    if matches!(args.shell, CompletionShell::PowerShell) {
+        println!("Add to $PROFILE (once): . {}", path.display());
+    }
     Ok(())
 }
 
-/// Copy-ready install instructions for the generated completion script.
+fn shell_label(shell: CompletionShell) -> &'static str {
+    match shell {
+        CompletionShell::Bash => "bash",
+        CompletionShell::Fish => "fish",
+        CompletionShell::Zsh => "zsh",
+        CompletionShell::PowerShell => "powershell",
+        CompletionShell::Nushell => "nushell",
+    }
+}
+
+/// Canonical install path for `numan completions <shell>`.
+pub fn default_install_path(shell: CompletionShell) -> Result<PathBuf> {
+    let home = dirs::home_dir().context("Could not resolve home directory")?;
+    Ok(match shell {
+        CompletionShell::Bash => home
+            .join(".local")
+            .join("share")
+            .join("bash-completion")
+            .join("completions")
+            .join("numan"),
+        CompletionShell::Zsh => home.join(".zfunc").join("_numan"),
+        CompletionShell::Fish => home
+            .join(".config")
+            .join("fish")
+            .join("completions")
+            .join("numan.fish"),
+        CompletionShell::PowerShell => home.join(".numan").join("completions.ps1"),
+        CompletionShell::Nushell => {
+            let data = dirs::data_dir().context("Could not resolve data directory")?;
+            data.join("nushell")
+                .join("vendor")
+                .join("autoload")
+                .join("numan-completions.nu")
+        }
+    })
+}
+
+/// Write the completion script to `path`, creating parent directories as needed.
+pub fn install_to(shell: CompletionShell, path: &Path) -> Result<()> {
+    if path.file_name().is_none_or(|name| name.is_empty()) {
+        bail!("completion install path must be a file path");
+    }
+    let script = generate_script(shell)?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "Failed to create completions directory {}",
+                    parent.display()
+                )
+            })?;
+        }
+    }
+    fs::write(path, script.as_bytes())
+        .with_context(|| format!("Failed to write completions to {}", path.display()))?;
+    Ok(())
+}
+
+/// Copy-ready redirect / pipe hints shown with `--print`.
 ///
-/// Written to stderr after the script so stdout remains safe to pipe into a
-/// profile or completions file.
-pub fn install_hint(shell: CompletionShell) -> String {
+/// Written to stderr after the script so stdout remains safe to pipe.
+pub fn print_hint(shell: CompletionShell) -> String {
     match shell {
         CompletionShell::Bash => "\
-# Install:
-numan completions bash > ~/.local/share/bash-completion/completions/numan
+# Prefer: numan completions bash
+# Or redirect:
+mkdir -p ~/.local/share/bash-completion/completions
+numan completions bash --print > ~/.local/share/bash-completion/completions/numan
 "
         .to_string(),
         CompletionShell::Zsh => "\
-# Install:
-numan completions zsh > ~/.zfunc/_numan
+# Prefer: numan completions zsh
+# Or redirect:
+mkdir -p ~/.zfunc
+numan completions zsh --print > ~/.zfunc/_numan
 "
         .to_string(),
         CompletionShell::Fish => "\
-# Install:
-numan completions fish > ~/.config/fish/completions/numan.fish
+# Prefer: numan completions fish
+# Or redirect:
+mkdir -p ~/.config/fish/completions
+numan completions fish --print > ~/.config/fish/completions/numan.fish
 "
         .to_string(),
         CompletionShell::PowerShell => "\
-# Install (append to your PowerShell profile):
-numan completions powershell | Add-Content -Encoding utf8 $PROFILE
+# Prefer: numan completions powershell  (writes ~/.numan/completions.ps1)
+# Or append to your PowerShell profile:
+numan completions powershell --print | Add-Content -Encoding utf8 $PROFILE
 "
         .to_string(),
         CompletionShell::Nushell => "\
-# Install (Nushell vendor autoload; restart nu or open a new session):
+# Prefer: numan completions nushell
+# Or manually:
 mkdir --all ($nu.data-dir | path join vendor/autoload)
-numan completions nushell | save -f ($nu.data-dir | path join vendor/autoload/numan-completions.nu)
+numan completions nushell --print | save -f ($nu.data-dir | path join vendor/autoload/numan-completions.nu)
 "
         .to_string(),
     }
@@ -158,19 +245,66 @@ mod tests {
     }
 
     #[test]
-    fn install_hint_is_copy_ready_and_not_part_of_script() {
+    fn print_hint_is_copy_ready_and_not_part_of_script() {
         let script = generate_script(CompletionShell::PowerShell).expect("generate");
-        let hint = install_hint(CompletionShell::PowerShell);
+        let hint = print_hint(CompletionShell::PowerShell);
         assert!(
             !script.contains("Add-Content"),
-            "install hint must not be mixed into the completion script"
+            "print hint must not be mixed into the completion script"
         );
-        assert!(hint.contains("numan completions powershell | Add-Content -Encoding utf8 $PROFILE"));
-        assert!(install_hint(CompletionShell::Bash).contains("bash-completion/completions/numan"));
-        assert!(install_hint(CompletionShell::Zsh).contains("~/.zfunc/_numan"));
-        assert!(install_hint(CompletionShell::Fish).contains("numan.fish"));
+        assert!(hint.contains("numan completions powershell"));
+        assert!(hint.contains(
+            "numan completions powershell --print | Add-Content -Encoding utf8 $PROFILE"
+        ));
+        assert!(print_hint(CompletionShell::Bash)
+            .contains("mkdir -p ~/.local/share/bash-completion/completions"));
+        assert!(print_hint(CompletionShell::Bash).contains("numan completions bash --print"));
+        assert!(print_hint(CompletionShell::Zsh).contains("mkdir -p ~/.zfunc"));
         assert!(
-            install_hint(CompletionShell::Nushell).contains("vendor/autoload/numan-completions.nu")
+            print_hint(CompletionShell::Fish).contains("mkdir -p ~/.config/fish/completions")
+        );
+        assert!(
+            print_hint(CompletionShell::Nushell).contains("vendor/autoload/numan-completions.nu")
+        );
+        assert!(print_hint(CompletionShell::Nushell).contains("numan completions nushell --print"));
+    }
+
+    #[test]
+    fn install_to_creates_missing_parent_directories() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir
+            .path()
+            .join("missing")
+            .join("nested")
+            .join("completions")
+            .join("numan");
+        assert!(!path.parent().unwrap().exists());
+        install_to(CompletionShell::Bash, &path).expect("install_to");
+        assert!(path.is_file());
+        let written = fs::read_to_string(&path).expect("read");
+        assert!(written.contains("_numan"));
+    }
+
+    #[test]
+    fn default_install_paths_are_under_home_or_data() {
+        let bash = default_install_path(CompletionShell::Bash).expect("bash path");
+        assert!(
+            bash.ends_with("bash-completion/completions/numan")
+                || bash.ends_with("bash-completion\\completions\\numan")
+        );
+        let zsh = default_install_path(CompletionShell::Zsh).expect("zsh path");
+        assert!(zsh.ends_with(".zfunc/_numan") || zsh.ends_with(".zfunc\\_numan"));
+        let fish = default_install_path(CompletionShell::Fish).expect("fish path");
+        assert!(
+            fish.ends_with("fish/completions/numan.fish")
+                || fish.ends_with("fish\\completions\\numan.fish")
+        );
+        let ps = default_install_path(CompletionShell::PowerShell).expect("ps path");
+        assert!(ps.ends_with(".numan/completions.ps1") || ps.ends_with(".numan\\completions.ps1"));
+        let nu = default_install_path(CompletionShell::Nushell).expect("nu path");
+        assert!(
+            nu.ends_with("nushell/vendor/autoload/numan-completions.nu")
+                || nu.ends_with("nushell\\vendor\\autoload\\numan-completions.nu")
         );
     }
 
