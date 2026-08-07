@@ -51,7 +51,7 @@ These workflows are covered by unit tests, hermetic integration tests, and real-
 - **Lifecycle management**: Update, remove, and garbage collection operations recover safely through lifecycle journals.
 - **nupm interoperability**: Use `numan nupm status`, `inspect`, `import`, and `diff` to inspect, migrate, and detect drift in existing [nupm](https://github.com/nushell/nupm) installations.
 - **Health checks**: `numan doctor` diagnoses installation health and applies safe repairs by default. Use `--scan` for report-only mode.
-- **Shell completions**: Generate completions for Bash, Fish, Zsh, PowerShell, and Nushell with `numan completions`.
+- **Shell completions**: Install completions for Bash, Fish, Zsh, PowerShell, and Nushell with `numan completions` (use `--print` to emit the script).
 
 ---
 
@@ -67,8 +67,8 @@ These workflows are covered by unit tests, hermetic integration tests, and real-
 Install-only packages remain inert: numan downloads, verifies, locks, lists,
 removes, and garbage-collects their payloads, but does not execute them or
 modify Nu configuration for them. This is separate from numan's own shell
-completion generator: `numan completions <shell>` is supported for bash, fish,
-zsh, PowerShell, and Nushell (`nu`).
+completion installer: `numan completions <shell>` is supported for bash, fish,
+zsh, PowerShell, and Nushell (`nu`); use `--print` to emit the script instead.
 
 ---
 

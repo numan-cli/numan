@@ -11,7 +11,7 @@ use crate::cli::Cli;
 /// Install (default) or print shell completion scripts
 #[derive(clap::Parser)]
 pub struct CompletionsArgs {
-    /// Shell to generate completions for
+    /// Shell to install completions for
     #[arg(value_enum)]
     pub shell: CompletionShell,
 
