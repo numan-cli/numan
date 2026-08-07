@@ -108,7 +108,7 @@ install -m 755 numan-VERSION-TARGET/numan ~/.local/bin/numan
 **Windows (PowerShell)**
 
 ```powershell
-Expand-Archive numan-VERSION-x86_64-pc-windows-msvc.zip -DestinationPath .
+Expand-Archive numan-VERSION-TARGET.zip -DestinationPath .
 # Add the extracted folder to your PATH, or copy numan.exe into a directory already on PATH
 ```
 

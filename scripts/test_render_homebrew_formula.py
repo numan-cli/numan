@@ -60,6 +60,19 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  numan-0.1.5-aa
         self.assertNotIn("x86_64-apple-darwin.tar.gz", text)
         self.assertNotIn("windows-msvc", text)
 
+    def test_legacy_pre_linux_arm_omits_linux_arm_bottle(self):
+        sums = """
+4d8fa065b5bc7fcce30af3ca7d5c3cd943701bee168d78fae6120a12689738b8  numan-0.1.5-aarch64-apple-darwin.tar.gz
+0b113361c189a2062ef6e1fca36795d2347b925c1862b42c4ddeb54773e00ae3  numan-0.1.5-x86_64-unknown-linux-gnu.tar.gz
+""".strip()
+        digests = self.mod.parse_sha256sums(
+            sums, "0.1.5", legacy_pre_linux_arm=True
+        )
+        self.assertNotIn("aarch64-unknown-linux-gnu", digests)
+        text = self.mod.render_formula("0.1.5", digests)
+        self.assertIn("x86_64-unknown-linux-gnu.tar.gz", text)
+        self.assertNotIn("aarch64-unknown-linux-gnu.tar.gz", text)
+
     def test_parse_prerelease_version(self):
         sums = """
 4D8FA065B5BC7FCCE30AF3CA7D5C3CD943701BEE168D78FAE6120A12689738B8  numan-0.2.0-beta.1-aarch64-apple-darwin.tar.gz
@@ -80,6 +93,14 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  numan-0.2.0-be
         sums = "abcd  numan-0.1.5-aarch64-apple-darwin.tar.gz\n"
         with self.assertRaises(SystemExit):
             self.mod.parse_sha256sums(sums, "0.1.5")
+
+    def test_missing_linux_arm_fails_without_legacy(self):
+        sums = """
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  numan-0.2.0-aarch64-apple-darwin.tar.gz
+cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  numan-0.2.0-x86_64-unknown-linux-gnu.tar.gz
+""".strip()
+        with self.assertRaises(SystemExit):
+            self.mod.parse_sha256sums(sums, "0.2.0")
 
     def test_write_roundtrip(self):
         sums = """
@@ -109,6 +130,7 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  numan-0.2.0-aa
         self.assertIn("numan-<version>-aarch64-apple-darwin.tar.gz", stdout)
         self.assertIn("numan-<version>-x86_64-unknown-linux-gnu.tar.gz", stdout)
         self.assertIn("numan-<version>-aarch64-unknown-linux-gnu.tar.gz", stdout)
+        self.assertIn("--legacy-pre-linux-arm", stdout)
         self.assertNotIn("x86_64-apple-darwin", stdout)
 
     def test_cli_full_write(self):
@@ -141,6 +163,32 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  numan-0.2.0-aa
             self.assertIn('version "0.2.0"', text)
             self.assertIn("aarch64-unknown-linux-gnu.tar.gz", text)
             self.assertIn("Wrote ", buf.getvalue())
+
+    def test_cli_legacy_write(self):
+        sums = """
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  numan-0.1.5-aarch64-apple-darwin.tar.gz
+cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  numan-0.1.5-x86_64-unknown-linux-gnu.tar.gz
+""".strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            sums_path = tmp_path / "SHA256SUMS"
+            out_path = tmp_path / "numan.rb"
+            sums_path.write_text(sums + "\n", encoding="utf-8")
+            code = self.mod.main(
+                [
+                    "--version",
+                    "0.1.5",
+                    "--sha256sums",
+                    str(sums_path),
+                    "--legacy-pre-linux-arm",
+                    "--write",
+                    "--out",
+                    str(out_path),
+                ]
+            )
+            self.assertEqual(0, code)
+            text = out_path.read_text(encoding="utf-8")
+            self.assertNotIn("aarch64-unknown-linux-gnu", text)
 
     def test_cli_missing_required_args_fails(self):
         err = io.StringIO()

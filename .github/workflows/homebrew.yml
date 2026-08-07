@@ -118,7 +118,7 @@ jobs:
           VERSION="${RELEASE_TAG#v}"
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS
           test -f SHA256SUMS
-          for triple in aarch64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+          for triple in aarch64-apple-darwin x86_64-unknown-linux-gnu; do
             asset="numan-${VERSION}-${triple}.tar.gz"
             # Use gh --jq (built into gh) so we do not depend on a separate jq binary.
             ok="$(
@@ -130,11 +130,25 @@ jobs:
               exit 1
             fi
           done
-          python3 scripts/render_homebrew_formula.py \
-            --version "$VERSION" \
-            --sha256sums SHA256SUMS \
-            --write \
+          RENDER_ARGS=(
+            --version "$VERSION"
+            --sha256sums SHA256SUMS
+            --write
             --out /tmp/numan.rb
+          )
+          # Linux ARM is required for current releases; omit when recovering pre-ARM tags.
+          linux_arm_asset="numan-${VERSION}-aarch64-unknown-linux-gnu.tar.gz"
+          linux_arm_ok="$(
+            gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,assets \
+              --jq ".isDraft == false and any(.assets[]; .name == \"${linux_arm_asset}\" and .state == \"uploaded\")"
+          )"
+          if [[ "$linux_arm_ok" == "true" ]]; then
+            echo "Found Linux ARM archive ${linux_arm_asset}"
+          else
+            echo "No Linux ARM archive on ${RELEASE_TAG}; using --legacy-pre-linux-arm"
+            RENDER_ARGS+=(--legacy-pre-linux-arm)
+          fi
+          python3 scripts/render_homebrew_formula.py "${RENDER_ARGS[@]}"
           cp /tmp/numan.rb packaging/homebrew/numan.rb
 
       - name: Push formula to homebrew-numan tap
