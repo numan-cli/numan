@@ -363,8 +363,11 @@ fn run_module_deactivate_lane(
 
     let managed_path = Path::new(&managed_file_path);
 
-    if remaining_ids.is_empty() {
-        run_full_deactivation(
+    // Full deactivation (no candidate validation) is reserved for the no-runner,
+    // drift-tolerant path. When a runner is provided, validate the final module
+    // state so callers can observe and test the module lane ordering.
+    if runner.is_none() && remaining_ids.is_empty() {
+        return run_full_deactivation(
             root,
             nu_paths,
             lockfile,
@@ -374,32 +377,44 @@ fn run_module_deactivate_lane(
             &managed_file_path,
             &currently_active_ids,
             pre_mutation_snapshot_id,
-        )
-    } else {
-        nu_paths.validate_drift()?;
-
-        let real_runner;
-        let runner_ref: &dyn CandidateRunner = if let Some(r) = runner {
-            r
-        } else {
-            real_runner = NuCandidateRunner::new(&nu_paths.nu_executable);
-            &real_runner
-        };
-
-        run_partial_deactivation(
-            root,
-            nu_paths,
-            lockfile,
-            targets_requested,
-            &remaining_ids,
-            managed_path,
-            &vendor_autoload_dir,
-            &managed_file_path,
-            &currently_active_ids,
-            runner_ref,
-            pre_mutation_snapshot_id,
-        )
+        );
     }
+
+    nu_paths.validate_drift()?;
+
+    let real_runner;
+    let runner_ref: &dyn CandidateRunner = if let Some(r) = runner {
+        r
+    } else {
+        real_runner = NuCandidateRunner::new(&nu_paths.nu_executable);
+        &real_runner
+    };
+
+    run_partial_deactivation(
+        root,
+        nu_paths,
+        lockfile,
+        targets_requested,
+        &remaining_ids,
+        managed_path,
+        &vendor_autoload_dir,
+        &managed_file_path,
+        &currently_active_ids,
+        runner_ref,
+        pre_mutation_snapshot_id,
+    )?;
+
+    // When a runner-driven deactivation removes the last module, delete the
+    // managed autoload file and state so the result matches the full path.
+    if remaining_ids.is_empty() {
+        delete_managed_file(managed_path).with_context(|| {
+            "Failed to delete managed autoload file after final module deactivation"
+        })?;
+        AutoloadState::delete(root)
+            .with_context(|| "Failed to delete autoload state after final module deactivation")?;
+    }
+
+    Ok(())
 }
 
 /// Deactivate named modules without acquiring the mutation lock, snapshotting, or

@@ -1586,6 +1586,8 @@ mod tests {
 
     #[test]
     fn register_existing_nu_refuses_non_tty_without_yes_before_path_mutation() {
+        use crate::util::test_paths::PathRestoreGuard;
+
         let nu_name = nu_binary_name();
         let Some(src) = std::env::var_os("PATH").and_then(|path| {
             std::env::split_paths(&path)
@@ -1607,10 +1609,16 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let mut perms = std::fs::metadata(&existing).unwrap().permissions();
             perms.set_mode(0o755);
-            std::fs::set_permissions(&existing, perms).unwrap();
+            std::fs::set_permissions(&existing, &perms).unwrap();
         }
 
+        // Serialize PATH mutations so concurrent tests cannot race on the
+        // process-global environment, then run with an empty PATH to ensure the
+        // refusal happens before any PATH or active-version mutation.
+        let _path_guard = PathRestoreGuard::new();
+        std::env::set_var("PATH", "");
         let before_path = std::env::var_os("PATH");
+
         let options = NuSetupOptions {
             yes: false,
             force: false,

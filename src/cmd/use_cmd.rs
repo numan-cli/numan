@@ -534,6 +534,11 @@ mod tests {
             let hash = integrity::compute_sha256(b"fake");
             (binary.to_string_lossy().into_owned(), hash)
         };
+        let (nu_exe_114, hash_114) = {
+            let binary = version_manager::version_binary(root, "0.114.0");
+            let hash = integrity::compute_sha256("fake".as_bytes());
+            (binary.to_string_lossy().into_owned(), hash)
+        };
 
         let vendor = root.join("vendor");
         std::fs::create_dir_all(&vendor).unwrap();
@@ -603,6 +608,7 @@ mod tests {
 
         let mut profile = ActivationProfile::new();
         profile.ensure_contains("0.113", ProfileKind::Plugin, "o/plug");
+        profile.ensure_contains("0.114", ProfileKind::Plugin, "o/plug");
         profile.save(root).unwrap();
 
         let hook_order: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
@@ -619,6 +625,17 @@ mod tests {
             Ok(())
         };
         let path_refresh = move |_path: &std::path::Path| -> Result<()> {
+            let refreshed = NuPaths {
+                nu_executable: nu_exe_114.clone(),
+                nu_version: "0.114.0".to_string(),
+                plugin_registry_path: registry.to_string_lossy().into_owned(),
+                nu_executable_hash: hash_114.clone(),
+                platform: "test".to_string(),
+                data_dir: None,
+                vendor_autoload_dirs: vec![vendor.to_string_lossy().into_owned()],
+                vendor_autoload_dir: Some(vendor.to_string_lossy().into_owned()),
+            };
+            refreshed.save(_path)?;
             o3.borrow_mut().push("path_refresh");
             Ok(())
         };
