@@ -7,6 +7,7 @@ use clap_complete::{generate, Shell};
 use clap_complete_nushell::Nushell;
 
 use crate::cli::Cli;
+use crate::util::atomic::write_bytes_atomic;
 
 /// Install (default) or print shell completion scripts
 #[derive(clap::Parser)]
@@ -100,17 +101,7 @@ pub fn install_to(shell: CompletionShell, path: &Path) -> Result<()> {
         bail!("completion install path must be a file path");
     }
     let script = generate_script(shell)?;
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!(
-                    "Failed to create completions directory {}",
-                    parent.display()
-                )
-            })?;
-        }
-    }
-    fs::write(path, script.as_bytes())
+    write_bytes_atomic(path, script.as_bytes())
         .with_context(|| format!("Failed to write completions to {}", path.display()))?;
     Ok(())
 }
