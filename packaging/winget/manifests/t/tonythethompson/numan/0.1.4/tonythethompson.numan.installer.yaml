@@ -1,7 +1,5 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
 
-# Sample installer shape for this historical release (x64 only). Live publishes
-# are driven by winget-releaser; dual-arch (x64 + arm64) applies once ARM zips ship.
 PackageIdentifier: tonythethompson.numan
 PackageVersion: 0.1.4
 InstallerType: zip
