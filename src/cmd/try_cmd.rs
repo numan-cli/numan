@@ -328,6 +328,10 @@ where
         return Ok(());
     }
 
+    // `activate` acquires the same root mutation lock, so release the install
+    // lock before invoking it.
+    drop(_lock);
+
     if let Err(e) = activate(
         &ActivateArgs {
             packages: vec![package_id.to_string()],
