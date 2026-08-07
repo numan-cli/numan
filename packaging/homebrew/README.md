@@ -1,8 +1,15 @@
 # Homebrew packaging
 
-Canonical formula source lives at [`numan.rb`](numan.rb). The published tap is
+The formula **shape** (bottle platforms, install layout) is defined by
+[`scripts/render_homebrew_formula.py`](../../scripts/render_homebrew_formula.py).
+[`numan.rb`](numan.rb) is the last generated snapshot checked into this repo for
+review; digests and bottle stanzas may lag until the next tagged release whose
+`SHA256SUMS` include every required archive. Today it still matches the
+pre-Linux-ARM contract (macOS ARM + Linux x86_64 only) because no published
+release yet ships `aarch64-unknown-linux-gnu`. The live tap is
 [`tonythethompson/homebrew-numan`](https://github.com/tonythethompson/homebrew-numan)
-(`brew tap tonythethompson/numan`).
+(`brew tap tonythethompson/numan`), updated by the publish workflow after each
+`v*.*.*` release.
 
 ## Install
 
