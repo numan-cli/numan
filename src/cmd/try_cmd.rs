@@ -1,7 +1,3 @@
-use anyhow::{bail, Context, Result};
-use clap::Parser;
-use std::path::Path;
-
 use crate::cmd::activate::{self, ActivateArgs};
 use crate::cmd::nu_pin_offer;
 use crate::core::nu_version::NuVersion;
@@ -10,8 +6,12 @@ use crate::core::platform::{Os, Platform};
 use crate::core::registry::RegistryManager;
 use crate::core::resolve::Resolver;
 use crate::install::transaction;
+use crate::state::lockfile::Lockfile;
 use crate::util::fs_safety::acquire_mutation_lock;
 use crate::util::hints::{self, CMD_REGISTRY_SYNC};
+use anyhow::{bail, Context, Result};
+use clap::Parser;
+use std::path::{Path, PathBuf};
 
 /// Install and activate a starter package that fits your current Nu.
 ///
@@ -53,6 +53,17 @@ const STARTERS: &[StarterSpec] = &[
     },
     StarterSpec {
         id: "vyadh/nutest",
+        nu_minor: None,
+        os: None,
+    },
+    // Nu-agnostic install-only fallbacks (prefer activatable starters above).
+    StarterSpec {
+        id: "SuaveIV/nu_script_wttr",
+        nu_minor: None,
+        os: None,
+    },
+    StarterSpec {
+        id: "Sanceilaks/nufetch",
         nu_minor: None,
         os: None,
     },
@@ -144,8 +155,24 @@ pub fn execute(args: &TryArgs, root: &Path) -> Result<()> {
         transaction::install_package(&package_id, None, &options)?;
     }
 
-    if args.no_activate {
-        println!("Installed '{package_id}' (not activated). Run `numan activate {package_id}`.");
+    let selected = packages.iter().find(|p| p.id.to_string() == package_id);
+    let install_only = selected
+        .map(|p| {
+            matches!(
+                p.package_type,
+                PackageType::Script | PackageType::Completion
+            )
+        })
+        .unwrap_or(false);
+
+    if args.no_activate || install_only {
+        if install_only {
+            print_install_only_hint(root, &package_id)?;
+        } else {
+            println!(
+                "Installed '{package_id}' (not activated). Run `numan activate {package_id}`."
+            );
+        }
         return Ok(());
     }
 
@@ -177,13 +204,17 @@ enum StarterSelection {
     },
 }
 
+fn package_is_activatable(pkg: &Package) -> bool {
+    matches!(pkg.package_type, PackageType::Plugin | PackageType::Module)
+}
+
 fn select_starter(
     packages: &[Package],
     resolver: &Resolver<'_>,
     platform: &Platform,
     nu: &NuVersion,
 ) -> StarterSelection {
-    // 1. Curated starters that match OS + Nu minor and are compatible.
+    // 1. Curated activatable starters that match OS + Nu minor and are compatible.
     for spec in STARTERS {
         if let Some(os) = spec.os {
             if platform.os != os {
@@ -196,13 +227,13 @@ fn select_starter(
             }
         }
         if let Some(pkg) = packages.iter().find(|p| p.id.to_string() == spec.id) {
-            if resolver.has_compatible_version(pkg) {
+            if package_is_activatable(pkg) && resolver.has_compatible_version(pkg) {
                 return StarterSelection::Compatible(spec.id.to_string());
             }
         }
     }
 
-    // 2. Any curated starter that is compatible regardless of Nu minor table miss.
+    // 2. Any curated activatable starter that is compatible regardless of Nu minor.
     for spec in STARTERS {
         if let Some(os) = spec.os {
             if platform.os != os {
@@ -210,13 +241,27 @@ fn select_starter(
             }
         }
         if let Some(pkg) = packages.iter().find(|p| p.id.to_string() == spec.id) {
-            if resolver.has_compatible_version(pkg) {
+            if package_is_activatable(pkg) && resolver.has_compatible_version(pkg) {
                 return StarterSelection::Compatible(spec.id.to_string());
             }
         }
     }
 
-    // 3. Curated starter with a suggested Nu pin (prefer skim / Windows semver / nutest).
+    // 3. Nu-agnostic install-only script/completion starters (never pin-offer).
+    for spec in STARTERS {
+        if let Some(os) = spec.os {
+            if platform.os != os {
+                continue;
+            }
+        }
+        if let Some(pkg) = packages.iter().find(|p| p.id.to_string() == spec.id) {
+            if !package_is_activatable(pkg) && resolver.has_compatible_version(pkg) {
+                return StarterSelection::Compatible(spec.id.to_string());
+            }
+        }
+    }
+
+    // 4. Curated activatable starter with a suggested Nu pin.
     let mut suggested_pin = None;
     for spec in STARTERS {
         if let Some(os) = spec.os {
@@ -225,6 +270,9 @@ fn select_starter(
             }
         }
         if let Some(pkg) = packages.iter().find(|p| p.id.to_string() == spec.id) {
+            if !package_is_activatable(pkg) {
+                continue;
+            }
             let diagnosis = resolver.diagnose_package(pkg);
             if nu_pin_offer::is_nu_mismatch(&diagnosis) && diagnosis.suggested_pin.is_some() {
                 return StarterSelection::NeedsPin {
@@ -232,7 +280,6 @@ fn select_starter(
                     diagnosis,
                 };
             }
-            // Remember first pin discovered for None fallback.
             if suggested_pin.is_none() && nu_pin_offer::is_nu_mismatch(&diagnosis) {
                 suggested_pin = diagnosis.suggested_pin;
             }
@@ -282,6 +329,36 @@ fn print_usage_hint(package_id: &str, packages: &[Package]) {
     }
 }
 
+/// Nu `overlay use` hint with the same path-literal escaping as
+/// [`crate::nu::autoload::render_use_statement`].
+fn format_overlay_use_hint(path: &Path) -> Result<String> {
+    let path_str = path
+        .to_str()
+        .with_context(|| format!("Installed path '{}' is not valid UTF-8", path.display()))?;
+    let escaped = path_str.replace('\\', "\\\\").replace('"', "\\\"");
+    Ok(format!("overlay use \"{escaped}\""))
+}
+
+fn print_install_only_hint(root: &Path, package_id: &str) -> Result<()> {
+    let lockfile = Lockfile::load(root)
+        .with_context(|| format!("Failed to load lockfile for installed package '{package_id}'"))?;
+    let installed = lockfile.packages.get(package_id).with_context(|| {
+        format!("Installed '{package_id}' but no lockfile record was found; refuse usage hint")
+    })?;
+    println!("Installed '{package_id}' (install-only; activation deferred).");
+    match installed.entry.as_deref() {
+        Some(entry_name) => {
+            let full: PathBuf = root.join(&installed.payload_path).join(entry_name);
+            println!("In Nu:  {}", format_overlay_use_hint(&full)?);
+        }
+        None => {
+            let full: PathBuf = root.join(&installed.payload_path);
+            println!("Installed under {}", full.display());
+        }
+    }
+    Ok(())
+}
+
 fn detect_nu(root: &Path) -> Result<NuVersion> {
     NuVersion::from_paths_or_detect(root)
         .context("Could not detect Nu version. Run `numan init` first.")
@@ -310,6 +387,18 @@ mod tests {
     }
 
     fn pkg(id: &str, constraint: &str, plugin: bool) -> Package {
+        pkg_typed(
+            id,
+            constraint,
+            if plugin {
+                PackageType::Plugin
+            } else {
+                PackageType::Module
+            },
+        )
+    }
+
+    fn pkg_typed(id: &str, constraint: &str, package_type: PackageType) -> Package {
         let (owner, name) = id.split_once('/').unwrap();
         let mut targets = HashMap::new();
         targets.insert(
@@ -328,39 +417,40 @@ mod tests {
                 executable_path: "p".to_string(),
             },
         );
+        let is_plugin = package_type == PackageType::Plugin;
         Package {
             id: ScopedId::new(owner, name),
             description: "d".to_string(),
             repo: "https://example.com".to_string(),
-            package_type: if plugin {
-                PackageType::Plugin
-            } else {
-                PackageType::Module
-            },
+            package_type,
             tags: vec![],
             versions: vec![VersionEntry {
                 version: semver::Version::new(1, 0, 0),
                 nu_version: constraint.to_string(),
                 verified_with: vec!["0.113.1".to_string()],
                 artifact: Artifact {
-                    kind: if plugin {
+                    kind: if is_plugin {
                         "binary".to_string()
                     } else {
                         "archive".to_string()
                     },
-                    url: if plugin {
+                    url: if is_plugin {
                         None
                     } else {
                         Some("https://example.com/m.zip".to_string())
                     },
-                    sha256: if plugin { None } else { Some("cc".to_string()) },
-                    targets: if plugin { targets } else { HashMap::new() },
-                    archive_root: None,
-                    include: None,
-                    entry: if plugin {
+                    sha256: if is_plugin {
                         None
                     } else {
-                        Some("mod.nu".to_string())
+                        Some("cc".to_string())
+                    },
+                    targets: if is_plugin { targets } else { HashMap::new() },
+                    archive_root: None,
+                    include: None,
+                    entry: if is_plugin {
+                        None
+                    } else {
+                        Some("entry.nu".to_string())
                     },
                 },
                 source: None,
@@ -388,6 +478,8 @@ mod tests {
             pkg("idanarye/nu_plugin_skim", ">=0.114.0 <0.115.0", true),
             pkg("vyadh/nutest", ">=0.103.0", false),
             pkg("abusch/nu_plugin_semver", ">=0.113.0 <0.114.0", true),
+            pkg_typed("SuaveIV/nu_script_wttr", "*", PackageType::Script),
+            pkg_typed("Sanceilaks/nufetch", "*", PackageType::Script),
         ];
         match select_starter(&packages, &resolver, &platform, &nu) {
             StarterSelection::Compatible(id) => assert_eq!(id, "idanarye/nu_plugin_skim"),
@@ -423,6 +515,123 @@ mod tests {
             }
             other => panic!("unexpected selection: {other:?}"),
         }
+    }
+
+    #[test]
+    fn select_starter_falls_back_to_script_before_pin_offer() {
+        let platform = windows_platform();
+        let nu = NuVersion::parse("0.114.1").unwrap();
+        let resolver = Resolver::new(&platform, &nu);
+        let packages = vec![
+            pkg("abusch/nu_plugin_semver", ">=0.113.0 <0.114.0", true),
+            pkg_typed("SuaveIV/nu_script_wttr", "*", PackageType::Script),
+            pkg_typed("Sanceilaks/nufetch", "*", PackageType::Script),
+        ];
+        match select_starter(&packages, &resolver, &platform, &nu) {
+            StarterSelection::Compatible(id) => assert_eq!(id, "SuaveIV/nu_script_wttr"),
+            other => panic!("unexpected selection: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn select_starter_prefers_wttr_when_only_scripts_present() {
+        let platform = windows_platform();
+        let nu = NuVersion::parse("0.115.0").unwrap();
+        let resolver = Resolver::new(&platform, &nu);
+        let packages = vec![
+            pkg_typed("Sanceilaks/nufetch", "*", PackageType::Script),
+            pkg_typed("SuaveIV/nu_script_wttr", "*", PackageType::Script),
+        ];
+        match select_starter(&packages, &resolver, &platform, &nu) {
+            StarterSelection::Compatible(id) => assert_eq!(id, "SuaveIV/nu_script_wttr"),
+            other => panic!("unexpected selection: {other:?}"),
+        }
+    }
+
+    fn script_lock_entry(
+        payload_path: &str,
+        entry: Option<&str>,
+    ) -> crate::state::lockfile::LockfileEntry {
+        crate::state::lockfile::LockfileEntry {
+            version: "0.1.0".to_string(),
+            package_type: "script".to_string(),
+            source: "registry".to_string(),
+            target: None,
+            artifact_url: None,
+            artifact_sha256: None,
+            executable_path: None,
+            archive_root: None,
+            include: None,
+            entry: entry.map(str::to_string),
+            installed_at: "now".to_string(),
+            nu_version_at_install: None,
+            activation: None,
+            registry_url: None,
+            registry_revision: None,
+            index_sha256: None,
+            signing_key_fingerprint: None,
+            git_url: None,
+            git_rev: None,
+            cargo_name: None,
+            cargo_lock_sha256: None,
+            built_sha256: None,
+            payload_path: payload_path.to_string(),
+            revision_id: None,
+            payload_sha256: None,
+            executable_sha256: None,
+            selection_reason: None,
+            origin: None,
+            module_activation: None,
+            module_import_mode: None,
+            locked_dependencies: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn format_overlay_use_hint_quotes_and_escapes_path() {
+        let path = PathBuf::from(r#"C:\Numan Root\pkg\wttr.nu"#);
+        let hint = format_overlay_use_hint(&path).unwrap();
+        assert_eq!(hint, r#"overlay use "C:\\Numan Root\\pkg\\wttr.nu""#);
+    }
+
+    #[test]
+    fn print_install_only_hint_uses_lockfile_entry_and_quotes_path() {
+        let root = tempfile::tempdir().unwrap();
+        let mut lock = Lockfile::empty();
+        lock.packages.insert(
+            "SuaveIV/nu_script_wttr".to_string(),
+            script_lock_entry(
+                "packages/scripts/SuaveIV/nu_script_wttr/0.1.0-deadbeef",
+                Some("wttr.nu"),
+            ),
+        );
+        lock.save(root.path()).unwrap();
+
+        let err = print_install_only_hint(root.path(), "missing/pkg").unwrap_err();
+        assert!(
+            err.to_string().contains("no lockfile record"),
+            "missing record must fail: {err:#}"
+        );
+
+        print_install_only_hint(root.path(), "SuaveIV/nu_script_wttr").unwrap();
+        let full = root
+            .path()
+            .join("packages/scripts/SuaveIV/nu_script_wttr/0.1.0-deadbeef/wttr.nu");
+        let expected = format_overlay_use_hint(&full).unwrap();
+        assert!(expected.starts_with("overlay use \""));
+        assert!(expected.contains("wttr.nu"));
+    }
+
+    #[test]
+    fn print_install_only_hint_rejects_malformed_lockfile() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("lockfile"), "{not-json").unwrap();
+        let err = print_install_only_hint(root.path(), "any/pkg").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Failed to load lockfile") || msg.contains("expected"),
+            "malformed lockfile must surface: {msg}"
+        );
     }
 
     #[test]
