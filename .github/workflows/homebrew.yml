@@ -112,6 +112,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
         shell: bash
         run: |
           set -euo pipefail
@@ -130,11 +131,32 @@ jobs:
               exit 1
             fi
           done
-          python3 scripts/render_homebrew_formula.py \
-            --version "$VERSION" \
-            --sha256sums SHA256SUMS \
-            --write \
+          RENDER_ARGS=(
+            --version "$VERSION"
+            --sha256sums SHA256SUMS
+            --write
             --out /tmp/numan.rb
+          )
+          # Linux ARM is required for current releases; omit only via explicit
+          # workflow_dispatch recovery of pre-ARM tags.
+          linux_arm_asset="numan-${VERSION}-aarch64-unknown-linux-gnu.tar.gz"
+          linux_arm_ok="$(
+            gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,assets \
+              --jq ".isDraft == false and any(.assets[]; .name == \"${linux_arm_asset}\" and .state == \"uploaded\")"
+          )"
+          if [[ "$linux_arm_ok" == "true" ]]; then
+            echo "Found Linux ARM archive ${linux_arm_asset}"
+          else
+            # Missing Linux ARM asset is only acceptable during explicit manual recovery.
+            if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+              echo "No Linux ARM archive on ${RELEASE_TAG}; using --legacy-pre-linux-arm for manual recovery"
+              RENDER_ARGS+=(--legacy-pre-linux-arm)
+            else
+              echo "::error::Release ${RELEASE_TAG} is missing required Linux ARM asset ${linux_arm_asset}; automated releases must include all platform assets"
+              exit 1
+            fi
+          fi
+          python3 scripts/render_homebrew_formula.py "${RENDER_ARGS[@]}"
           cp /tmp/numan.rb packaging/homebrew/numan.rb
 
       - name: Push formula to homebrew-numan tap

@@ -93,7 +93,9 @@ Download the latest archive for your platform from [GitHub Releases](https://git
 | Platform | Archive | Binary |
 |----------|---------|--------|
 | Linux (x86_64) | `numan-<version>-x86_64-unknown-linux-gnu.tar.gz` | `numan` |
+| Linux (aarch64) | `numan-<version>-aarch64-unknown-linux-gnu.tar.gz` | `numan` |
 | Windows (x86_64) | `numan-<version>-x86_64-pc-windows-msvc.zip` | `numan.exe` |
+| Windows (ARM64) | `numan-<version>-aarch64-pc-windows-msvc.zip` | `numan.exe` |
 | macOS (Apple Silicon) | `numan-<version>-aarch64-apple-darwin.tar.gz` | `numan` |
 
 **Linux / macOS**
@@ -106,7 +108,7 @@ install -m 755 numan-VERSION-TARGET/numan ~/.local/bin/numan
 **Windows (PowerShell)**
 
 ```powershell
-Expand-Archive numan-VERSION-x86_64-pc-windows-msvc.zip -DestinationPath .
+Expand-Archive numan-VERSION-TARGET.zip -DestinationPath .
 # Add the extracted folder to your PATH, or copy numan.exe into a directory already on PATH
 ```
 

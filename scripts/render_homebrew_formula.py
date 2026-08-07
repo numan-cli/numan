@@ -2,8 +2,9 @@
 """Render packaging/homebrew/numan.rb from a release version + SHA256SUMS.
 
 Usage:
-  python scripts/render_homebrew_formula.py --version 0.1.5 --sha256sums SHA256SUMS
-  python scripts/render_homebrew_formula.py --version 0.1.5 --sha256sums SHA256SUMS --write
+  python scripts/render_homebrew_formula.py --version 0.2.2 --sha256sums SHA256SUMS
+  python scripts/render_homebrew_formula.py --version 0.2.2 --sha256sums SHA256SUMS --write
+  python scripts/render_homebrew_formula.py --version 0.1.5 --sha256sums SHA256SUMS --legacy-pre-linux-arm
   python scripts/render_homebrew_formula.py --check-url-layout   # verify known asset names
 """
 
@@ -17,22 +18,34 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = REPO_ROOT / "packaging" / "homebrew" / "numan.rb"
 
-# Release asset basename suffix -> Homebrew bottle platform key used in formula.
-# Intel Mac (x86_64-apple-darwin) is intentionally unsupported for shipping.
-REQUIRED_ASSETS = {
+# Pre-Linux-ARM Homebrew contract (macOS ARM + Linux x86_64 only).
+LEGACY_REQUIRED_ASSETS = {
     "aarch64-apple-darwin": "macos_arm",
     "x86_64-unknown-linux-gnu": "linux_intel",
 }
 
+# Current Homebrew contract adds Linux aarch64.
+LINUX_ARM_ASSET = "aarch64-unknown-linux-gnu"
+
+# Release asset basename suffix -> Homebrew bottle platform key used in formula.
+# Intel Mac (x86_64-apple-darwin) is intentionally unsupported for shipping.
+REQUIRED_ASSETS = {
+    **LEGACY_REQUIRED_ASSETS,
+    LINUX_ARM_ASSET: "linux_arm",
+}
+
 ASSET_RE = re.compile(
     r"^([0-9a-fA-F]{64})\s+numan-(?P<ver>.+)-(?P<triple>"
-    r"aarch64-apple-darwin|x86_64-unknown-linux-gnu"
+    r"aarch64-apple-darwin|x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu"
     r")\.(?P<ext>tar\.gz|zip)$"
 )
 
 
-def parse_sha256sums(text: str, version: str) -> dict[str, str]:
+def parse_sha256sums(
+    text: str, version: str, *, legacy_pre_linux_arm: bool = False
+) -> dict[str, str]:
     """Map triple -> lowercase sha256 for this version's archives."""
+    required = LEGACY_REQUIRED_ASSETS if legacy_pre_linux_arm else REQUIRED_ASSETS
     found: dict[str, str] = {}
     for line in text.splitlines():
         line = line.strip()
@@ -46,17 +59,25 @@ def parse_sha256sums(text: str, version: str) -> dict[str, str]:
         if match.group("ext") != "tar.gz":
             continue
         found[match.group("triple")] = match.group(1).lower()
-    missing = [t for t in REQUIRED_ASSETS if t not in found]
+    missing = [t for t in required if t not in found]
     if missing:
         raise SystemExit(
             f"SHA256SUMS missing required .tar.gz assets for v{version}: {', '.join(missing)}"
         )
-    return found
+    return {t: found[t] for t in required}
 
 
 def render_formula(version: str, digests: dict[str, str]) -> str:
     mac_arm = digests["aarch64-apple-darwin"]
     linux_intel = digests["x86_64-unknown-linux-gnu"]
+    linux_arm = digests.get(LINUX_ARM_ASSET)
+    linux_arm_block = ""
+    if linux_arm is not None:
+        linux_arm_block = f"""
+    on_arm do
+      url "https://github.com/tonythethompson/numan/releases/download/v#{{version}}/numan-#{{version}}-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "{linux_arm}"
+    end"""
     return f"""# typed: false
 # frozen_string_literal: true
 
@@ -90,7 +111,7 @@ class Numan < Formula
     on_intel do
       url "https://github.com/tonythethompson/numan/releases/download/v#{{version}}/numan-#{{version}}-x86_64-unknown-linux-gnu.tar.gz"
       sha256 "{linux_intel}"
-    end
+    end{linux_arm_block}
   end
 
   def install
@@ -126,6 +147,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Output formula path",
     )
     parser.add_argument(
+        "--legacy-pre-linux-arm",
+        action="store_true",
+        help=(
+            "Accept the pre-Linux-ARM Homebrew asset set "
+            "(macOS ARM + Linux x86_64 only; omit on_linux/on_arm)"
+        ),
+    )
+    parser.add_argument(
         "--check-url-layout",
         action="store_true",
         help="Print required asset names and exit",
@@ -136,12 +165,19 @@ def main(argv: list[str] | None = None) -> int:
         print("Required release assets for Homebrew:")
         for triple in REQUIRED_ASSETS:
             print(f"  numan-<version>-{triple}.tar.gz")
+        print("Legacy (--legacy-pre-linux-arm) requires:")
+        for triple in LEGACY_REQUIRED_ASSETS:
+            print(f"  numan-<version>-{triple}.tar.gz")
         return 0
 
     if not args.version or not args.sha256sums:
         parser.error("--version and --sha256sums are required unless --check-url-layout")
 
-    digests = parse_sha256sums(args.sha256sums.read_text(encoding="utf-8"), args.version)
+    digests = parse_sha256sums(
+        args.sha256sums.read_text(encoding="utf-8"),
+        args.version,
+        legacy_pre_linux_arm=args.legacy_pre_linux_arm,
+    )
     text = render_formula(args.version, digests)
     if args.write:
         args.out.parent.mkdir(parents=True, exist_ok=True)

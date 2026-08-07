@@ -92,13 +92,16 @@ pub fn release_asset_name(version: &str, platform: &Platform) -> Result<String> 
     let version = version.trim().trim_start_matches('v');
     let (triple, ext) = match (platform.os, platform.arch, platform.env) {
         (Os::Linux, Arch::X86_64, Env::Gnu) => ("x86_64-unknown-linux-gnu", "tar.gz"),
+        (Os::Linux, Arch::Aarch64, Env::Gnu) => ("aarch64-unknown-linux-gnu", "tar.gz"),
         (Os::Windows, Arch::X86_64, Env::Msvc) => ("x86_64-pc-windows-msvc", "zip"),
+        (Os::Windows, Arch::Aarch64, Env::Msvc) => ("aarch64-pc-windows-msvc", "zip"),
         (Os::Macos, Arch::Aarch64, Env::Darwin) => ("aarch64-apple-darwin", "tar.gz"),
         _ => bail!(
             "No GitHub Release asset is published for platform triple '{}'. \
              Install or upgrade via Homebrew, winget, or cargo instead. \
              Supported self-update targets: x86_64-unknown-linux-gnu, \
-             x86_64-pc-windows-msvc, aarch64-apple-darwin.",
+             aarch64-unknown-linux-gnu, x86_64-pc-windows-msvc, \
+             aarch64-pc-windows-msvc, aarch64-apple-darwin.",
             platform.triple
         ),
     };
@@ -648,6 +651,20 @@ mod tests {
     }
 
     #[test]
+    fn release_asset_name_linux_aarch64() {
+        let p = Platform {
+            os: Os::Linux,
+            arch: Arch::Aarch64,
+            env: Env::Gnu,
+            triple: "aarch64-unknown-linux-gnu".into(),
+        };
+        assert_eq!(
+            release_asset_name("0.2.0", &p).unwrap(),
+            "numan-0.2.0-aarch64-unknown-linux-gnu.tar.gz"
+        );
+    }
+
+    #[test]
     fn release_asset_name_windows() {
         let p = Platform {
             os: Os::Windows,
@@ -658,6 +675,20 @@ mod tests {
         assert_eq!(
             release_asset_name("0.2.0", &p).unwrap(),
             "numan-0.2.0-x86_64-pc-windows-msvc.zip"
+        );
+    }
+
+    #[test]
+    fn release_asset_name_windows_aarch64() {
+        let p = Platform {
+            os: Os::Windows,
+            arch: Arch::Aarch64,
+            env: Env::Msvc,
+            triple: "aarch64-pc-windows-msvc".into(),
+        };
+        assert_eq!(
+            release_asset_name("0.2.0", &p).unwrap(),
+            "numan-0.2.0-aarch64-pc-windows-msvc.zip"
         );
     }
 
