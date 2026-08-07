@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Release assets** for `aarch64-unknown-linux-gnu` and `aarch64-pc-windows-msvc` (native ARM runners); `numan update --self` maps those triples
+- **Homebrew** Linux ARM archive support; **winget** verifies and submits both Windows x64 and ARM64 zips
+
+### Changed
+
+- **`numan completions <shell>`** installs by default (creates the target directory if needed). Use `--print` to emit the script on stdout for piping or custom redirects.
+
 ### Fixed
 
 - **Windows User PATH pollution from acceptance tests**: `PathRestoreGuard` sets

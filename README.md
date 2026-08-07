@@ -51,7 +51,7 @@ These workflows are covered by unit tests, hermetic integration tests, and real-
 - **Lifecycle management**: Update, remove, and garbage collection operations recover safely through lifecycle journals.
 - **nupm interoperability**: Use `numan nupm status`, `inspect`, `import`, and `diff` to inspect, migrate, and detect drift in existing [nupm](https://github.com/nushell/nupm) installations.
 - **Health checks**: `numan doctor` diagnoses installation health and applies safe repairs by default. Use `--scan` for report-only mode.
-- **Shell completions**: Generate completions for Bash, Fish, Zsh, PowerShell, and Nushell with `numan completions`.
+- **Shell completions**: Install completions for Bash, Fish, Zsh, PowerShell, and Nushell with `numan completions` (use `--print` to emit the script).
 
 ---
 
@@ -67,8 +67,8 @@ These workflows are covered by unit tests, hermetic integration tests, and real-
 Install-only packages remain inert: numan downloads, verifies, locks, lists,
 removes, and garbage-collects their payloads, but does not execute them or
 modify Nu configuration for them. This is separate from numan's own shell
-completion generator: `numan completions <shell>` is supported for bash, fish,
-zsh, PowerShell, and Nushell (`nu`).
+completion installer: `numan completions <shell>` is supported for bash, fish,
+zsh, PowerShell, and Nushell (`nu`); use `--print` to emit the script instead.
 
 ---
 
@@ -93,7 +93,9 @@ Download the latest archive for your platform from [GitHub Releases](https://git
 | Platform | Archive | Binary |
 |----------|---------|--------|
 | Linux (x86_64) | `numan-<version>-x86_64-unknown-linux-gnu.tar.gz` | `numan` |
+| Linux (aarch64) | `numan-<version>-aarch64-unknown-linux-gnu.tar.gz` | `numan` |
 | Windows (x86_64) | `numan-<version>-x86_64-pc-windows-msvc.zip` | `numan.exe` |
+| Windows (ARM64) | `numan-<version>-aarch64-pc-windows-msvc.zip` | `numan.exe` |
 | macOS (Apple Silicon) | `numan-<version>-aarch64-apple-darwin.tar.gz` | `numan` |
 
 **Linux / macOS**
@@ -106,7 +108,7 @@ install -m 755 numan-VERSION-TARGET/numan ~/.local/bin/numan
 **Windows (PowerShell)**
 
 ```powershell
-Expand-Archive numan-VERSION-x86_64-pc-windows-msvc.zip -DestinationPath .
+Expand-Archive numan-VERSION-TARGET.zip -DestinationPath .
 # Add the extracted folder to your PATH, or copy numan.exe into a directory already on PATH
 ```
 
@@ -149,33 +151,21 @@ Requires [Rust](https://rustup.rs/) (stable). The installed binary is named `num
 
 ### Shell completions
 
-`numan completions <shell>` prints the script on stdout and a copy-ready install command on stderr.
+`numan completions <shell>` installs to the canonical path and creates parent directories if needed. Use `--print` to emit the script on stdout (pipe-safe; redirect hints go to stderr).
 
 ```bash
-# Bash
-numan completions bash > ~/.local/share/bash-completion/completions/numan
+numan completions bash
+numan completions zsh
+numan completions fish
+numan completions nushell
+numan completions powershell   # writes ~/.numan/completions.ps1; dot-source from $PROFILE once
 
-# Zsh
-numan completions zsh > ~/.zfunc/_numan
-
-# Fish
-numan completions fish > ~/.config/fish/completions/numan.fish
-
-# PowerShell (append to $PROFILE; do not use Out-File — that overwrites the profile)
-numan completions powershell | Add-Content -Encoding utf8 $PROFILE
-
-# Nushell (vendor autoload; `nu` is accepted as an alias for `nushell`)
-mkdir ($nu.data-dir | path join vendor/autoload)
-numan completions nushell | save -f ($nu.data-dir | path join vendor/autoload/numan-completions.nu)
+# Advanced: print + redirect / pipe
+numan completions bash --print > ~/.local/share/bash-completion/completions/numan
+numan completions powershell --print | Add-Content -Encoding utf8 $PROFILE
 ```
 
-PowerShell completions are safe to place after other statements in `$PROFILE`. Prefer writing to a dedicated file and dot-sourcing if you want easier updates:
-
-```powershell
-New-Item -ItemType Directory -Force -Path "$HOME\.numan" | Out-Null
-numan completions powershell | Out-File -Encoding utf8 "$HOME\.numan\completions.ps1"
-Add-Content -Path $PROFILE -Value '. $HOME\.numan\completions.ps1'
-```
+PowerShell completions are safe to place after other statements in `$PROFILE`.
 
 
 ---
@@ -372,7 +362,7 @@ Global flag: `--root <path>` — override the numan root directory (all commands
 | `numan nupm import [--as owner/name] [path]` | One-way import into numan |
 | `numan nupm import --manifest file.toml` | Batch import from manifest |
 | `numan nupm diff <owner/name>` | Compare imported payload vs nupm source |
-| `numan completions <shell>` | Generate bash, fish, zsh, powershell, or nushell completions |
+| `numan completions <shell>` | Install shell completions (use `--print` to emit the script) |
 | `numan doctor [--scan] [--json]` | Diagnose root health and repair (use `--scan` for report-only) |
 
 ### Common flags (by command)

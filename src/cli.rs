@@ -52,7 +52,7 @@ pub enum Commands {
     Snapshot(cmd::snapshot::SnapshotCommands),
     /// Read-only nupm discovery and inspection
     Nupm(cmd::nupm::NupmArgs),
-    /// Generate shell completion scripts
+    /// Install shell completions (use `--print` to emit the script)
     Completions(cmd::completions::CompletionsArgs),
     /// Diagnose Numan root health and apply safe repairs (use `--scan` for report-only)
     Doctor(cmd::doctor::DoctorArgs),

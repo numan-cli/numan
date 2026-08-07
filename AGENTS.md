@@ -63,7 +63,7 @@ src/
     remove.rs          — `numan remove [--force] <pkg>`: remove from lockfile + delete payload (Phase 5); `--force` bypasses module activation only (active plugins always gated until deactivate, Issue #22)
     gc.rs              — `numan gc [--dry-run]`: delete orphaned payload directories (Phase 5)
     nupm.rs            — `numan nupm status|inspect|import|diff`: nupm discovery + import + drift (Phase 6.1–6.3)
-    completions.rs     — `numan completions <shell>`: bash/fish/zsh/powershell/nushell scripts (Phase 7.3)
+    completions.rs     — `numan completions <shell>`: install by default (mkdir+write); `--print` for stdout (Phase 7.3)
     setup.rs           — `numan setup nu [VERSION]|remove|path|use <path>` + `setup loader`: Nushell bootstrap + nushell-loader install
     try_cmd.rs         — `numan try [--yes] [--no-activate]`: curated starter install + activate for current Nu
     use_cmd.rs         — `numan use <version>|latest|list`: activates a previously installed managed Nu version (no auto-download); writes the active-version marker after a PreMutation snapshot under the root mutation lock
