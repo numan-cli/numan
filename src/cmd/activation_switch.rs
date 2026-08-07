@@ -254,18 +254,11 @@ pub fn restore_after_switch(
 }
 
 fn try_load_paths(root: &Path) -> Result<Option<NuPaths>> {
-    match NuPaths::load(root) {
-        Ok(p) => Ok(Some(p)),
-        Err(_) => {
-            let path = root.join("nu_state").join("paths.json");
-            if path.is_file() {
-                // Malformed paths should surface.
-                NuPaths::load(root).map(Some)
-            } else {
-                Ok(None)
-            }
-        }
+    if !root.join("nu_state").join("paths.json").is_file() {
+        return Ok(None);
     }
+    // Present but unreadable or malformed: surface the error.
+    NuPaths::load(root).map(Some)
 }
 
 fn restore_desired(
