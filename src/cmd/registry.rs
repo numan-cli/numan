@@ -180,18 +180,104 @@ fn list_packages(root: &Path) -> Result<()> {
 
     println!("Packages in '{default_reg}' ({}):\n", index.packages.len());
 
-    for pkg in &index.packages {
+    let desc_width = package_description_width();
+    for (i, pkg) in index.packages.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
         let latest = pkg
             .versions
             .last()
             .map(|v| v.version.to_string())
             .unwrap_or_else(|| "n/a".to_string());
+        let id = format!("{}/{}", pkg.id.owner, pkg.id.name);
         println!(
-            "  {}/{}  v{}  [{}]
-    {}",
-            pkg.id.owner, pkg.id.name, latest, pkg.package_type, pkg.description
+            "  {}  {}  [{}]",
+            console::style(id).cyan().bold(),
+            console::style(format!("v{latest}")).dim(),
+            console::style(pkg.package_type.to_string()).dim(),
         );
+        if !pkg.description.trim().is_empty() {
+            for line in wrap_words(pkg.description.trim(), desc_width) {
+                println!("    {}", console::style(line).dim());
+            }
+        }
     }
 
     Ok(())
+}
+
+/// Usable width for indented package descriptions (leave room for `    ` prefix).
+fn package_description_width() -> usize {
+    console::Term::stdout()
+        .size_checked()
+        .map(|(_, cols)| cols as usize)
+        .unwrap_or(80)
+        .saturating_sub(4)
+        .max(40)
+}
+
+/// Soft-wrap `text` on whitespace so the terminal does not split mid-word.
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if current.is_empty() {
+            current.push_str(word);
+            continue;
+        }
+        if current.len() + 1 + word.len() <= width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current.push_str(word);
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrap_words_keeps_short_text_on_one_line() {
+        assert_eq!(
+            wrap_words("short description", 40),
+            vec!["short description".to_string()]
+        );
+    }
+
+    #[test]
+    fn wrap_words_breaks_on_spaces_not_mid_word() {
+        let lines = wrap_words(
+            "A Nushell testing framework with commands for running suites",
+            30,
+        );
+        assert!(lines.len() > 1);
+        for line in &lines {
+            assert!(line.len() <= 30, "line too long: {line:?}");
+            assert!(!line.contains("  "));
+        }
+        assert_eq!(
+            lines.join(" "),
+            "A Nushell testing framework with commands for running suites"
+        );
+    }
+
+    #[test]
+    fn wrap_words_handles_empty_and_whitespace() {
+        assert!(wrap_words("", 40).is_empty());
+        assert_eq!(
+            wrap_words("   spaced   out  ", 40),
+            vec!["spaced out".to_string()]
+        );
+    }
 }

@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **`numan completions <shell>`** installs by default (creates the target directory if needed). Use `--print` to emit the script on stdout for piping or custom redirects.
+- **`numan registry packages`**: clearer listing (blank line between entries, styled id/version/type, soft-wrapped dim descriptions)
 
 ### Fixed
 
@@ -38,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Then open a new terminal and confirm with `$env:Path -split ';'`.
 
+- **`numan doctor`**: report versioned managed Nu installs (`tools/nushell/<version>/nu`) instead of only the legacy `tools/nushell/nu` path
 - **`numan setup nu`**: official Nushell 0.114.x release archives exceed the old
   256 MiB extract cap (~279 MiB uncompressed on linux-gnu). Bootstrap now
   extracts only the `nu` binary (skipping bundled plugins) and raises the
