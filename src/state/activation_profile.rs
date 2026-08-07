@@ -185,7 +185,8 @@ pub fn nu_minor_key_from_version(version: &str) -> Result<String> {
     Ok(nu_minor_key(nu.major, nu.minor))
 }
 
-/// Persist ensure_contains for the current minor; no-op when minor cannot be resolved.
+/// Persist ensure_contains for the current minor.
+/// Returns `Err` when `nu_version` cannot be parsed into a minor key.
 pub fn ensure_contains_for_paths(
     root: &Path,
     nu_version: &str,
