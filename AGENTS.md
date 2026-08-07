@@ -66,7 +66,8 @@ src/
     completions.rs     — `numan completions <shell>`: install by default (mkdir+write); `--print` for stdout (Phase 7.3)
     setup.rs           — `numan setup nu [VERSION]|remove|path|use <path>` + `setup loader`: Nushell bootstrap + nushell-loader install
     try_cmd.rs         — `numan try [--yes] [--no-activate]`: curated starter install + activate for current Nu
-    use_cmd.rs         — `numan use <version>|latest|list`: activates a previously installed managed Nu version (no auto-download); writes the active-version marker after a PreMutation snapshot under the root mutation lock
+    use_cmd.rs         — `numan use <version>|latest|list`: activates a previously installed managed Nu version (no auto-download); cross-minor leave/teardown (modules then plugins) + restore (plugins then modules) via activation profiles; same-target is restore-only; writes the active-version marker after a PreMutation snapshot under the root mutation lock
+    activation_switch.rs — shared leave/restore orchestration for `numan use` (lower-level lifecycle, no profile-sync wrappers)
     nu_pin_offer.rs    — Shared TTY offer to `setup nu <version>` + `init --refresh` on Nu mismatch
   install/
     download.rs        — HTTP download with progress
@@ -84,6 +85,7 @@ src/
     migration_journal.rs — `state/migration-journal.json` for legacy-Nu single-binary → versioned-layout transition (Prepared → Renamed → Active stages); self-heal at top of `migrate_legacy_install_with_detector`, reconciled by `numan doctor --fix` (auto-tier repair)
     snapshot.rs        — Immutable activation snapshots (`create_snapshot`, `list_snapshots`, etc.)
     rollback.rs        — Journaled restore of Numan-owned state to a snapshot
+    activation_profile.rs — Desired per-Nu-minor activation sets (`nu_state/activation-profile.json`); leave union; user activate/deactivate/remove sync
     nupm_import.rs     — nupm-import provenance (`state/nupm-imports.json`, Phase 6.2)
   nu/
     bootstrap.rs        — download/install official Nushell release under tools/nushell
@@ -147,6 +149,7 @@ tests/
 - **Plugin deactivate journal**: `state/pending-plugin-deactivate.json` (`Prepared` → `Unregistered` → clear lockfile `activation`); reconciled on next `deactivate`; doctor warns `journal.plugin_deactivate_pending`
 - **Migration journal**: `state/migration-journal.json` for the legacy-Nu single-binary → versioned layout transition. Stages `Prepared` (before `create_dir_all`) → `Renamed` (after legitimate `rename`) → `Active` (after `write_active_version`); journal deleted on transition to `Active`. Every well-formed pending journal stage (`Prepared`, `Renamed`, and `Active`) is reconciled by `numan doctor --fix` (Auto-tier, fix hint `numan use`) and by the self-healing `reconcile(root)?` at the top of every `migrate_legacy_install_with_detector` call; file-system truth takes precedence over journal stage when they disagree. Unreadable or schema-mismatched journals emit `journal.migration_invalid` (Error severity, Manual repair tier: delete the stale journal); they are not auto-reconciled. `reconcile` refuses to act when `tools/nushell` is a symlink or reparse point (`assert_not_symlink` guard); the journal is left unchanged on that path so a follow-up attempt can succeed once the symlink is resolved. A `Prepared`-stage orphan directory that cannot be removed (e.g. ENOTEMPTY) causes `reconcile` to return `Err` and retain the journal so the next invocation can retry.
 - **Active version marker**: `nu_state/active-version.json` (`{ "version": "X.Y.Z" }`, optionally `{ "version": "X.Y.Z", "binary_path": "/abs/path/to/nu" }` for off-tree selections). Sole authority for which `tools/nushell/<v>/` is selected. Written by `numan setup nu` and `numan use <version>|latest`. The optional `binary_path` records the resolved off-tree binary when `numan setup nu use <path>` swaps to a user-supplied Nu so subsequent `numan use list` and `find_nu_executable_with_root` can resolve the chosen version even when no on-tree install exists (the field uses `#[serde(default, skip_serializing_if = "Option::is_none")]` so the on-disk shape stays `{ "version": ... }` for on-tree selections and pre-existing markers still load).
+- **Activation profile**: `nu_state/activation-profile.json` stores desired per-Nu-minor plugin/module sets. Cross-minor `numan use` unions currently Numan-active packages into the leaving minor (never shrinks), tears down modules then plugins, switches the marker, then restores the target minor (plugins then modules). Same-target `use` only reconciles missing desired activations. User `activate`/`deactivate` are idempotent desired-state ops on the current minor; `remove` deletes the id from all minors. `numan use` calls lifecycle beneath profile-sync wrappers so leave/restore do not wipe saved desire.
 - **Atomic writes**: all JSON state files (lockfile, journal, nu_state/paths.json) use `write_json_atomic` (tempfile in same dir + persist) — no partial-write corruption
 - **Function signatures**: use `&Path` not `&PathBuf` in function parameters (clippy::ptr_arg is CI-enforced)
 

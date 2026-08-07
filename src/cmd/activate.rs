@@ -138,6 +138,8 @@ fn execute_with_registrar_and_runner(
     // These are already caught in resolve functions.
 
     if plugin_targets.is_empty() && module_targets.is_empty() {
+        // Already-active (or inactive-but-requested) packages still need profile sync.
+        sync_user_activate_profile(root, &nu_paths, args, &lockfile)?;
         println!("Nothing to activate.");
         return Ok(());
     }
@@ -177,6 +179,7 @@ fn execute_with_registrar_and_runner(
     let module_targets = resolve_module_targets(args, &lockfile, &nu_paths)?;
 
     if plugin_targets.is_empty() && module_targets.is_empty() {
+        sync_user_activate_profile(root, &nu_paths, args, &lockfile)?;
         println!("Nothing to activate.");
         return Ok(());
     }
@@ -238,6 +241,10 @@ fn execute_with_registrar_and_runner(
         }
     }
 
+    // Reload lockfile so profile sync sees post-activation state for "activate all".
+    let lockfile = Lockfile::load(root)?;
+    sync_user_activate_profile(root, &nu_paths, args, &lockfile)?;
+
     if any_failed {
         bail!(
             "One or more packages failed to activate. Successful activations have been persisted."
@@ -245,6 +252,28 @@ fn execute_with_registrar_and_runner(
     }
 
     Ok(())
+}
+
+fn sync_user_activate_profile(
+    root: &Path,
+    nu_paths: &NuPaths,
+    args: &ActivateArgs,
+    lockfile: &Lockfile,
+) -> Result<()> {
+    let ids = if args.packages.is_empty() {
+        let active = crate::cmd::activation_switch::collect_currently_active(lockfile, nu_paths);
+        let mut all = active.plugins;
+        all.extend(active.modules);
+        all
+    } else {
+        args.packages.clone()
+    };
+    crate::cmd::activation_switch::sync_profile_after_user_activate(
+        root,
+        &nu_paths.nu_version,
+        &ids,
+        lockfile,
+    )
 }
 
 // ── Plugin lane ────────────────────────────────────────────────────────────────
@@ -567,6 +596,45 @@ fn run_module_lane(
     }
 
     Ok(false) // lane succeeded
+}
+
+/// Activate named modules without acquiring the mutation lock, snapshotting, or
+/// syncing the activation profile. Caller must hold the root mutation lock.
+///
+/// Returns `true` if the module lane reported failure.
+pub fn activate_modules_unlocked(
+    root: &Path,
+    package_ids: &[String],
+    runner: &dyn CandidateRunner,
+) -> Result<bool> {
+    if package_ids.is_empty() {
+        return Ok(false);
+    }
+
+    let nu_paths = NuPaths::load(root)?;
+    nu_paths.validate_drift()?;
+    let mut lockfile = Lockfile::load(root)?;
+
+    let args = ActivateArgs {
+        packages: package_ids.to_vec(),
+        verbose: false,
+        list: false,
+        check: false,
+    };
+    let module_targets = resolve_module_targets(&args, &lockfile, &nu_paths)?;
+    if module_targets.is_empty() {
+        return Ok(false);
+    }
+    let managed_file_path = resolve_managed_file_path(&nu_paths)?;
+    run_module_lane(
+        root,
+        &nu_paths,
+        &mut lockfile,
+        &module_targets,
+        &managed_file_path,
+        runner,
+        None,
+    )
 }
 
 // ── --list subcommand ──────────────────────────────────────────────────────────

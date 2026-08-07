@@ -161,6 +161,8 @@ fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> 
 
     PendingLifecycle::clear(root)?;
 
+    crate::state::activation_profile::remove_from_all_minors(root, &args.package)?;
+
     println!("{} Removed {}", console::style("✓").green(), args.package);
 
     Ok(())
