@@ -66,23 +66,25 @@ jobs:
             --jq 'any(.artifacts[]; .name == "winget-release-ready" and .expired == false)' \
             | grep -Fx true
 
-      - name: Verify published Windows release asset
+      - name: Verify published Windows release assets
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          expected_asset="numan-${RELEASE_TAG#v}-x86_64-pc-windows-msvc.zip"
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,assets \
-            | jq -e --arg expected_asset "$expected_asset" \
-              '.isDraft == false and any(.assets[]; .name == $expected_asset and .state == "uploaded")' \
-              >/dev/null
+          for triple in x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
+            expected_asset="numan-${RELEASE_TAG#v}-${triple}.zip"
+            gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,assets \
+              | jq -e --arg expected_asset "$expected_asset" \
+                '.isDraft == false and any(.assets[]; .name == $expected_asset and .state == "uploaded")' \
+                >/dev/null
+          done
 
       - name: Publish manifest to WinGet
         uses: vedantmgoyal9/winget-releaser@b3a5dae0047c6180023acba3f548c55fdf6b7193
         with:
           identifier: tonythethompson.numan
           fork-user: tonythethompson
-          installers-regex: '\.zip$'
+          installers-regex: '-(x86_64|aarch64)-pc-windows-msvc\.zip$'
           release-tag: ${{ env.RELEASE_TAG }}
           token: ${{ secrets.WINGET_TOKEN }}

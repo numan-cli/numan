@@ -31,17 +31,26 @@ class RenderHomebrewFormulaTests(unittest.TestCase):
 4d8fa065b5bc7fcce30af3ca7d5c3cd943701bee168d78fae6120a12689738b8  numan-0.1.5-aarch64-apple-darwin.tar.gz
 2d855b3b8a9bb3c568051024b8aae9771a63c427cb3edfd3ac3aa3aa6d78468d  numan-0.1.5-x86_64-pc-windows-msvc.zip
 0b113361c189a2062ef6e1fca36795d2347b925c1862b42c4ddeb54773e00ae3  numan-0.1.5-x86_64-unknown-linux-gnu.tar.gz
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  numan-0.1.5-aarch64-unknown-linux-gnu.tar.gz
 """.strip()
         digests = self.mod.parse_sha256sums(sums, "0.1.5")
         self.assertEqual(
             digests["aarch64-apple-darwin"],
             "4d8fa065b5bc7fcce30af3ca7d5c3cd943701bee168d78fae6120a12689738b8",
         )
+        self.assertEqual(
+            digests["aarch64-unknown-linux-gnu"],
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        )
         text = self.mod.render_formula("0.1.5", digests)
         self.assertIn('version "0.1.5"', text)
         self.assertIn("numan-#{version}-aarch64-apple-darwin.tar.gz", text)
+        self.assertIn("numan-#{version}-aarch64-unknown-linux-gnu.tar.gz", text)
         self.assertIn(
             "4d8fa065b5bc7fcce30af3ca7d5c3cd943701bee168d78fae6120a12689738b8", text
+        )
+        self.assertIn(
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", text
         )
         self.assertIn('bin.install "#{arch_dir}/numan"', text)
         self.assertIn("on_intel do", text)
@@ -53,11 +62,16 @@ class RenderHomebrewFormulaTests(unittest.TestCase):
         sums = """
 4D8FA065B5BC7FCCE30AF3CA7D5C3CD943701BEE168D78FAE6120A12689738B8  numan-0.2.0-beta.1-aarch64-apple-darwin.tar.gz
 2d855b3b8a9bb3c568051024b8aae9771a63c427cb3edfd3ac3aa3aa6d78468d  numan-0.2.0-beta.1-x86_64-unknown-linux-gnu.tar.gz
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  numan-0.2.0-beta.1-aarch64-unknown-linux-gnu.tar.gz
 """.strip()
         digests = self.mod.parse_sha256sums(sums, "0.2.0-beta.1")
         self.assertEqual(
             digests["aarch64-apple-darwin"],
             "4d8fa065b5bc7fcce30af3ca7d5c3cd943701bee168d78fae6120a12689738b8",
+        )
+        self.assertEqual(
+            digests["aarch64-unknown-linux-gnu"],
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         )
 
     def test_missing_asset_fails(self):
@@ -69,6 +83,7 @@ class RenderHomebrewFormulaTests(unittest.TestCase):
         sums = """
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  numan-0.2.0-aarch64-apple-darwin.tar.gz
 cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  numan-0.2.0-x86_64-unknown-linux-gnu.tar.gz
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  numan-0.2.0-aarch64-unknown-linux-gnu.tar.gz
 """.strip()
         with tempfile.TemporaryDirectory() as tmp:
             sums_path = Path(tmp) / "SHA256SUMS"
@@ -81,6 +96,7 @@ cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  numan-0.2.0-x8
             body = out.read_text(encoding="utf-8")
             self.assertEqual(body, text)
             self.assertIn('version "0.2.0"', body)
+            self.assertIn("aarch64-unknown-linux-gnu.tar.gz", body)
 
     def test_cli_check_url_layout(self):
         buf = io.StringIO()
@@ -90,12 +106,14 @@ cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  numan-0.2.0-x8
         stdout = buf.getvalue()
         self.assertIn("numan-<version>-aarch64-apple-darwin.tar.gz", stdout)
         self.assertIn("numan-<version>-x86_64-unknown-linux-gnu.tar.gz", stdout)
+        self.assertIn("numan-<version>-aarch64-unknown-linux-gnu.tar.gz", stdout)
         self.assertNotIn("x86_64-apple-darwin", stdout)
 
     def test_cli_full_write(self):
         sums = """
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  numan-0.2.0-aarch64-apple-darwin.tar.gz
 cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  numan-0.2.0-x86_64-unknown-linux-gnu.tar.gz
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  numan-0.2.0-aarch64-unknown-linux-gnu.tar.gz
 """.strip()
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -119,6 +137,7 @@ cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  numan-0.2.0-x8
             self.assertTrue(out_path.is_file())
             text = out_path.read_text(encoding="utf-8")
             self.assertIn('version "0.2.0"', text)
+            self.assertIn("aarch64-unknown-linux-gnu.tar.gz", text)
             self.assertIn("Wrote ", buf.getvalue())
 
     def test_cli_missing_required_args_fails(self):

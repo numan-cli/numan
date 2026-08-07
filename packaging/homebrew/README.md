@@ -35,6 +35,7 @@ Required release assets:
 
 - `numan-<version>-aarch64-apple-darwin.tar.gz`
 - `numan-<version>-x86_64-unknown-linux-gnu.tar.gz`
+- `numan-<version>-aarch64-unknown-linux-gnu.tar.gz`
 
 Intel Mac (`x86_64-apple-darwin`) is not shipped; the formula fails with a clear
 `odie` on Intel Hardware.

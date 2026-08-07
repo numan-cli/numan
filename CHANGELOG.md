@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Release assets** for `aarch64-unknown-linux-gnu` and `aarch64-pc-windows-msvc` (native ARM runners); `numan update --self` maps those triples
+- **Homebrew** Linux ARM bottle URLs; **winget** verifies and submits both Windows x64 and ARM64 zips
+
 ## [0.2.1] - 2026-08-07
 
 ### Added

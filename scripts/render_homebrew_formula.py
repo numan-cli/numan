@@ -22,11 +22,12 @@ DEFAULT_OUT = REPO_ROOT / "packaging" / "homebrew" / "numan.rb"
 REQUIRED_ASSETS = {
     "aarch64-apple-darwin": "macos_arm",
     "x86_64-unknown-linux-gnu": "linux_intel",
+    "aarch64-unknown-linux-gnu": "linux_arm",
 }
 
 ASSET_RE = re.compile(
     r"^([0-9a-fA-F]{64})\s+numan-(?P<ver>.+)-(?P<triple>"
-    r"aarch64-apple-darwin|x86_64-unknown-linux-gnu"
+    r"aarch64-apple-darwin|x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu"
     r")\.(?P<ext>tar\.gz|zip)$"
 )
 
@@ -57,6 +58,7 @@ def parse_sha256sums(text: str, version: str) -> dict[str, str]:
 def render_formula(version: str, digests: dict[str, str]) -> str:
     mac_arm = digests["aarch64-apple-darwin"]
     linux_intel = digests["x86_64-unknown-linux-gnu"]
+    linux_arm = digests["aarch64-unknown-linux-gnu"]
     return f"""# typed: false
 # frozen_string_literal: true
 
@@ -90,6 +92,10 @@ class Numan < Formula
     on_intel do
       url "https://github.com/tonythethompson/numan/releases/download/v#{{version}}/numan-#{{version}}-x86_64-unknown-linux-gnu.tar.gz"
       sha256 "{linux_intel}"
+    end
+    on_arm do
+      url "https://github.com/tonythethompson/numan/releases/download/v#{{version}}/numan-#{{version}}-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "{linux_arm}"
     end
   end
 
