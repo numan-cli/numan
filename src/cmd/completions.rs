@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -272,7 +271,7 @@ mod tests {
         assert!(!path.parent().unwrap().exists());
         install_to(CompletionShell::Bash, &path).expect("install_to");
         assert!(path.is_file());
-        let written = fs::read_to_string(&path).expect("read");
+        let written = std::fs::read_to_string(&path).expect("read");
         assert!(written.contains("_numan"));
     }
 
