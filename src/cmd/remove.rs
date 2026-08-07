@@ -161,8 +161,9 @@ fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> 
 
     PendingLifecycle::clear(root)?;
 
-    crate::state::activation_profile::remove_from_all_minors(root, &args.package)?;
-
+    if let Err(e) = crate::state::activation_profile::remove_from_all_minors(root, &args.package) {
+        eprintln!("Warning: failed to clear activation profile entries: {e:#}");
+    }
     println!("{} Removed {}", console::style("✓").green(), args.package);
 
     Ok(())
