@@ -192,10 +192,27 @@ fn write_windows_user_path(snapshot: &WindowsUserPathSnapshot) -> anyhow::Result
             let value_str = value
                 .to_str()
                 .context("Windows User PATH snapshot is not valid UTF-8")?;
-            (
-                "[Environment]::SetEnvironmentVariable('Path', $env:NUMAN_RESTORE_USER_PATH, 'User')",
-                Some(value_str),
-            )
+            if value_str.is_empty() {
+                // `SetEnvironmentVariable(..., "")` deletes the User variable on
+                // Windows (same as $null). An empty process env also collapses
+                // to $null in PowerShell. Write an empty REG_SZ via the
+                // registry so Absent vs Value("") stay distinct on restore.
+                (
+                    concat!(
+                        "$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey(",
+                        "'Environment', $true); ",
+                        "if ($null -eq $key) { throw 'Environment registry key missing' }; ",
+                        "$key.SetValue('Path', [string]::Empty, 'ExpandString'); ",
+                        "$key.Close()"
+                    ),
+                    None,
+                )
+            } else {
+                (
+                    "[Environment]::SetEnvironmentVariable('Path', $env:NUMAN_RESTORE_USER_PATH, 'User')",
+                    Some(value_str),
+                )
+            }
         }
     };
     let mut cmd = std::process::Command::new("powershell");
