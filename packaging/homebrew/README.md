@@ -40,7 +40,8 @@ Intel Mac (`x86_64-apple-darwin`) is not shipped; the formula fails with a clear
 `odie` on Intel Hardware.
 
 Archives must extract to `numan-<version>-<triple>/numan` (matches the Release
-workflow layout).
+workflow layout). Homebrew stages into that sole top-level directory, so the
+formula installs `./numan` (not `./numan-*/numan`).
 
 ## Secrets
 
