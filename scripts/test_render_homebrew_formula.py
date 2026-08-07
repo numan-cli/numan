@@ -43,7 +43,9 @@ class RenderHomebrewFormulaTests(unittest.TestCase):
         self.assertIn(
             "4d8fa065b5bc7fcce30af3ca7d5c3cd943701bee168d78fae6120a12689738b8", text
         )
-        self.assertIn('bin.install "#{arch_dir}/numan"', text)
+        self.assertIn('bin.install "numan"', text)
+        self.assertNotIn("arch_dir", text)
+        self.assertNotIn("expected numan-* directory", text)
         self.assertIn("on_intel do", text)
         self.assertIn("no longer ships Intel Mac", text)
         self.assertNotIn("x86_64-apple-darwin.tar.gz", text)
