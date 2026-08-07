@@ -52,7 +52,7 @@ pub struct PathRestoreGuard {
 }
 
 /// Windows User PATH registry snapshot distinguishing absent vs empty.
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WindowsUserPathSnapshot {
     /// `[Environment]::GetEnvironmentVariable('Path','User')` returned `$null`.
@@ -127,7 +127,10 @@ impl Default for PathRestoreGuard {
 
 /// Snapshot wire format from PowerShell (unambiguous for `$null` vs `""`):
 /// - `A` → User PATH absent (`$null`)
-/// - `P<decimal-len>\n<exact-bytes>` → present value (len may be 0)
+/// - `P` + standard Base64(UTF-8 bytes of value) → present value (incl. empty)
+///
+/// Length-prefixed UTF-8 slicing is unsafe here: PowerShell `$v.Length` is a
+/// UTF-16 code-unit count, not a UTF-8 byte length.
 #[cfg(windows)]
 fn read_windows_user_path() -> Result<WindowsUserPathSnapshot, String> {
     let script = concat!(
@@ -135,8 +138,8 @@ fn read_windows_user_path() -> Result<WindowsUserPathSnapshot, String> {
         "if ($null -eq $v) { ",
         "Write-Output 'A' ",
         "} else { ",
-        "Write-Output ('P' + $v.Length); ",
-        "[Console]::Out.Write($v) ",
+        "$bytes = [Text.Encoding]::UTF8.GetBytes([string]$v); ",
+        "Write-Output ('P' + [Convert]::ToBase64String($bytes)) ",
         "}"
     );
     let output = std::process::Command::new("powershell")
@@ -150,31 +153,29 @@ fn read_windows_user_path() -> Result<WindowsUserPathSnapshot, String> {
             output.status
         ));
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut lines = stdout.split_inclusive('\n');
-    let first = lines
+    parse_windows_user_path_stdout(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Parse the `A` / `P<base64>` snapshot line emitted by [`read_windows_user_path`].
+#[cfg(any(windows, test))]
+fn parse_windows_user_path_stdout(stdout: &str) -> Result<WindowsUserPathSnapshot, String> {
+    let first = stdout
+        .lines()
         .next()
-        .map(|l| l.trim_end_matches(['\r', '\n']))
-        .unwrap_or("");
+        .unwrap_or("")
+        .trim_end_matches(['\r', '\n', ' ', '\t']);
     if first == "A" {
         return Ok(WindowsUserPathSnapshot::Absent);
     }
-    let Some(len_str) = first.strip_prefix('P') else {
+    let Some(b64) = first.strip_prefix('P') else {
         return Err(format!(
             "unexpected PowerShell User PATH snapshot marker: {first:?}"
         ));
     };
-    let expected_len: usize = len_str
-        .parse()
-        .map_err(|_| format!("invalid User PATH length prefix: {len_str:?}"))?;
-    let rest: String = lines.collect();
-    if rest.len() < expected_len {
-        return Err(format!(
-            "User PATH snapshot length mismatch: expected {expected_len}, got {}",
-            rest.len()
-        ));
-    }
-    let value = rest[..expected_len].to_string();
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64)
+        .map_err(|e| format!("invalid User PATH base64 payload: {e}"))?;
+    let value = String::from_utf8(bytes)
+        .map_err(|e| format!("User PATH snapshot is not valid UTF-8: {e}"))?;
     Ok(WindowsUserPathSnapshot::Value(OsString::from(value)))
 }
 
@@ -274,6 +275,29 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn parse_windows_user_path_stdout_roundtrips_non_ascii() {
+        // Regression: UTF-16 `.Length` must not be used as a UTF-8 byte index.
+        // "café" is 4 UTF-16 code units but 5 UTF-8 bytes.
+        let value = r"C:\Users\café\bin;D:\tools";
+        let b64 =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, value.as_bytes());
+        let parsed = parse_windows_user_path_stdout(&format!("P{b64}\r\n"))
+            .expect("parse non-ASCII User PATH snapshot");
+        assert_eq!(
+            parsed,
+            WindowsUserPathSnapshot::Value(OsString::from(value))
+        );
+        assert_eq!(
+            parse_windows_user_path_stdout("A\r\n").unwrap(),
+            WindowsUserPathSnapshot::Absent
+        );
+        assert_eq!(
+            parse_windows_user_path_stdout("P\r\n").unwrap(),
+            WindowsUserPathSnapshot::Value(OsString::from(""))
+        );
+    }
 }
 
 #[cfg(all(test, windows))]
@@ -292,6 +316,16 @@ mod windows_user_path_tests {
             empty,
             WindowsUserPathSnapshot::Value(OsString::from("")),
             "empty string must not be treated as absent"
+        );
+
+        let non_ascii = OsString::from(r"C:\Users\café\bin");
+        write_windows_user_path(&WindowsUserPathSnapshot::Value(non_ascii.clone()))
+            .expect("set non-ASCII User PATH");
+        let roundtrip = read_windows_user_path().expect("read non-ASCII User PATH");
+        assert_eq!(
+            roundtrip,
+            WindowsUserPathSnapshot::Value(non_ascii),
+            "non-ASCII User PATH must roundtrip without truncation"
         );
 
         write_windows_user_path(&WindowsUserPathSnapshot::Absent).expect("clear User PATH");
