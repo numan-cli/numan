@@ -67,29 +67,31 @@ fn shell_label(shell: CompletionShell) -> &'static str {
 
 /// Canonical install path for `numan completions <shell>`.
 pub fn default_install_path(shell: CompletionShell) -> Result<PathBuf> {
-    let home = dirs::home_dir().context("Could not resolve home directory")?;
     Ok(match shell {
-        CompletionShell::Bash => home
+        CompletionShell::Bash => require_home_dir()?
             .join(".local")
             .join("share")
             .join("bash-completion")
             .join("completions")
             .join("numan"),
-        CompletionShell::Zsh => home.join(".zfunc").join("_numan"),
-        CompletionShell::Fish => home
+        CompletionShell::Zsh => require_home_dir()?.join(".zfunc").join("_numan"),
+        CompletionShell::Fish => require_home_dir()?
             .join(".config")
             .join("fish")
             .join("completions")
             .join("numan.fish"),
-        CompletionShell::PowerShell => home.join(".numan").join("completions.ps1"),
-        CompletionShell::Nushell => {
-            let data = dirs::data_dir().context("Could not resolve data directory")?;
-            data.join("nushell")
-                .join("vendor")
-                .join("autoload")
-                .join("numan-completions.nu")
-        }
+        CompletionShell::PowerShell => require_home_dir()?.join(".numan").join("completions.ps1"),
+        CompletionShell::Nushell => dirs::data_dir()
+            .context("Could not resolve data directory")?
+            .join("nushell")
+            .join("vendor")
+            .join("autoload")
+            .join("numan-completions.nu"),
     })
+}
+
+fn require_home_dir() -> Result<PathBuf> {
+    dirs::home_dir().context("Could not resolve home directory")
 }
 
 /// Write the completion script to `path`, creating parent directories as needed.
