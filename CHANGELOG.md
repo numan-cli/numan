@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Windows User PATH pollution from acceptance tests**: `PathRestoreGuard` now
+  blocks and restores durable User PATH writes (not just the process `PATH`).
+  `numan setup nu use` also refuses to persist directories under the system temp
+  folder, so tempfile fixtures like `Temp\.tmp*\off` cannot land on PATH again.
+  If you already have those leftovers, remove them from User PATH in System
+  Properties (or with PowerShell; see the PR).
+
 - **`numan setup nu`**: official Nushell 0.114.x release archives exceed the old
   256 MiB extract cap (~279 MiB uncompressed on linux-gnu). Bootstrap now
   extracts only the `nu` binary (skipping bundled plugins) and raises the

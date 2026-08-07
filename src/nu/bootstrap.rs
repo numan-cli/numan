@@ -569,7 +569,21 @@ pub fn register_existing_nu(binary: &Path, options: &NuSetupOptions) -> Result<P
 
 #[cfg(windows)]
 fn persist_path_dir_windows(dir: &Path) -> Result<()> {
+    // Test harness sets this while PathRestoreGuard is held so ignored
+    // acceptance tests cannot permanently pollute the developer User PATH.
+    if std::env::var_os("NUMAN_TEST_NO_PERSIST_USER_PATH").is_some() {
+        return Ok(());
+    }
     let dir = normalize_path_entry(dir);
+    // Refuse tempfile roots: test fixtures and one-off extracts must not land
+    // on the durable User PATH (seen as Temp\.tmp*\off / existing-nu leaks).
+    if path_is_under_temp_dir(&dir) {
+        bail!(
+            "Refusing to add temporary directory '{}' to the user PATH. \
+             Install or register a stable Nushell location instead.",
+            dir.display()
+        );
+    }
     let dir_str = dir
         .to_str()
         .with_context(|| format!("PATH entry '{}' is not valid UTF-8", dir.display()))?;
@@ -584,6 +598,18 @@ fn persist_path_dir_windows(dir: &Path) -> Result<()> {
         bail!("Failed to update user PATH: {stderr}");
     }
     Ok(())
+}
+
+fn path_is_under_temp_dir(dir: &Path) -> bool {
+    let Ok(temp) = std::env::temp_dir().canonicalize() else {
+        return false;
+    };
+    let Ok(dir) = dir.canonicalize() else {
+        // If the dir vanished, still treat literal temp prefixes as unsafe.
+        let temp_raw = std::env::temp_dir();
+        return dir.starts_with(&temp_raw);
+    };
+    dir.starts_with(&temp)
 }
 
 #[cfg(unix)]
@@ -603,6 +629,16 @@ fn shell_escape_for_double_quotes(value: &str) -> String {
 
 #[cfg(unix)]
 fn persist_path_dir_unix(dir: &Path) -> Result<()> {
+    if std::env::var_os("NUMAN_TEST_NO_PERSIST_USER_PATH").is_some() {
+        return Ok(());
+    }
+    if path_is_under_temp_dir(dir) {
+        bail!(
+            "Refusing to add temporary directory '{}' to the user PATH. \
+             Install or register a stable Nushell location instead.",
+            dir.display()
+        );
+    }
     let dir_str = dir
         .to_str()
         .with_context(|| format!("PATH entry '{}' is not valid UTF-8", dir.display()))?;
@@ -1096,6 +1132,24 @@ mod tests {
         assert!(
             !managed_nu_binary(root).exists(),
             "legacy single-binary path must not be produced by new installs"
+        );
+    }
+
+    #[test]
+    fn persist_path_dir_refuses_temp_directories() {
+        use crate::util::test_paths::PathRestoreGuard;
+        // Hold the PATH mutex so concurrent tests do not race on the env flag.
+        let _guard = PathRestoreGuard::new();
+        let dir = TempDir::new().unwrap();
+        let nested = dir.path().join("off");
+        std::fs::create_dir_all(&nested).unwrap();
+        // Clear the test harness skip flag so we exercise the production refuse.
+        std::env::remove_var("NUMAN_TEST_NO_PERSIST_USER_PATH");
+        let err = persist_path_dir(&nested).expect_err("temp dirs must not be persisted");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("temporary directory") || msg.contains("Refusing"),
+            "unexpected error: {msg}"
         );
     }
 
