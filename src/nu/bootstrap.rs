@@ -435,6 +435,21 @@ pub fn persist_user_path(binary: &Path) -> Result<()> {
     }
     #[cfg(unix)]
     {
+        // Same test harness skip as `persist_path_dir_*`: PathRestoreGuard sets
+        // this so ignored acceptance tests cannot leave a dangling
+        // `~/.local/bin/nu` or shell-profile export after a tempfile fixture.
+        if std::env::var_os("NUMAN_TEST_NO_PERSIST_USER_PATH").is_some() {
+            return Ok(());
+        }
+        // Match Windows `persist_path_dir` temp refuse: never durable-link a
+        // tempfile-rooted binary into `~/.local/bin/nu`.
+        if path_is_under_temp_dir(binary) {
+            bail!(
+                "Refusing to add temporary directory '{}' to the user PATH. \
+                 Install or register a stable Nushell location instead.",
+                binary.display()
+            );
+        }
         persist_user_path_unix(binary)?;
         ensure_local_bin_on_path()?;
         Ok(())
@@ -569,7 +584,21 @@ pub fn register_existing_nu(binary: &Path, options: &NuSetupOptions) -> Result<P
 
 #[cfg(windows)]
 fn persist_path_dir_windows(dir: &Path) -> Result<()> {
+    // Test harness sets this while PathRestoreGuard is held so ignored
+    // acceptance tests cannot permanently pollute the developer User PATH.
+    if std::env::var_os("NUMAN_TEST_NO_PERSIST_USER_PATH").is_some() {
+        return Ok(());
+    }
     let dir = normalize_path_entry(dir);
+    // Refuse tempfile roots: test fixtures and one-off extracts must not land
+    // on the durable User PATH (seen as Temp\.tmp*\off / existing-nu leaks).
+    if path_is_under_temp_dir(&dir) {
+        bail!(
+            "Refusing to add temporary directory '{}' to the user PATH. \
+             Install or register a stable Nushell location instead.",
+            dir.display()
+        );
+    }
     let dir_str = dir
         .to_str()
         .with_context(|| format!("PATH entry '{}' is not valid UTF-8", dir.display()))?;
@@ -584,6 +613,28 @@ fn persist_path_dir_windows(dir: &Path) -> Result<()> {
         bail!("Failed to update user PATH: {stderr}");
     }
     Ok(())
+}
+
+fn path_is_under_temp_dir(dir: &Path) -> bool {
+    path_is_under_temp_dir_with(dir, &std::env::temp_dir())
+}
+
+/// Returns true when `dir` sits under `temp_raw`, failing closed if either
+/// path cannot be canonicalized (lexical `starts_with` fallback).
+fn path_is_under_temp_dir_with(dir: &Path, temp_raw: &Path) -> bool {
+    let Ok(temp) = temp_raw.canonicalize() else {
+        // Fail closed: an unresolvable temp root must still refuse lexical
+        // children (same fallback as an uncanonicalizable `dir`).
+        return match dir.canonicalize() {
+            Ok(d) => d.starts_with(temp_raw),
+            Err(_) => dir.starts_with(temp_raw),
+        };
+    };
+    let Ok(dir) = dir.canonicalize() else {
+        // If the dir vanished, still treat literal temp prefixes as unsafe.
+        return dir.starts_with(temp_raw);
+    };
+    dir.starts_with(&temp)
 }
 
 #[cfg(unix)]
@@ -603,6 +654,16 @@ fn shell_escape_for_double_quotes(value: &str) -> String {
 
 #[cfg(unix)]
 fn persist_path_dir_unix(dir: &Path) -> Result<()> {
+    if std::env::var_os("NUMAN_TEST_NO_PERSIST_USER_PATH").is_some() {
+        return Ok(());
+    }
+    if path_is_under_temp_dir(dir) {
+        bail!(
+            "Refusing to add temporary directory '{}' to the user PATH. \
+             Install or register a stable Nushell location instead.",
+            dir.display()
+        );
+    }
     let dir_str = dir
         .to_str()
         .with_context(|| format!("PATH entry '{}' is not valid UTF-8", dir.display()))?;
@@ -1096,6 +1157,98 @@ mod tests {
         assert!(
             !managed_nu_binary(root).exists(),
             "legacy single-binary path must not be produced by new installs"
+        );
+    }
+
+    #[test]
+    fn persist_path_dir_refuses_temp_directories() {
+        use crate::util::test_paths::PathRestoreGuard;
+        // Hold the PATH mutex so concurrent tests do not race on the env flag.
+        let _guard = PathRestoreGuard::new();
+        let dir = TempDir::new().unwrap();
+        let nested = dir.path().join("off");
+        std::fs::create_dir_all(&nested).unwrap();
+        // Clear the test harness skip flag so we exercise the production refuse.
+        std::env::remove_var("NUMAN_TEST_NO_PERSIST_USER_PATH");
+        let err = persist_path_dir(&nested).expect_err("temp dirs must not be persisted");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("temporary directory") || msg.contains("Refusing"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persist_user_path_honors_test_no_persist_flag() {
+        use crate::util::test_paths::PathRestoreGuard;
+        let _guard = PathRestoreGuard::new();
+        let home = TempDir::new().unwrap();
+        let original_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
+
+        let binary = home.path().join("fixture-nu");
+        std::fs::write(&binary, b"fake").unwrap();
+        persist_user_path(&binary).expect("flag must no-op durable Unix PATH writes");
+
+        assert!(
+            !home.path().join(".local").join("bin").join("nu").exists(),
+            "must not create ~/.local/bin/nu while PathRestoreGuard is held"
+        );
+        // No shell-profile export either.
+        for name in [".zshrc", ".bashrc", ".profile"] {
+            assert!(
+                !home.path().join(name).exists(),
+                "must not create {name} while PathRestoreGuard is held"
+            );
+        }
+
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persist_user_path_refuses_temp_binaries_without_flag() {
+        use crate::util::test_paths::PathRestoreGuard;
+        let _guard = PathRestoreGuard::new();
+        std::env::remove_var("NUMAN_TEST_NO_PERSIST_USER_PATH");
+        let dir = TempDir::new().unwrap();
+        let binary = dir.path().join("nu");
+        std::fs::write(&binary, b"fake").unwrap();
+        let err = persist_user_path(&binary).expect_err("temp binaries must not be persisted");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("temporary directory") || msg.contains("Refusing"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn path_is_under_temp_dir_fails_closed_when_temp_uncanonicalizable() {
+        // A temp root that does not exist cannot be canonicalized; the helper
+        // must still refuse lexical children (fail closed), not return false.
+        let missing_temp =
+            std::env::temp_dir().join(format!("numan-missing-temp-root-{}", std::process::id()));
+        assert!(
+            !missing_temp.exists(),
+            "precondition: missing temp root must not exist"
+        );
+        let nested = missing_temp.join("off");
+        assert!(
+            path_is_under_temp_dir_with(&nested, &missing_temp),
+            "lexical child of an uncanonicalizable temp root must be refused"
+        );
+        let outside = PathBuf::from(if cfg!(windows) {
+            r"C:\Windows\System32"
+        } else {
+            "/usr/bin"
+        });
+        assert!(
+            !path_is_under_temp_dir_with(&outside, &missing_temp),
+            "unrelated paths must not match an uncanonicalizable temp root"
         );
     }
 

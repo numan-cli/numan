@@ -18,6 +18,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Windows User PATH pollution from acceptance tests**: `PathRestoreGuard` sets
+  a test-only flag that makes `persist_path_dir` / Unix `persist_user_path`
+  skip durable User PATH, `~/.local/bin/nu`, and shell-profile writes while the
+  guard is held (it does not rewrite the Windows User PATH registry on drop, so
+  concurrent external PATH edits are preserved). `numan setup nu` / `use` also
+  refuse to persist paths under the system temp folder (fail closed if the temp
+  root cannot be canonicalized), so tempfile fixtures like `Temp\.tmp*\off`
+  cannot land on PATH again. If you already have those leftovers, clean User
+  PATH (PowerShell):
+
+  ```powershell
+  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+  $cleaned = ($userPath -split ';' | Where-Object {
+    $_ -and ($_ -notmatch '(?i)\\Temp\\.tmp.*\\(off|existing-nu)$')
+  }) -join ';'
+  [Environment]::SetEnvironmentVariable('Path', $cleaned, 'User')
+  ```
+
+  Then open a new terminal and confirm with `$env:Path -split ';'`.
+
 - **`numan setup nu`**: official Nushell 0.114.x release archives exceed the old
   256 MiB extract cap (~279 MiB uncompressed on linux-gnu). Bootstrap now
   extracts only the `nu` binary (skipping bundled plugins) and raises the
