@@ -135,8 +135,8 @@ fn format_search_header(nu: Option<&NuVersion>, triple: &str) -> String {
 
 /// Row status suffix (leading space + brackets), or empty.
 ///
-/// Plugins get a hard evaluated verdict. Non-plugins never use `[compatible]`;
-/// they use not-ABI-locked wording and surface `verified_with` when present.
+/// Plugins get a hard evaluated verdict. Modules use not-ABI-locked wording.
+/// Scripts and completions are install-only until activation contracts land.
 fn format_row_status(
     pkg_type: &PackageType,
     compatible: bool,
@@ -159,7 +159,17 @@ fn format_row_status(
                 String::new()
             }
         }
-        _ => {
+        PackageType::Script | PackageType::Completion => {
+            if verified_with.is_empty() {
+                " [install-only; activation deferred]".to_string()
+            } else {
+                format!(
+                    " [install-only; activation deferred; verified with {}]",
+                    verified_with.join(", ")
+                )
+            }
+        }
+        PackageType::Module => {
             if verified_with.is_empty() {
                 " [not ABI-locked]".to_string()
             } else {
@@ -297,11 +307,13 @@ mod tests {
     }
 
     #[test]
-    fn script_and_completion_use_module_style_labels() {
+    fn script_and_completion_use_install_only_labels() {
         for ty in [PackageType::Script, PackageType::Completion] {
             let status = format_row_status(&ty, true, true, None, &["0.113.1".to_string()]);
-            assert!(status.contains("not ABI-locked"), "{ty}");
+            assert!(status.contains("install-only"), "{ty}");
+            assert!(status.contains("activation deferred"), "{ty}");
             assert!(!status.contains("[compatible]"), "{ty}");
+            assert!(!status.contains("not ABI-locked"), "{ty}");
         }
     }
 
