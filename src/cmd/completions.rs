@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -87,8 +88,7 @@ pub fn default_install_path(shell: CompletionShell) -> Result<PathBuf> {
             .join("completions")
             .join("numan"),
         CompletionShell::Zsh => require_home_dir()?.join(".zfunc").join("_numan"),
-        CompletionShell::Fish => require_home_dir()?
-            .join(".config")
+        CompletionShell::Fish => fish_config_home()?
             .join("fish")
             .join("completions")
             .join("numan.fish"),
@@ -100,6 +100,24 @@ pub fn default_install_path(shell: CompletionShell) -> Result<PathBuf> {
             .join("autoload")
             .join("numan-completions.nu"),
     })
+}
+
+/// Fish config root: `$XDG_CONFIG_HOME` when set, else `~/.config`.
+///
+/// Matches Fish's discovery path. Do not use [`dirs::config_dir`] here: on
+/// Windows that resolves to `%APPDATA%`, which Fish does not use by default.
+fn fish_config_home() -> Result<PathBuf> {
+    Ok(fish_config_home_with(
+        std::env::var_os("XDG_CONFIG_HOME").as_deref(),
+        &require_home_dir()?,
+    ))
+}
+
+fn fish_config_home_with(xdg_config_home: Option<&OsStr>, home: &Path) -> PathBuf {
+    match xdg_config_home {
+        Some(p) if !p.is_empty() => PathBuf::from(p),
+        _ => home.join(".config"),
+    }
 }
 
 fn require_home_dir() -> Result<PathBuf> {
@@ -156,8 +174,8 @@ numan completions zsh --print > ~/.zfunc/_numan
         CompletionShell::Fish => "\
 # Prefer: numan completions fish
 # Or redirect:
-mkdir -p ~/.config/fish/completions
-numan completions fish --print > ~/.config/fish/completions/numan.fish
+mkdir -p \"${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions\"
+numan completions fish --print > \"${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions/numan.fish\"
 "
         .to_string(),
         CompletionShell::PowerShell => "\
@@ -281,7 +299,8 @@ mod tests {
             .contains("mkdir -p ~/.local/share/bash-completion/completions"));
         assert!(print_hint(CompletionShell::Bash).contains("numan completions bash --print"));
         assert!(print_hint(CompletionShell::Zsh).contains("mkdir -p ~/.zfunc"));
-        assert!(print_hint(CompletionShell::Fish).contains("mkdir -p ~/.config/fish/completions"));
+        assert!(print_hint(CompletionShell::Fish)
+            .contains("mkdir -p \"${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions\""));
         assert!(
             print_hint(CompletionShell::Nushell).contains("vendor/autoload/numan-completions.nu")
         );
@@ -347,6 +366,23 @@ mod tests {
         assert!(written.starts_with(OWNERSHIP_MARKER));
         assert!(written.contains("_numan"));
         assert!(!written.contains("# stale"));
+    }
+
+    #[test]
+    fn fish_config_home_respects_xdg_config_home() {
+        let home = Path::new("/home/alice");
+        assert_eq!(
+            fish_config_home_with(None, home),
+            PathBuf::from("/home/alice/.config")
+        );
+        assert_eq!(
+            fish_config_home_with(Some(OsStr::new("")), home),
+            PathBuf::from("/home/alice/.config")
+        );
+        assert_eq!(
+            fish_config_home_with(Some(OsStr::new("/xdg/config")), home),
+            PathBuf::from("/xdg/config")
+        );
     }
 
     #[test]
