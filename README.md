@@ -480,7 +480,7 @@ For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 | Curated **official registry** depth + multi-OS first-use demos | 🔄 [#18](https://github.com/tonythethompson/numan/issues/18), [catalog-compat](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md), [intake roadmap](docs/registry-intake-roadmap.md) |
 | Cross-platform **fresh-install** dogfooding + lifecycle evidence | 🔄 `init` → `registry sync` → `search` → `install` → `activate` → `doctor` on Linux, macOS, Windows |
 | Ship **0.2.0** (`setup nu` redesign + `numan use`) | ✅ [CHANGELOG](CHANGELOG.md) |
-| Cut **0.2.1** (`update --self`, install-only honesty, `try` script fallback) | 🔄 [CHANGELOG](CHANGELOG.md#021---2026-08-07) |
+| Cut **0.2.1** (`update --self`, install-only honesty, `try` script fallback) | ✅ [v0.2.1](https://github.com/tonythethompson/numan/releases/tag/v0.2.1) |
 
 **1.0** when the [unified gate](docs/plans/consolidated-multi-repo-roadmap.md#unified-10-gate) is green and there are no open P0/P1 issues on the core install/activate/update/remove lifecycle.
 
