@@ -1,3 +1,4 @@
+pub mod activation_profile;
 pub mod active_plugin_mutation;
 pub mod autoload_journal;
 pub mod autoload_recovery;

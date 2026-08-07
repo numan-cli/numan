@@ -354,8 +354,8 @@ Global flag: `--root <path>` — override the numan root directory (all commands
 | `numan setup nu remove` | Remove the managed Nushell install and fall back to PATH Nu |
 | `numan setup nu path` | Use the Nushell already on PATH (removes managed install) |
 | `numan setup nu use <path>` | Register a specific existing Nushell binary |
-| `numan use <version>` | Switch the active managed Nu to a pinned version (no auto-install; errors with a hint to run `numan setup nu <version>` if missing) |
-| `numan use latest` | Switch the active managed Nu to the latest installed version |
+| `numan use <version>` | Switch the active managed Nu to a pinned version (no auto-install; errors with a hint to run `numan setup nu <version>` if missing). Cross-minor switches deactivate Numan-active plugins/modules for the leaving Nu and restore that minor's remembered set when you switch back. |
+| `numan use latest` | Switch the active managed Nu to the latest installed version (same leave/restore behavior as `use <version>`) |
 | `numan use list` | List installed managed Nu versions and mark the active one |
 | `numan nupm status` | Summarize nupm home and import eligibility |
 | `numan nupm inspect [--all] [path]` | Classify nupm packages at a path |

@@ -1,4 +1,5 @@
 pub mod activate;
+pub mod activation_switch;
 pub mod completions;
 pub mod deactivate;
 pub mod doctor;

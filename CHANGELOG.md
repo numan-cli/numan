@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Release assets** for `aarch64-unknown-linux-gnu` and `aarch64-pc-windows-msvc` (native ARM runners); `numan update --self` maps those triples
 - **Homebrew** Linux ARM archive support; **winget** verifies and submits both Windows x64 and ARM64 zips
+- **`numan use` activation profiles**: cross-minor switches auto-deactivate Numan-active plugins/modules (leave profile is a never-shrinking union per Nu minor in `nu_state/activation-profile.json`) and restore the target minor's desired set after the marker write. Same-target `use` is restore-only reconcile. User `activate`/`deactivate` keep the current minor's desired set in sync (idempotent even when already active/inactive); `remove` clears the package id from every minor.
 
 ### Changed
 
