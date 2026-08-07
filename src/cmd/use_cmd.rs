@@ -618,7 +618,7 @@ mod tests {
             o2.borrow_mut().push("register");
             Ok(())
         };
-        let path_refresh = move || -> Result<()> {
+        let path_refresh = move |_path: &std::path::Path| -> Result<()> {
             o3.borrow_mut().push("path_refresh");
             Ok(())
         };
@@ -637,10 +637,7 @@ mod tests {
         .unwrap();
 
         let order = hook_order.borrow();
-        assert!(
-            order.contains(&"unregister"),
-            "unregistrar must be invoked"
-        );
+        assert!(order.contains(&"unregister"), "unregistrar must be invoked");
         assert!(order.contains(&"register"), "registrar must be invoked");
         assert!(
             order.contains(&"path_refresh"),

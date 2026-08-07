@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`numan try`**: now takes a required `<owner/name[@version]>` argument and is compatibility-first. It attempts to install and activate the specified package for the current Nu; if incompatible, it explains which managed Nu versions the package supports and recommends the nearest one, without silently switching Nu or installing an alternative package.
 - **`numan completions <shell>`** installs by default (creates the target directory if needed). Use `--print` to emit the script on stdout for piping or custom redirects.
 - **`numan registry packages`**: clearer listing (blank line between entries, styled id/version/type, soft-wrapped dim descriptions)
 

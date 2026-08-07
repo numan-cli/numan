@@ -276,7 +276,15 @@ fn restore_desired(
 
     // Restore plugins first, then modules.
     for id in &desired.plugins {
-        match restore_one_plugin(root, &lockfile, registry.as_ref(), &resolver, id, hooks) {
+        match restore_one_plugin(
+            root,
+            &lockfile,
+            nu_paths,
+            registry.as_ref(),
+            &resolver,
+            id,
+            hooks,
+        ) {
             RestoreOutcome::Restored => report.restored_plugins.push(id.clone()),
             RestoreOutcome::AlreadyActive => {}
             RestoreOutcome::Missing => report.skipped_missing.push(id.clone()),

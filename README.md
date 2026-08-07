@@ -199,7 +199,7 @@ Then:
 ```bash
 numan init
 numan registry sync
-numan try                 # install + activate a starter that fits your Nu (e.g., skim for Nu 0.114)
+numan try owner/package-name  # try a package for your current Nu; explains compatibility if it won't work
 numan doctor
 ```
 
@@ -212,7 +212,7 @@ numan install owner/package-name
 numan activate owner/package-name
 ```
 
-Install is **inert** — nothing is registered with Nu until you run `numan activate` (or `numan try`, which activates after install). If a package needs a different Nu minor, numan explains the mismatch and can offer `numan setup nu <x.y.z>` (activations are per-Nu; re-activate after switching). When no compatible starter exists, `numan try` suggests installing a matching managed Nu version or searching for another package with `numan search`.
+Install is **inert** — nothing is registered with Nu until you run `numan activate` (or `numan try`, which activates after install if the package is compatible). `numan install` fails on incompatibility; `numan try <owner/name>` attempts the package, explains which managed Nu versions it works with, and suggests `numan use <version>` followed by `numan try <owner/name>` if a switch would help.
 
 After Nu upgrades, refresh cached paths and activation identity:
 
@@ -243,7 +243,7 @@ numan registry sync
 #### 3. Prove it works, or search and install
 
 ```bash
-numan try                     # curated starter for your Nu + platform (e.g., skim for Nu 0.114)
+numan try owner/package-name  # try a package for your Nu; explains compatibility if it won't work
 # or:
 numan search nutest           # hides incompatible hits; use --all to show them
 numan info vyadh/nutest
@@ -260,7 +260,7 @@ numan activate --list             # show activation status
 numan activate --check            # verify activation integrity (read-only)
 ```
 
-`numan try` already activates unless you pass `--no-activate`.
+`numan try <owner/name>` installs and activates if compatible, and explains compatible Nu versions if not. Use `--no-activate` to install without activating.
 
 For modules:
 
@@ -334,7 +334,7 @@ Global flag: `--root <path>` — override the numan root directory (all commands
 | Command | Description |
 |---------|-------------|
 | `numan init [--refresh]` | Probe Nu and cache paths for activation |
-| `numan try [--no-activate]` | Install and activate a curated starter package for your Nu + platform (prefers Nu 0.114 starters; suggests managed Nu pin or search if no compatible starter) |
+| `numan try <owner/name[@version]> [--no-activate]` | Try a package against your current Nu and platform; lists compatible managed Nu versions and recommends one if it does not work now |
 | `numan search <query>` | Search registry by name, description, or tags |
 | `numan info <owner/name>` | Show package metadata and available versions |
 | `numan install <owner/name[@version]>` | Download, verify, extract, and lock |

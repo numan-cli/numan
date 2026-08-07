@@ -310,11 +310,7 @@ mod tests {
         let root = dir.path();
         let path = ActivationProfile::profile_path(root);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(
-            &path,
-            r#"{"schema_version":999,"by_nu_minor":{}}"#,
-        )
-        .unwrap();
+        std::fs::write(&path, r#"{"schema_version":999,"by_nu_minor":{}}"#).unwrap();
 
         let err = ActivationProfile::load(root).unwrap_err();
         let msg = err.to_string();

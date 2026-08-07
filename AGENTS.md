@@ -65,7 +65,7 @@ src/
     nupm.rs            — `numan nupm status|inspect|import|diff`: nupm discovery + import + drift (Phase 6.1–6.3)
     completions.rs     — `numan completions <shell>`: install by default (mkdir+write); `--print` for stdout (Phase 7.3)
     setup.rs           — `numan setup nu [VERSION]|remove|path|use <path>` + `setup loader`: Nushell bootstrap + nushell-loader install
-    try_cmd.rs         — `numan try [--yes] [--no-activate]`: curated starter install + activate for current Nu
+    try_cmd.rs         — `numan try <owner/name[@version]> [--no-activate]`: attempt a package for current Nu; explain compatible managed Nu versions if incompatible
     use_cmd.rs         — `numan use <version>|latest|list`: activates a previously installed managed Nu version (no auto-download); cross-minor leave/teardown (modules then plugins) + restore (plugins then modules) via activation profiles; same-target is restore-only; writes the active-version marker after a PreMutation snapshot under the root mutation lock
     activation_switch.rs — shared leave/restore orchestration for `numan use` (lower-level lifecycle, no profile-sync wrappers)
     nu_pin_offer.rs    — Shared TTY offer to `setup nu <version>` + `init --refresh` on Nu mismatch
@@ -232,14 +232,14 @@ Standard build/test/lint/run commands live in "Build & Test" above and in the RE
 
 ## Learned User Preferences
 - Prefers streamlining Nu-compat onboarding as honest search/install UX, a one-shot starter, and an offer-based managed Nu pin (never silent auto-switch of Nu).
-- Prefers the command name `numan try` for the prove-it-works starter (not `setup demo` / `setup starter`).
+- `numan try <owner/name>` is the compatibility-aware install path: it attempts the package for the current Nu, and if incompatible it explains which managed Nu versions the package works with (never auto-switches Nu).
 - Product north star for Numan: make the Nushell package ecosystem more inviting for less experienced users.
 - Once a plan or todos are approved, proceed without repeated permission prompts.
 - Prefers strategy work saved as code-grounded audit plus next-steps plan docs (concrete paths and checkboxes), not abstract strategy alone.
 
 ## Learned Workspace Facts
 - Plugin ABI is Nu-minor-scoped: mixed plugin ABIs cannot run inside one Nu process; side-by-side Nu profiles would be a separate future product shape, not a near-term substitute for compat UX.
-- PATH Nu can be newer than official-registry Windows plugin Nu constraints, so `search` can look fine while `install` fails; use compat-filtered search / `numan try` / `setup nu <version>`.
+- PATH Nu can be newer than official-registry Windows plugin Nu constraints, so `search` can look fine while `install` fails; use compat-filtered search, `numan try <owner/name>`, or `numan use <version>` followed by `numan try <owner/name>`.
 - `numan setup nu <x.y.z>` pins a managed Nu release; bare `numan setup nu` installs latest. Subcommands: `remove`, `path`, `use <path>`.
 - Numan product spans three repos (`numan`, `numan-registry`, `numan-plugins`); trust is cross-cutting (client verifies, registry signs); there is no separate `numan-registry.trust` product repo.
 - Near-term adoption bottleneck is catalog depth and multi-OS first-use demos; release handoff is numan-plugins → numan-registry → numan client. Live catalog overview: [`numan-registry/docs/catalog-compat.md`](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md); plugin candidates: [`numan-plugins/docs/backlog.json`](https://github.com/tonythethompson/numan-plugins/blob/main/docs/backlog.json).
@@ -247,6 +247,6 @@ Standard build/test/lint/run commands live in "Build & Test" above and in the RE
 - Supported install archives include `.zip`, `.tar.gz`/`.tgz`, `.tar.xz`/`.txz`, and plain `.tar`.
 - Active-plugin **remove** stays gated while `activation` is set; run `numan deactivate <pkg>` then `numan remove <pkg>`. `remove --force` does not bypass plugin activation (module only). Active **update** orchestrates deactivate→upgrade→activate only when `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` exactly; unset or any alternative value fails closed. See [docs/active-plugin-gate.md](docs/active-plugin-gate.md).
 - Prefers streamlining Nu-compat onboarding as honest search/install UX, a one-shot starter, and an offer-based managed Nu pin (never silent auto-switch of Nu).
-- Prefers the command name `numan try` for the prove-it-works starter (not `setup demo` / `setup starter`).
+- `numan try <owner/name>` is the compatibility-aware install path: it attempts the package for the current Nu, and if incompatible it explains which managed Nu versions the package works with (never auto-switches Nu).
 - Product north star for Numan: make the Nushell package ecosystem more inviting for less experienced users.
-- PATH Nu can be newer than official-registry Windows plugin Nu constraints, so `search` can look fine while `install` fails; use compat-filtered search / `numan try` / `setup nu <version>`.
+- PATH Nu can be newer than official-registry Windows plugin Nu constraints, so `search` can look fine while `install` fails; use compat-filtered search, `numan try <owner/name>`, or `numan use <version>` followed by `numan try <owner/name>`.
