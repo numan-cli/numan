@@ -14,8 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   profile writes while the guard is held. `numan setup nu use` also refuses to
   persist directories under the system temp folder (fail closed if the temp root
   cannot be canonicalized), so tempfile fixtures like `Temp\.tmp*\off` cannot
-  land on PATH again. If you already have those leftovers, remove them from
-  User PATH in System Properties (or with PowerShell; see the PR).
+  land on PATH again. If you already have those leftovers, clean User PATH
+  (PowerShell):
+
+  ```powershell
+  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+  $cleaned = ($userPath -split ';' | Where-Object {
+    $_ -and ($_ -notmatch '(?i)\\Temp\\.tmp.*\\(off|existing-nu)$')
+  }) -join ';'
+  [Environment]::SetEnvironmentVariable('Path', $cleaned, 'User')
+  ```
+
+  Then open a new terminal and confirm with `$env:Path -split ';'`.
 
 - **`numan setup nu`**: official Nushell 0.114.x release archives exceed the old
   256 MiB extract cap (~279 MiB uncompressed on linux-gnu). Bootstrap now
