@@ -260,9 +260,7 @@ mod tests {
             .contains("mkdir -p ~/.local/share/bash-completion/completions"));
         assert!(print_hint(CompletionShell::Bash).contains("numan completions bash --print"));
         assert!(print_hint(CompletionShell::Zsh).contains("mkdir -p ~/.zfunc"));
-        assert!(
-            print_hint(CompletionShell::Fish).contains("mkdir -p ~/.config/fish/completions")
-        );
+        assert!(print_hint(CompletionShell::Fish).contains("mkdir -p ~/.config/fish/completions"));
         assert!(
             print_hint(CompletionShell::Nushell).contains("vendor/autoload/numan-completions.nu")
         );
