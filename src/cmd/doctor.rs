@@ -490,9 +490,8 @@ fn check_nu_environments(root: &Path, options: &DoctorOptions, findings: &mut Ve
         )),
     }
 
-    let managed = managed_nu_binary(root);
-    if managed.is_file() {
-        match probe_nu_version(&managed, options) {
+    match resolve_managed_nu_binary(root) {
+        Ok(Some(managed)) => match probe_nu_version(&managed, options) {
             Ok(version) => findings.push(finding(
                 "nu.managed.version",
                 Severity::Info,
@@ -510,16 +509,49 @@ fn check_nu_environments(root: &Path, options: &DoctorOptions, findings: &mut Ve
                 None,
                 RepairTier::None,
             )),
-        }
-    } else {
-        findings.push(finding(
+        },
+        Ok(None) => findings.push(finding(
             "nu.managed.version",
             Severity::Info,
             "Managed Nu: not installed",
             None,
             RepairTier::None,
-        ));
+        )),
+        Err(e) => findings.push(finding(
+            "nu.managed.version",
+            Severity::Warn,
+            format!("Managed Nu: could not resolve active managed binary ({e})"),
+            Some(CMD_USE),
+            RepairTier::Manual,
+        )),
     }
+}
+
+/// Resolve the managed Nu binary for doctor reporting.
+///
+/// Prefers the versioned active install (`tools/nushell/<version>/nu`), then
+/// falls back to the legacy single-binary path (`tools/nushell/nu`) so older
+/// roots still report correctly before migration.
+fn resolve_managed_nu_binary(root: &Path) -> Result<Option<PathBuf>> {
+    match version_manager::active_nu_binary(root) {
+        Ok(Some(path)) => return Ok(Some(path)),
+        Ok(None) => {}
+        Err(e) => return Err(e.into()),
+    }
+
+    let legacy = managed_nu_binary(root);
+    if legacy.is_file() {
+        return Ok(Some(legacy));
+    }
+
+    if let Some(latest) = version_manager::latest_installed_version(root)? {
+        let path = version_manager::version_binary(root, &latest);
+        if path.is_file() {
+            return Ok(Some(path));
+        }
+    }
+
+    Ok(None)
 }
 
 fn probe_nu_version(path: &Path, options: &DoctorOptions) -> Result<String> {
@@ -2305,6 +2337,44 @@ mod tests {
                 .contains("simulated version probe failure"),
             "unexpected: {}",
             managed_finding.message
+        );
+    }
+
+    #[test]
+    fn doctor_reports_versioned_managed_nu() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let binary = version_manager::version_binary(root, "0.114.1");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, b"nu").unwrap();
+        version_manager::write_active_version(root, "0.114.1").unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: true,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let managed = report
+            .findings
+            .iter()
+            .find(|f| f.id == "nu.managed.version")
+            .expect("nu.managed.version");
+        assert_eq!(managed.severity, Severity::Info);
+        assert!(
+            managed.message.starts_with("Managed Nu: 0.99.9"),
+            "unexpected message: {}",
+            managed.message
+        );
+        assert!(
+            managed.message.contains("0.114.1"),
+            "expected versioned path in message: {}",
+            managed.message
         );
     }
 
