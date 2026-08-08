@@ -17,8 +17,15 @@ cargo run -- list
 cargo run -- nupm status --nupm-home <path>
 cargo run -- nupm inspect <package-path>
 
-# Test (419 tests)
+# Test (default suite)
 cargo test
+
+# Real-Nu acceptance: portable ignored suite (default PR CI with Nu 0.113 on PATH).
+# Excludes Stage 1 (`official_registry_stage1` / stage1_official_registry) and the
+# active-plugin update matrix (`plugin_active_update_real_nu` / real_nu_active_update_*).
+# Full matrix: workflow `active-plugin-update-acceptance`, or
+#   cargo test --test plugin_active_update_real_nu -- --ignored --nocapture --test-threads=1
+cargo test -- --ignored
 
 # Test single module
 cargo test core::platform
@@ -29,10 +36,11 @@ cargo test cmd::activate
 
 # Lint / format (CI enforces -D warnings and fmt --check)
 cargo clippy -- -D warnings
-cargo fmt
+cargo fmt --check
+# cargo fmt   # repair only; not the CI gate
 ```
 
-CI runs `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check`, and a real-Nu acceptance job (`cargo test -- --ignored` with Nu 0.113 on PATH) on Ubuntu, Windows, and macOS.
+CI runs `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check`, and a portable real-Nu acceptance job (`cargo test -- --ignored` with Nu 0.113 on PATH; excludes Stage 1 and the active-plugin update matrix) on Ubuntu, Windows, and macOS.
 
 ## Project Structure
 
@@ -111,7 +119,7 @@ src/
     report.rs          — NupmStatusReport, NupmInspectionReport formatters
 docs/
   nupm-compatibility.md — versioned nupm interoperability contract (authority for Phase 6)
-  PACKAGING.md          — winget release checklist
+  PACKAGING.md          — Homebrew tap + winget release checklist
   RELEASING.md          — version bump, tag, CI gates
   snapshots-and-rollback.md — snapshot CLI scope and rollback guarantees
 tests/
@@ -172,9 +180,12 @@ tests/
 
 1. Create feature branch from `master`
 2. Implement with tests
-3. `cargo test` — all 419 tests must pass
-4. Update AGENTS.md if structure/conventions change
-5. Open PR with description
+3. `cargo test` — all tests must pass
+4. `cargo clippy -- -D warnings` — no warnings
+5. `cargo fmt --check` — formatting clean (use `cargo fmt` to repair)
+6. `cargo test -- --ignored` — portable real-Nu acceptance (requires Nu 0.113 on PATH; PR CI excludes Stage 1 and the active-plugin update matrix). Full active-plugin matrix: workflow `active-plugin-update-acceptance`
+7. Update AGENTS.md if structure/conventions change
+8. Open PR with description
 
 ## PR review guidance
 
@@ -205,9 +216,9 @@ Automated and human PR reviewers should follow [`REVIEW.md`](REVIEW.md) for revi
 - [x] Phase 7.3: shell completions + error UX hints + README `--help` audit ([Phase7Plan.md](docs/plans/Phase7Plan.md))
 - [x] Phase 7.4: Onboarding path — init checklist, README quick start ([Phase7Plan.md](docs/plans/Phase7Plan.md))
 - [x] Phase 7.5: CI hardening — MSRV, cargo deny/package, release gates ([Phase7Plan.md](docs/plans/Phase7Plan.md))
-- [x] Phase 7.6: Wider distribution — winget manifests ([docs/PACKAGING.md](docs/PACKAGING.md)); macOS/Linux package-manager support deferred pending a verified formula
+- [x] Phase 7.6: Wider distribution — winget manifests + Homebrew tap (`tonythethompson/numan`; [docs/PACKAGING.md](docs/PACKAGING.md)); Scoop still deferred
 - [x] Post-7.6: Official registry production cutover + init auto-configures `official` (v0.1.4)
-- [x] Phase 7 complete (polish, CI, distribution) — see [Phase7Plan.md](docs/plans/Phase7Plan.md); toward 1.0: winget merge, registry intake, Phase 5.2/5.5
+- [x] Phase 7 complete (polish, CI, distribution) — see [Phase7Plan.md](docs/plans/Phase7Plan.md); toward 1.0: catalog depth, Phase 5.2/5.5
 
 ## Testing
 

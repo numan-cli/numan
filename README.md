@@ -445,7 +445,7 @@ PR reviewers should follow [`REVIEW.md`](REVIEW.md).
 
 ## Roadmap
 
-**Releases:** see the [latest GitHub Release](https://github.com/tonythethompson/numan/releases/latest) — feature-complete core on **0.1.x** while dogfooding the official registry ([catalog × Nu matrix](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md) for live package counts and Nu bands).
+**Releases:** see the [latest GitHub Release](https://github.com/tonythethompson/numan/releases/latest) — feature-complete core on **0.2.x** while dogfooding the official registry ([catalog × Nu matrix](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md) for live package counts and Nu bands).
 
 For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 `numan-plugins`, see
@@ -459,7 +459,7 @@ For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 | **3–4** | Plugin + module activation, journals, managed autoloads | ✅ |
 | **5** | `update` / `remove` / `gc`, lockfile v2, [snapshots + rollback](docs/snapshots-and-rollback.md) | ✅ (source builds deferred; active-plugin update opt-in) |
 | **6** | [nupm](docs/nupm-compatibility.md) status, inspect, import, drift | ✅ |
-| **7** | Doctor, completions, onboarding, CI hardening, [winget packaging](docs/PACKAGING.md) | ✅ — [plan](docs/plans/Phase7Plan.md) |
+| **7** | Doctor, completions, onboarding, CI hardening, [winget + Homebrew tap](docs/PACKAGING.md) | ✅ — [plan](docs/plans/Phase7Plan.md) |
 | **Post-7.6** | Production [official registry](https://tonythethompson.github.io/numan-registry/) cutover; `numan init` and `numan doctor` auto-configure `official` | ✅ (v0.1.4) |
 
 ### Next (toward 1.0)
@@ -492,7 +492,7 @@ For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 | 7.3 Completions + error UX | ✅ |
 | 7.4 Onboarding quick start | ✅ |
 | 7.5 CI / release hardening | ✅ |
-| 7.6 winget manifests (in-repo) | ✅ |
+| 7.6 winget manifests (in-repo) + Homebrew tap | ✅ |
 
 </details>
 
