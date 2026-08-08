@@ -493,7 +493,7 @@ For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 | 7.3 Completions + error UX | ✅ |
 | 7.4 Onboarding quick start | ✅ |
 | 7.5 CI / release hardening | ✅ |
-| 7.6 winget manifests (in-repo) | ✅ |
+| 7.6 winget manifests (in-repo) + Homebrew tap | ✅ |
 
 </details>
 
