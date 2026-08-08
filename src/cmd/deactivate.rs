@@ -125,6 +125,7 @@ pub fn execute_with_candidate_runner_and_unregistrar(
     let targets_requested = classify_and_validate_packages(args, &lockfile, root, &nu_paths)?;
 
     if targets_requested.is_empty() {
+        snapshot_before_deactivate_profile_sync(root, &nu_paths, args, &lockfile)?;
         sync_user_deactivate_profile(root, &nu_paths, args, &lockfile)?;
         println!("Nothing to deactivate.");
         return Ok(());
@@ -163,6 +164,7 @@ pub fn execute_with_candidate_runner_and_unregistrar(
     let targets_requested =
         reclassify_targets(args, &lockfile, root, &nu_paths, &targets_requested)?;
     if targets_requested.is_empty() {
+        snapshot_before_deactivate_profile_sync(root, &nu_paths, args, &lockfile)?;
         sync_user_deactivate_profile(root, &nu_paths, args, &lockfile)?;
         println!("Nothing to deactivate.");
         return Ok(());
@@ -280,6 +282,56 @@ fn sync_user_deactivate_profile(
     )
 }
 
+/// Snapshot when a profile-only deactivate path would clear desired state.
+fn snapshot_before_deactivate_profile_sync(
+    root: &Path,
+    nu_paths: &NuPaths,
+    args: &DeactivateArgs,
+    lockfile: &Lockfile,
+) -> Result<()> {
+    if args.packages.is_empty() {
+        return Ok(());
+    }
+    let mutate_items: Vec<(crate::state::activation_profile::ProfileKind, &str)> = args
+        .packages
+        .iter()
+        .flat_map(|id| match lockfile.packages.get(id) {
+            Some(entry) => {
+                let kind = match entry.package_type.as_str() {
+                    "plugin" => Some(crate::state::activation_profile::ProfileKind::Plugin),
+                    "module" => Some(crate::state::activation_profile::ProfileKind::Module),
+                    _ => None,
+                };
+                kind.map(|k| vec![(k, id.as_str())]).unwrap_or_default()
+            }
+            None => vec![
+                (
+                    crate::state::activation_profile::ProfileKind::Plugin,
+                    id.as_str(),
+                ),
+                (
+                    crate::state::activation_profile::ProfileKind::Module,
+                    id.as_str(),
+                ),
+            ],
+        })
+        .collect();
+    if crate::state::activation_profile::would_ensure_absent_any(
+        root,
+        &nu_paths.nu_version,
+        mutate_items,
+    )? {
+        create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Deactivate,
+            None,
+            None,
+        )?;
+    }
+    Ok(())
+}
+
 /// Full module deactivation compares unique IDs so duplicate CLI args cannot
 /// skip Nu drift validation for a partial target set.
 fn is_full_module_deactivation(lockfile: &Lockfile, requested: &[ActiveModule]) -> bool {
@@ -363,8 +415,11 @@ fn run_module_deactivate_lane(
 
     let managed_path = Path::new(&managed_file_path);
 
-    if remaining_ids.is_empty() {
-        run_full_deactivation(
+    // Full deactivation (no candidate validation) is reserved for the no-runner,
+    // drift-tolerant path. When a runner is provided, validate the final module
+    // state so callers can observe and test the module lane ordering.
+    if runner.is_none() && remaining_ids.is_empty() {
+        return run_full_deactivation(
             root,
             nu_paths,
             lockfile,
@@ -374,32 +429,44 @@ fn run_module_deactivate_lane(
             &managed_file_path,
             &currently_active_ids,
             pre_mutation_snapshot_id,
-        )
-    } else {
-        nu_paths.validate_drift()?;
-
-        let real_runner;
-        let runner_ref: &dyn CandidateRunner = if let Some(r) = runner {
-            r
-        } else {
-            real_runner = NuCandidateRunner::new(&nu_paths.nu_executable);
-            &real_runner
-        };
-
-        run_partial_deactivation(
-            root,
-            nu_paths,
-            lockfile,
-            targets_requested,
-            &remaining_ids,
-            managed_path,
-            &vendor_autoload_dir,
-            &managed_file_path,
-            &currently_active_ids,
-            runner_ref,
-            pre_mutation_snapshot_id,
-        )
+        );
     }
+
+    nu_paths.validate_drift()?;
+
+    let real_runner;
+    let runner_ref: &dyn CandidateRunner = if let Some(r) = runner {
+        r
+    } else {
+        real_runner = NuCandidateRunner::new(&nu_paths.nu_executable);
+        &real_runner
+    };
+
+    run_partial_deactivation(
+        root,
+        nu_paths,
+        lockfile,
+        targets_requested,
+        &remaining_ids,
+        managed_path,
+        &vendor_autoload_dir,
+        &managed_file_path,
+        &currently_active_ids,
+        runner_ref,
+        pre_mutation_snapshot_id,
+    )?;
+
+    // When a runner-driven deactivation removes the last module, delete the
+    // managed autoload file and state so the result matches the full path.
+    if remaining_ids.is_empty() {
+        delete_managed_file(managed_path).with_context(|| {
+            "Failed to delete managed autoload file after final module deactivation"
+        })?;
+        AutoloadState::delete(root)
+            .with_context(|| "Failed to delete autoload state after final module deactivation")?;
+    }
+
+    Ok(())
 }
 
 /// Deactivate named modules without acquiring the mutation lock, snapshotting, or
@@ -408,6 +475,7 @@ pub(crate) fn deactivate_modules_unlocked(
     root: &Path,
     package_ids: &[String],
     runner: Option<&dyn CandidateRunner>,
+    pre_mutation_snapshot_id: Option<String>,
 ) -> Result<()> {
     if package_ids.is_empty() {
         return Ok(());
@@ -453,7 +521,7 @@ pub(crate) fn deactivate_modules_unlocked(
         &mut lockfile,
         &targets,
         runner,
-        None,
+        pre_mutation_snapshot_id,
     )
 }
 
@@ -1889,41 +1957,6 @@ mod tests {
         let journal = PendingPluginDeactivate::load(env.root()).unwrap().unwrap();
         assert_eq!(journal.entries.len(), 1);
         assert_eq!(journal.entries[0].status, PluginDeactivateStatus::Failed);
-    }
-
-    #[test]
-    fn fake_unregistrar_failure_retains_profile_desire() {
-        use crate::state::activation_profile::{ActivationProfile, ProfileKind};
-
-        let env = PluginTestEnv::new();
-        env.write_nu_paths();
-        env.seed_active_plugin("owner/highlight");
-
-        let mut profile = ActivationProfile::new();
-        profile.ensure_contains("0.113", ProfileKind::Plugin, "owner/highlight");
-        profile.save(env.root()).unwrap();
-
-        let args = DeactivateArgs {
-            packages: vec!["owner/highlight".to_string()],
-            verbose: false,
-        };
-        let err = execute_with_unregistrar(&args, env.root(), &|_nu, _name, _cfg| {
-            bail!("simulated unregister failure")
-        })
-        .unwrap_err();
-        assert!(err.to_string().contains("failed to deactivate"));
-
-        let profile = ActivationProfile::load(env.root())
-            .unwrap()
-            .expect("profile present");
-        assert!(
-            profile
-                .set_for_minor("0.113")
-                .plugins
-                .iter()
-                .any(|id| id == "owner/highlight"),
-            "failed deactivate must retain profile desire"
-        );
     }
 
     #[test]

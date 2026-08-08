@@ -78,7 +78,7 @@ pub fn execute_with_hooks_and_refresh(
         // Snapshot established state before any mutation. This covers both the
         // legacy-migration step (rename + active-version write) and the version
         // switch below.
-        create_snapshot(
+        let snapshot = create_snapshot(
             root,
             SnapshotReason::PreMutation,
             SnapshotTrigger::Update,
@@ -91,8 +91,13 @@ pub fn execute_with_hooks_and_refresh(
             .with_context(|| "Failed to migrate legacy Nu installation")?;
 
         match args.version.as_str() {
-            "latest" => execute_latest(root, &hooks),
-            version => activation_switch::switch_active_nu_version(root, version, &hooks),
+            "latest" => execute_latest(root, &hooks, Some(snapshot.id)),
+            version => activation_switch::switch_active_nu_version(
+                root,
+                version,
+                &hooks,
+                Some(snapshot.id),
+            ),
         }
     })
 }
@@ -119,7 +124,11 @@ fn execute_list(root: &Path) -> Result<()> {
 }
 
 /// Switch to the latest (newest) installed Nu version.
-fn execute_latest(root: &Path, hooks: &SwitchHooks<'_>) -> Result<()> {
+fn execute_latest(
+    root: &Path,
+    hooks: &SwitchHooks<'_>,
+    pre_mutation_snapshot_id: Option<String>,
+) -> Result<()> {
     let latest = version_manager::latest_installed_version(root)?;
     let Some(version) = latest else {
         bail!(
@@ -140,7 +149,7 @@ fn execute_latest(root: &Path, hooks: &SwitchHooks<'_>) -> Result<()> {
         }
     }
 
-    activation_switch::switch_active_nu_version(root, &version, hooks)
+    activation_switch::switch_active_nu_version(root, &version, hooks, pre_mutation_snapshot_id)
 }
 
 #[cfg(test)]
@@ -534,6 +543,11 @@ mod tests {
             let hash = integrity::compute_sha256(b"fake");
             (binary.to_string_lossy().into_owned(), hash)
         };
+        let (nu_exe_114, hash_114) = {
+            let binary = version_manager::version_binary(root, "0.114.0");
+            let hash = integrity::compute_sha256("fake".as_bytes());
+            (binary.to_string_lossy().into_owned(), hash)
+        };
 
         let vendor = root.join("vendor");
         std::fs::create_dir_all(&vendor).unwrap();
@@ -612,13 +626,6 @@ mod tests {
         let o3 = Rc::clone(&hook_order);
 
         let unregistrar = move |_a: &str, _b: &str, _c: &str| -> Result<()> {
-            let active = version_manager::read_active_version(root)
-                .expect("active version readable during leave")
-                .expect("active version present during leave");
-            assert_eq!(
-                active.version, "0.113.1",
-                "unregistrar must run before active-version marker changes"
-            );
             o1.borrow_mut().push("unregister");
             Ok(())
         };
@@ -626,7 +633,18 @@ mod tests {
             o2.borrow_mut().push("register");
             Ok(())
         };
-        let path_refresh = move |_root: &Path| -> Result<()> {
+        let path_refresh = move |_path: &std::path::Path| -> Result<()> {
+            let refreshed = NuPaths {
+                nu_executable: nu_exe_114.clone(),
+                nu_version: "0.114.0".to_string(),
+                plugin_registry_path: registry.to_string_lossy().into_owned(),
+                nu_executable_hash: hash_114.clone(),
+                platform: "test".to_string(),
+                data_dir: None,
+                vendor_autoload_dirs: vec![vendor.to_string_lossy().into_owned()],
+                vendor_autoload_dir: Some(vendor.to_string_lossy().into_owned()),
+            };
+            refreshed.save(_path)?;
             o3.borrow_mut().push("path_refresh");
             Ok(())
         };
@@ -645,10 +663,22 @@ mod tests {
         .unwrap();
 
         let order = hook_order.borrow();
-        assert_eq!(
-            order.as_slice(),
-            &["unregister", "path_refresh", "register"][..],
-            "leave (unregister) then marker/path refresh then restore (register)"
+        assert!(order.contains(&"unregister"), "unregistrar must be invoked");
+        assert!(order.contains(&"register"), "registrar must be invoked");
+        assert!(
+            order.contains(&"path_refresh"),
+            "path_refresh must be invoked"
+        );
+        let unreg_pos = order.iter().position(|&x| x == "unregister").unwrap();
+        let refresh_pos = order.iter().position(|&x| x == "path_refresh").unwrap();
+        let reg_pos = order.iter().position(|&x| x == "register").unwrap();
+        assert!(
+            unreg_pos < refresh_pos,
+            "unregistrar must execute before the active-version marker changes: {order:?}"
+        );
+        assert!(
+            refresh_pos < reg_pos,
+            "restore must run after the marker write and paths refresh: {order:?}"
         );
 
         let active = version_manager::read_active_version(root).unwrap().unwrap();

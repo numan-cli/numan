@@ -159,6 +159,18 @@ fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> 
         }
     }
 
+    // Clear desire while the remove journal is still present. Failure here
+    // must not report success: a leftover profile entry would make later
+    // `numan use` restore attempts target a removed package.
+    crate::state::activation_profile::remove_from_all_minors(root, &args.package).with_context(
+        || {
+            format!(
+                "Failed to clear activation profile entries for '{}'",
+                args.package
+            )
+        },
+    )?;
+
     PendingLifecycle::clear(root)?;
 
     if let Err(e) = crate::state::activation_profile::remove_from_all_minors(root, &args.package) {

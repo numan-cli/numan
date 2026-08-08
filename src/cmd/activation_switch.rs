@@ -30,6 +30,11 @@ pub struct SwitchActivationReport {
     pub skipped_missing: Vec<String>,
     pub skipped_incompatible: Vec<String>,
     pub failed: Vec<(String, String)>,
+    /// Lifecycle errors that did not invalidate the per-module classification
+    /// (e.g. a journal-cleanup failure after activation records and
+    /// autoload-state.json were already committed). Surfaced as warnings so a
+    /// successful restore is not reported as a package failure.
+    pub lifecycle_errors: Vec<String>,
 }
 
 impl SwitchActivationReport {
@@ -61,6 +66,9 @@ impl SwitchActivationReport {
                 "{} Failed to restore {id}: {err}",
                 console::style("✗").red()
             );
+        }
+        for err in &self.lifecycle_errors {
+            eprintln!("{} {err}", console::style("✗").red());
         }
     }
 
@@ -125,6 +133,7 @@ pub fn reconcile_target_profile(
     root: &Path,
     target_minor: &str,
     hooks: &SwitchHooks<'_>,
+    pre_mutation_snapshot_id: Option<String>,
 ) -> Result<SwitchActivationReport> {
     let mut report = SwitchActivationReport::default();
     let profile = ActivationProfile::load_or_default(root)?;
@@ -141,7 +150,14 @@ pub fn reconcile_target_profile(
     };
     nu_paths.validate_drift()?;
 
-    restore_desired(root, &nu_paths, &desired, hooks, &mut report)?;
+    restore_desired(
+        root,
+        &nu_paths,
+        &desired,
+        hooks,
+        &mut report,
+        pre_mutation_snapshot_id,
+    )?;
     Ok(report)
 }
 
@@ -151,16 +167,16 @@ pub fn leave_current_nu(
     root: &Path,
     leaving_minor: &str,
     hooks: &SwitchHooks<'_>,
+    pre_mutation_snapshot_id: Option<String>,
 ) -> Result<SwitchActivationReport> {
     let mut report = SwitchActivationReport::default();
     let paths_present = root.join("nu_state").join("paths.json").is_file();
-    let lockfile = match Lockfile::load(root) {
-        Ok(lf) => lf,
-        Err(_) => {
-            // No lockfile yet: nothing to leave.
-            return Ok(report);
-        }
-    };
+    // A missing lockfile already yields an empty lockfile. Any error here means
+    // unreadable or malformed state, which must stop the switch.
+    let lockfile = Lockfile::load(root).with_context(|| {
+        "Cannot switch Nu version: the lockfile could not be read. \
+         Repair or restore it, then retry `numan use`."
+    })?;
 
     if !paths_present {
         // Without NuPaths we cannot match is_active_for. Fail closed when any
@@ -207,6 +223,7 @@ pub fn leave_current_nu(
             root,
             &currently_active.modules,
             hooks.runner,
+            pre_mutation_snapshot_id,
         )
         .with_context(|| "Failed to deactivate modules before Nu switch")?;
         report.left_modules = currently_active.modules.clone();
@@ -225,6 +242,7 @@ pub fn restore_after_switch(
     root: &Path,
     target_minor: &str,
     hooks: &SwitchHooks<'_>,
+    pre_mutation_snapshot_id: Option<String>,
 ) -> Result<SwitchActivationReport> {
     let mut report = SwitchActivationReport::default();
     let profile = ActivationProfile::load_or_default(root)?;
@@ -249,7 +267,14 @@ pub fn restore_after_switch(
         return Ok(report);
     }
 
-    restore_desired(root, &nu_paths, &desired, hooks, &mut report)?;
+    restore_desired(
+        root,
+        &nu_paths,
+        &desired,
+        hooks,
+        &mut report,
+        pre_mutation_snapshot_id,
+    )?;
     Ok(report)
 }
 
@@ -267,6 +292,7 @@ fn restore_desired(
     desired: &MinorActivationSet,
     hooks: &SwitchHooks<'_>,
     report: &mut SwitchActivationReport,
+    pre_mutation_snapshot_id: Option<String>,
 ) -> Result<()> {
     let lockfile = Lockfile::load(root)?;
     let registry = RegistryManager::new(root).ok();
@@ -319,12 +345,23 @@ fn restore_desired(
             runner_owned = NuCandidateRunner::new(&nu_paths.nu_executable);
             &runner_owned
         };
-        match crate::cmd::activate::activate_modules_unlocked(root, &module_ids, runner) {
+        match crate::cmd::activate::activate_modules_unlocked(
+            root,
+            &module_ids,
+            runner,
+            pre_mutation_snapshot_id,
+        ) {
             Ok(failed) if failed => {
-                for id in &module_ids {
-                    report
-                        .failed
-                        .push((id.clone(), "module activation lane reported failure".into()));
+                let lockfile = Lockfile::load(root)?;
+                let active = collect_currently_active(&lockfile, nu_paths);
+                for id in module_ids {
+                    if active.modules.contains(&id) {
+                        report.restored_modules.push(id);
+                    } else {
+                        report
+                            .failed
+                            .push((id, "module activation lane reported failure".into()));
+                    }
                 }
             }
             Ok(_) => {
@@ -333,9 +370,23 @@ fn restore_desired(
                 }
             }
             Err(e) => {
+                // The error may originate after activation records and
+                // autoload-state.json were already committed (e.g. a
+                // journal-cleanup failure), so reload the lockfile and classify
+                // each module by its on-disk state rather than marking every
+                // requested module failed. Match the Ok(failed) branch.
+                let lockfile = Lockfile::load(root)?;
+                let active = collect_currently_active(&lockfile, nu_paths);
                 for id in module_ids {
-                    report.failed.push((id, e.to_string()));
+                    if active.modules.contains(&id) {
+                        report.restored_modules.push(id);
+                    } else {
+                        report
+                            .failed
+                            .push((id, "module activation lane reported failure".into()));
+                    }
                 }
+                report.lifecycle_errors.push(e.to_string());
             }
         }
     }
@@ -381,7 +432,10 @@ fn classify_restore_target(
                     return RestoreClass::Incompatible;
                 }
             } else if expected_type == "plugin" && !resolver.has_compatible_version(&pkg) {
-                // Installed version not in index; still refuse if no version works.
+                // Plugins require a binary target match, so an installed
+                // version absent from the current index can still be
+                // incompatible. Modules are pure Nu scripts with no target
+                // constraint, so we trust the lockfile and restore them.
                 return RestoreClass::Incompatible;
             }
         }
@@ -427,6 +481,7 @@ pub fn switch_active_nu_version(
     root: &Path,
     target_version: &str,
     hooks: &SwitchHooks<'_>,
+    pre_mutation_snapshot_id: Option<String>,
 ) -> Result<()> {
     let target_version = version_manager::normalize_version(target_version)?;
     let target_minor = activation_profile::nu_minor_key_from_version(&target_version)?;
@@ -458,7 +513,8 @@ pub fn switch_active_nu_version(
         .is_some_and(|c| c.version == target_version);
 
     if same_target {
-        let report = reconcile_target_profile(root, &target_minor, hooks)?;
+        let report =
+            reconcile_target_profile(root, &target_minor, hooks, pre_mutation_snapshot_id)?;
         report.print_summary();
         if report.has_lifecycle_failure() {
             bail!(
@@ -477,7 +533,7 @@ pub fn switch_active_nu_version(
 
     let mut leave_report = SwitchActivationReport::default();
     if let Some(ref leaving) = leaving_minor {
-        leave_report = leave_current_nu(root, leaving, hooks)?;
+        leave_report = leave_current_nu(root, leaving, hooks, pre_mutation_snapshot_id.clone())?;
     }
 
     let on_tree = version_manager::version_binary(root, &target_version);
@@ -497,9 +553,11 @@ pub fn switch_active_nu_version(
         refresh_cached_nu_paths_after_switch(root)?;
     }
 
-    let restore_report = restore_after_switch(root, &target_minor, hooks)?;
-
+    // Print leave summary before restore so it is still shown if restore fails.
     leave_report.print_summary();
+
+    let restore_report =
+        restore_after_switch(root, &target_minor, hooks, pre_mutation_snapshot_id)?;
     restore_report.print_summary();
 
     if restore_report.has_lifecycle_failure() {
@@ -596,7 +654,7 @@ fn refresh_cached_nu_paths_after_switch(root: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::core::integrity;
-    use crate::nu::autoload::FakeCandidateRunner;
+    use crate::nu::autoload::{CandidateRunner, FakeCandidateRunner};
     use crate::nu::version_manager;
     use crate::state::activation_profile::{ActivationProfile, ProfileKind};
     use crate::state::lockfile::{LockfileEntry, ModuleActivation, PluginActivation};
@@ -605,6 +663,18 @@ mod tests {
     use std::collections::BTreeMap;
     use std::rc::Rc;
     use tempfile::TempDir;
+
+    /// Records "module" when the module candidate runner runs (for leave/restore order tests).
+    struct TrackingRunner<'a> {
+        inner: &'a FakeCandidateRunner,
+        order: Rc<RefCell<Vec<&'static str>>>,
+    }
+    impl CandidateRunner for TrackingRunner<'_> {
+        fn run(&self, candidate: &Path) -> Result<()> {
+            self.order.borrow_mut().push("module");
+            self.inner.run(candidate)
+        }
+    }
 
     fn write_fake_nu(root: &Path, version: &str, contents: &[u8]) -> (String, String) {
         let binary_name = if cfg!(windows) { "nu.exe" } else { "nu" };
@@ -782,7 +852,7 @@ mod tests {
         };
 
         let _lock = acquire_mutation_lock(root).unwrap();
-        let err = leave_current_nu(root, "0.114", &hooks).unwrap_err();
+        let err = leave_current_nu(root, "0.114", &hooks, None).unwrap_err();
         let err_msg = format!("{err:#}");
         assert!(
             err_msg.contains("boom"),
@@ -808,7 +878,7 @@ mod tests {
             runner: None,
             path_refresh: None,
         };
-        leave_current_nu(root, "0.114", &hooks2).unwrap();
+        leave_current_nu(root, "0.114", &hooks2, None).unwrap();
         let profile = ActivationProfile::load(root).unwrap().unwrap();
         assert_eq!(
             profile.set_for_minor("0.114").plugins,
@@ -849,22 +919,17 @@ mod tests {
 
         let order: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
         let o1 = Rc::clone(&order);
+        let o2 = Rc::clone(&order);
         let unreg = move |_a: &str, _b: &str, _c: &str| -> Result<()> {
-            // Verify module was already deactivated before plugin unreg runs.
-            let lf = Lockfile::load(root).unwrap();
-            assert!(
-                lf.packages
-                    .get("o/mod")
-                    .unwrap()
-                    .module_activation
-                    .is_none(),
-                "module must be deactivated before plugin unreg"
-            );
             o1.borrow_mut().push("plugin");
             Ok(())
         };
         let reg = |_a: &str, _b: &str, _c: &str| Ok(());
-        let runner = FakeCandidateRunner::success();
+        let inner_runner = FakeCandidateRunner::success();
+        let runner = TrackingRunner {
+            inner: &inner_runner,
+            order: o2,
+        };
         let hooks = SwitchHooks {
             registrar: &reg,
             unregistrar: &unreg,
@@ -873,11 +938,11 @@ mod tests {
         };
 
         let _lock = acquire_mutation_lock(root).unwrap();
-        leave_current_nu(root, "0.113", &hooks).unwrap();
+        leave_current_nu(root, "0.113", &hooks, None).unwrap();
         assert_eq!(
             order.borrow().as_slice(),
-            &["plugin"][..],
-            "plugin unreg runs after module lane"
+            &["module", "plugin"][..],
+            "module lane executes before plugin unreg"
         );
         let lockfile = Lockfile::load(root).unwrap();
         assert!(lockfile
@@ -957,7 +1022,7 @@ mod tests {
             path_refresh: None,
         };
         let _lock = acquire_mutation_lock(root).unwrap();
-        let err = switch_active_nu_version(root, "0.114.0", &hooks).unwrap_err();
+        let err = switch_active_nu_version(root, "0.114.0", &hooks, None).unwrap_err();
         assert!(
             err.to_string().contains("cached Nu paths are missing"),
             "got: {err}"
@@ -1026,7 +1091,7 @@ mod tests {
             path_refresh: Some(&refresh114),
         };
         let _lock = acquire_mutation_lock(root).unwrap();
-        switch_active_nu_version(root, "0.114.0", &hooks_to_114).unwrap();
+        switch_active_nu_version(root, "0.114.0", &hooks_to_114, None).unwrap();
         assert_eq!(*unreg_count.borrow(), 1);
         assert!(Lockfile::load(root)
             .unwrap()
@@ -1048,7 +1113,7 @@ mod tests {
             runner: None,
             path_refresh: Some(&refresh113),
         };
-        switch_active_nu_version(root, "0.113.1", &hooks_to_113).unwrap();
+        switch_active_nu_version(root, "0.113.1", &hooks_to_113, None).unwrap();
         assert_eq!(*reg_count.borrow(), 1);
         assert!(Lockfile::load(root)
             .unwrap()
@@ -1106,7 +1171,7 @@ mod tests {
             path_refresh: None,
         };
         let _lock = acquire_mutation_lock(root).unwrap();
-        switch_active_nu_version(root, "0.113.1", &hooks).unwrap();
+        switch_active_nu_version(root, "0.113.1", &hooks, None).unwrap();
         assert_eq!(*unreg_n.borrow(), 0, "same-target must not deactivate");
         assert_eq!(*reg_n.borrow(), 1, "missing desired must be restored");
         assert!(Lockfile::load(root)
@@ -1245,15 +1310,17 @@ mod tests {
 
         let order: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
         let o1 = Rc::clone(&order);
+        let o2 = Rc::clone(&order);
         let reg = move |_a: &str, _b: &str, _c: &str| -> Result<()> {
             o1.borrow_mut().push("plugin");
             Ok(())
         };
         let unreg = |_a: &str, _b: &str, _c: &str| Ok(());
-        let runner = FakeCandidateRunner::success();
-        // Track module activation by wrapping order push via a custom runner
-        // won't work easily. Instead: after restore, both active; call order
-        // observed because plugin reg runs before module lane starts.
+        let inner_runner = FakeCandidateRunner::success();
+        let runner = TrackingRunner {
+            inner: &inner_runner,
+            order: o2,
+        };
         let hooks = SwitchHooks {
             registrar: &reg,
             unregistrar: &unreg,
@@ -1261,8 +1328,12 @@ mod tests {
             path_refresh: None,
         };
         let _lock = acquire_mutation_lock(root).unwrap();
-        let report = reconcile_target_profile(root, "0.113", &hooks).unwrap();
-        assert_eq!(order.borrow().as_slice(), &["plugin"][..]);
+        let report = reconcile_target_profile(root, "0.113", &hooks, None).unwrap();
+        assert_eq!(
+            order.borrow().as_slice(),
+            &["plugin", "module"][..],
+            "restore activates plugins then modules"
+        );
         assert!(report.restored_plugins.contains(&"o/plug".to_string()));
         assert!(report.restored_modules.contains(&"o/mod".to_string()));
         let lf = Lockfile::load(root).unwrap();
@@ -1273,5 +1344,82 @@ mod tests {
             .unwrap()
             .module_activation
             .is_some());
+    }
+
+    #[test]
+    fn restore_classifies_modules_after_post_commit_journal_cleanup_error() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        let (exe, hash) = write_fake_nu(root, "0.113.1", b"nu-113");
+        let vendor = root.join("vendor");
+        let paths = save_paths(root, &exe, "0.113.1", &hash, &vendor);
+        version_manager::write_active_version(root, "0.113.1").unwrap();
+
+        let m_pay = "packages/modules/o/mod/1.0.0-bbb";
+        seed_module_payload(root, m_pay);
+
+        let mut lockfile = Lockfile::empty();
+        lockfile
+            .packages
+            .insert("o/mod".into(), module_entry(&paths, m_pay, false));
+        lockfile.save(root).unwrap();
+
+        let mut profile = ActivationProfile::new();
+        profile.ensure_contains("0.113", ProfileKind::Module, "o/mod");
+        profile.save(root).unwrap();
+
+        // Inject a journal-cleanup failure after activation records and
+        // autoload-state.json are committed (run_module_lane step 12).
+        std::fs::write(
+            root.join("state").join(".numan-test-fail-autoload-delete"),
+            b"",
+        )
+        .unwrap();
+
+        let reg = |_a: &str, _b: &str, _c: &str| Ok(());
+        let unreg = |_a: &str, _b: &str, _c: &str| Ok(());
+        let inner_runner = FakeCandidateRunner::success();
+        let hooks = SwitchHooks {
+            registrar: &reg,
+            unregistrar: &unreg,
+            runner: Some(&inner_runner),
+            path_refresh: None,
+        };
+        let _lock = acquire_mutation_lock(root).unwrap();
+        let report = reconcile_target_profile(root, "0.113", &hooks, None).unwrap();
+
+        // The module was committed before the journal-cleanup error, so it
+        // must be classified as restored rather than failed.
+        assert!(
+            report.restored_modules.contains(&"o/mod".to_string()),
+            "committed module must be restored, got restored_modules={:?} failed={:?}",
+            report.restored_modules,
+            report.failed
+        );
+        assert!(
+            report.failed.is_empty(),
+            "no module should be marked failed when activation committed, got failed={:?}",
+            report.failed
+        );
+        assert!(
+            !report.lifecycle_errors.is_empty(),
+            "journal-cleanup error must be retained as a lifecycle error"
+        );
+        assert!(
+            report.lifecycle_errors[0].contains("injected journal-cleanup failure"),
+            "lifecycle error must carry the injected failure, got {:?}",
+            report.lifecycle_errors
+        );
+        assert!(
+            !report.has_lifecycle_failure(),
+            "a post-commit journal-cleanup error must not bail the switch"
+        );
+
+        // The pending-autoload journal must remain for doctor/recovery.
+        assert!(
+            root.join("state").join("pending-autoload.json").is_file(),
+            "journal must be preserved after the cleanup failure"
+        );
     }
 }
