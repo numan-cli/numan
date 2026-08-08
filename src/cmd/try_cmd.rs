@@ -191,7 +191,7 @@ fn report_incompatible(
 pub fn execute(args: &TryArgs, root: &Path) -> Result<()> {
     let package_spec = args.package.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| {
         anyhow::anyhow!(
-            "error: a package is required\n\nUsage:\n  numan try <package>\n\nExample:\n  numan try idanarye/nu_plugin_skim"
+            "a package is required\n\nUsage:\n  numan try <owner/name[@version]>\n\nExample:\n  numan try idanarye/nu_plugin_skim"
         )
     })?;
 
