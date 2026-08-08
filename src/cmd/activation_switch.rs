@@ -320,10 +320,16 @@ fn restore_desired(
         };
         match crate::cmd::activate::activate_modules_unlocked(root, &module_ids, runner) {
             Ok(failed) if failed => {
-                for id in &module_ids {
-                    report
-                        .failed
-                        .push((id.clone(), "module activation lane reported failure".into()));
+                let lockfile = Lockfile::load(root)?;
+                let active = collect_currently_active(&lockfile, nu_paths);
+                for id in module_ids {
+                    if active.modules.contains(&id) {
+                        report.restored_modules.push(id);
+                    } else {
+                        report
+                            .failed
+                            .push((id, "module activation lane reported failure".into()));
+                    }
                 }
             }
             Ok(_) => {
