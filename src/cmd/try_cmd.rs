@@ -6,7 +6,7 @@ use crate::core::registry::RegistryManager;
 use crate::core::resolve::{self, Incompatibility, Resolver};
 use crate::install::transaction::{self, InstallResult};
 use crate::state::lockfile::Lockfile;
-use crate::util::fs_safety::acquire_mutation_lock;
+use crate::util::fs_safety::{acquire_mutation_lock, MutationLock};
 use crate::util::hints::{self, CMD_REGISTRY_SYNC};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -231,7 +231,7 @@ pub fn execute(args: &TryArgs, root: &Path) -> Result<()> {
         &platform,
         &nu,
         transaction::install_package,
-        activate::execute,
+        activate::execute_under_lock,
     )
 }
 
@@ -250,7 +250,7 @@ fn try_package<I, A>(
 ) -> Result<()>
 where
     I: for<'b> Fn(&str, Option<&str>, &transaction::InstallOptions<'b>) -> Result<InstallResult>,
-    A: Fn(&ActivateArgs, &Path) -> Result<()>,
+    A: Fn(&ActivateArgs, &Path, &MutationLock) -> Result<()>,
 {
     let resolver = Resolver::new(platform, nu);
 
@@ -341,10 +341,9 @@ where
         return Ok(());
     }
 
-    // `activate` acquires the same root mutation lock, so release the install
-    // lock before invoking it.
-    drop(_lock);
-
+    // Keep the install mutation lock through activation so a concurrent
+    // remove/update cannot replace the just-installed payload before activate
+    // reloads the lockfile. `activate::execute_under_lock` does not re-acquire.
     if let Err(e) = activate(
         &ActivateArgs {
             packages: vec![package_id.to_string()],
@@ -353,6 +352,7 @@ where
             check: false,
         },
         root,
+        &_lock,
     ) {
         eprintln!("Installed '{package_id}' but activation failed: {e:#}");
         bail!("Activation failed after install.");
@@ -542,7 +542,7 @@ mod tests {
             &platform,
             &nu,
             |_, _, _| panic!("install must not be called"),
-            |_, _| panic!("activate must not be called"),
+            |_, _, _| panic!("activate must not be called"),
         )
         .unwrap_err()
         .to_string();
@@ -573,7 +573,7 @@ mod tests {
             &platform,
             &nu,
             |_, _, _| panic!("install must not be called"),
-            |_, _| panic!("activate must not be called"),
+            |_, _, _| panic!("activate must not be called"),
         )
         .unwrap_err()
         .to_string();
@@ -614,7 +614,7 @@ mod tests {
             &platform,
             &nu,
             |_, _, _| panic!("install must not be called"),
-            |_, _| panic!("activate must not be called"),
+            |_, _, _| panic!("activate must not be called"),
         )
         .unwrap_err()
         .to_string();
@@ -644,7 +644,7 @@ mod tests {
             &platform,
             &nu,
             |_, _, _| panic!("install must not be called"),
-            |_, _| panic!("activate must not be called"),
+            |_, _, _| panic!("activate must not be called"),
         )
         .unwrap_err()
         .to_string();
@@ -672,7 +672,7 @@ mod tests {
             &platform,
             &nu,
             |_, _, _| panic!("install must not be called"),
-            |_, _| panic!("activate must not be called"),
+            |_, _, _| panic!("activate must not be called"),
         )
         .unwrap_err()
         .to_string();
@@ -710,7 +710,7 @@ mod tests {
                 assert_eq!(ver, None);
                 Ok(install_result("test/plugin", "1.0.0", root.path()))
             },
-            |args, _| {
+            |args, _, _lock| {
                 activated.set(true);
                 assert_eq!(args.packages, vec!["test/plugin".to_string()]);
                 Ok(())
@@ -747,7 +747,7 @@ mod tests {
                 assert_eq!(id, "test/plugin");
                 Ok(install_result("test/plugin", "1.0.0", root.path()))
             },
-            |_, _| panic!("activate must not be called"),
+            |_, _, _| panic!("activate must not be called"),
         );
         assert!(result.is_ok(), "{result:?}");
         assert!(installed.get());
@@ -783,7 +783,7 @@ mod tests {
                     path: root.path().to_path_buf(),
                 })
             },
-            |_, _| {
+            |_, _, _| {
                 activated.set(true);
                 Ok(())
             },
@@ -817,7 +817,7 @@ mod tests {
                 installed.set(true);
                 Ok(install_result("test/plugin", "1.0.0", root.path()))
             },
-            |_, _| Err(anyhow::anyhow!("plugin add failed")),
+            |_, _, _| Err(anyhow::anyhow!("plugin add failed")),
         )
         .unwrap_err()
         .to_string();
@@ -953,7 +953,7 @@ mod tests {
             &platform,
             &nu,
             |_, _, _| panic!("install must not be called"),
-            |_, _| panic!("activate must not be called"),
+            |_, _, _| panic!("activate must not be called"),
         )
         .unwrap_err()
         .to_string();
@@ -981,7 +981,7 @@ mod tests {
             &platform,
             &nu,
             |_, _, _| panic!("install must not be called"),
-            |_, _| panic!("activate must not be called"),
+            |_, _, _| panic!("activate must not be called"),
         )
         .unwrap_err()
         .to_string();
@@ -1023,7 +1023,7 @@ mod tests {
             &platform,
             &nu,
             |_, _, _| panic!("install must not be called"),
-            |_, _| panic!("activate must not be called"),
+            |_, _, _| panic!("activate must not be called"),
         )
         .unwrap_err()
         .to_string();
@@ -1042,10 +1042,10 @@ mod tests {
     // --- Lock handoff regression test ---
 
     #[test]
-    fn try_package_releases_lock_before_activation() {
-        // The activate callback must be able to acquire the same root mutation
-        // lock. If _lock is still held, acquire_mutation_lock will fail and
-        // activation will error.
+    fn try_package_holds_lock_during_activation() {
+        // Install→activate must keep the root mutation lock held so a concurrent
+        // remove/update cannot race the handoff. The activate callback sees the
+        // held guard, and a nested acquire_mutation_lock must fail.
         let root = tempfile::tempdir().unwrap();
         let package = pkg("test/plugin", "*", PackageType::Plugin);
         let platform = windows_platform();
@@ -1056,6 +1056,7 @@ mod tests {
         };
 
         let activated = Cell::new(false);
+        let nested_acquire_failed = Cell::new(false);
         let result = try_package(
             &args,
             root.path(),
@@ -1066,15 +1067,23 @@ mod tests {
             &platform,
             &nu,
             |_, _, _| Ok(install_result("test/plugin", "1.0.0", root.path())),
-            |_, root| {
-                // If the install lock is still held, this will fail.
-                let _lock = acquire_mutation_lock(root)?;
+            |_, root, _lock| {
+                // Prove the install lock is still held.
+                assert!(
+                    acquire_mutation_lock(root).is_err(),
+                    "mutation lock must remain held across activation"
+                );
+                nested_acquire_failed.set(true);
                 activated.set(true);
                 Ok(())
             },
         );
         assert!(result.is_ok(), "{result:?}");
         assert!(activated.get(), "activate callback must have run");
+        assert!(
+            nested_acquire_failed.get(),
+            "nested lock acquire must have been attempted"
+        );
     }
 
     #[test]
