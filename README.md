@@ -125,11 +125,11 @@ Tracks the default branch. For a reproducible install, choose a published tag fr
 ### Homebrew (macOS / Linux)
 
 ```bash
-brew tap tonythethompson/numan
+brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan
 brew install numan
 ```
 
-Uses the public [`homebrew-numan`](https://github.com/tonythethompson/homebrew-numan) tap. Formula digests update automatically after each GitHub Release (see [docs/PACKAGING.md](docs/PACKAGING.md)).
+Uses the public [`homebrew-numan`](https://github.com/tonythethompson/homebrew-numan) tap. Prefer the explicit HTTPS remote so `brew update` does not depend on SSH host keys. Formula digests update automatically after each GitHub Release (see [docs/PACKAGING.md](docs/PACKAGING.md)).
 
 ### winget (Windows)
 
@@ -177,7 +177,7 @@ Install with **one** of the options below, then run the activation path.
 **Homebrew (macOS / Linux)**
 
 ```bash
-brew tap tonythethompson/numan && brew install numan
+brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan && brew install numan
 ```
 
 **winget (Windows)**
