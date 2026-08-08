@@ -3,7 +3,8 @@
 //! Available to crate unit tests and `tests/` integration tests. Prefer wrapping
 //! any PATH mutation with [`PathRestoreGuard`] so concurrent tests cannot race
 //! on the process-global environment and so a developer shell is not left with
-//! a poisoned PATH after the test binary exits.
+//! a poisoned PATH after the test binary exits. Prefer [`HomeRestoreGuard`]
+//! around tests that temporarily override `HOME`.
 //!
 //! On Windows (and Unix), the guard sets a test-only
 //! `NUMAN_TEST_NO_PERSIST_USER_PATH` flag so production
@@ -89,6 +90,47 @@ impl Default for PathRestoreGuard {
     }
 }
 
+/// Serializes every HOME snapshot/restore so concurrent tests cannot race
+/// through the process-global environment.
+static HOME_MUTEX: Mutex<()> = Mutex::new(());
+
+/// RAII guard that snapshots `HOME` on construction and restores it on drop.
+///
+/// Use alongside [`PathRestoreGuard`] when a test also mutates PATH /
+/// `NUMAN_TEST_NO_PERSIST_USER_PATH`. Acquire Path first, then Home, to keep
+/// lock order consistent across tests.
+pub struct HomeRestoreGuard {
+    original: Option<OsString>,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl HomeRestoreGuard {
+    pub fn new() -> Self {
+        let lock = HOME_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Self {
+            original: std::env::var_os("HOME"),
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for HomeRestoreGuard {
+    fn drop(&mut self) {
+        match self.original.as_ref() {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+}
+
+impl Default for HomeRestoreGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +190,19 @@ mod tests {
                 "flag must be removed when it was originally absent"
             );
         }
+    }
+
+    #[test]
+    fn home_restore_guard_restores_previous_value() {
+        let previous = std::env::var_os("HOME");
+        {
+            let _guard = HomeRestoreGuard::new();
+            std::env::set_var("HOME", "/tmp/numan-home-restore-guard-test");
+            assert_eq!(
+                std::env::var_os("HOME").as_deref(),
+                Some(std::ffi::OsStr::new("/tmp/numan-home-restore-guard-test"))
+            );
+        }
+        assert_eq!(std::env::var_os("HOME"), previous);
     }
 }

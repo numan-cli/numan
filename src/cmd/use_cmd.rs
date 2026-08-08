@@ -4,17 +4,22 @@
 //! - `numan use <version>` — switch to a specific installed version
 //! - `numan use latest` — switch to the newest installed version
 //! - `numan use list` — show all installed versions with active marker
+//!
+//! Cross-minor switches auto-deactivate Numan-active plugins/modules (leave
+//! profile is a union never shrunk by `use`) and restore the target minor's
+//! desired activation set after the marker write. Same-target `use` is
+//! restore-only reconcile.
 
 use anyhow::{bail, Context, Result};
 
 use clap::Args;
 use std::path::Path;
 
-use crate::nu::paths::NuPaths;
+use crate::cmd::activation_switch::{self, SwitchHooks};
+use crate::nu::autoload::CandidateRunner;
 use crate::nu::version_manager;
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::fs_safety::setup_subcommand_lock;
-use crate::util::hints::CMD_INIT_REFRESH;
 
 #[derive(Args, Debug)]
 pub struct UseArgs {
@@ -24,11 +29,48 @@ pub struct UseArgs {
 }
 
 pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
+    execute_with_hooks(
+        args,
+        root,
+        &crate::cmd::activate::run_plugin_add,
+        &crate::cmd::deactivate::run_plugin_rm,
+        None,
+    )
+}
+
+/// Testability entry: injectable plugin registrar, unregistrar, module runner,
+/// and optional paths refresh (for same-root tests without a real Nu binary).
+pub fn execute_with_hooks(
+    args: &UseArgs,
+    root: &Path,
+    registrar: &dyn Fn(&str, &str, &str) -> Result<()>,
+    unregistrar: &dyn Fn(&str, &str, &str) -> Result<()>,
+    runner: Option<&dyn CandidateRunner>,
+) -> Result<()> {
+    execute_with_hooks_and_refresh(args, root, registrar, unregistrar, runner, None)
+}
+
+/// Like [`execute_with_hooks`] with an injectable post-switch paths refresh.
+pub fn execute_with_hooks_and_refresh(
+    args: &UseArgs,
+    root: &Path,
+    registrar: &dyn Fn(&str, &str, &str) -> Result<()>,
+    unregistrar: &dyn Fn(&str, &str, &str) -> Result<()>,
+    runner: Option<&dyn CandidateRunner>,
+    path_refresh: Option<&activation_switch::PathRefreshHook>,
+) -> Result<()> {
     // Listing is read-only: no lock, snapshot, or migrate. A flat legacy
     // install is still surfaced via the VERSION marker without on-disk migrate.
     if args.version == "list" {
         return execute_list(root);
     }
+
+    let hooks = SwitchHooks {
+        registrar,
+        unregistrar,
+        runner,
+        path_refresh,
+    };
 
     // Hold the mutation lock for the entire operation to prevent races
     // between concurrent `numan setup nu` and `numan use` invocations.
@@ -36,7 +78,7 @@ pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
         // Snapshot established state before any mutation. This covers both the
         // legacy-migration step (rename + active-version write) and the version
         // switch below.
-        create_snapshot(
+        let snapshot = create_snapshot(
             root,
             SnapshotReason::PreMutation,
             SnapshotTrigger::Update,
@@ -49,8 +91,13 @@ pub fn execute(args: &UseArgs, root: &Path) -> Result<()> {
             .with_context(|| "Failed to migrate legacy Nu installation")?;
 
         match args.version.as_str() {
-            "latest" => execute_latest(root),
-            version => execute_switch(root, version),
+            "latest" => execute_latest(root, &hooks, Some(snapshot.id)),
+            version => activation_switch::switch_active_nu_version(
+                root,
+                version,
+                &hooks,
+                Some(snapshot.id),
+            ),
         }
     })
 }
@@ -77,126 +124,38 @@ fn execute_list(root: &Path) -> Result<()> {
 }
 
 /// Switch to the latest (newest) installed Nu version.
-fn execute_latest(root: &Path) -> Result<()> {
+fn execute_latest(
+    root: &Path,
+    hooks: &SwitchHooks<'_>,
+    pre_mutation_snapshot_id: Option<String>,
+) -> Result<()> {
     let latest = version_manager::latest_installed_version(root)?;
-    match latest {
-        Some(version) => {
-            // Preserve off-tree `binary_path` when the existing marker already
-            // names this version with a valid off-tree entry. Without this,
-            // every successful `numan use latest` overwrites the marker with
-            // `None`, breaking resolution of `setup nu use <path>` choices.
-            if let Some(existing) = version_manager::read_active_version(root)? {
-                if existing.version == version
-                    && existing
-                        .binary_path
-                        .as_deref()
-                        .is_some_and(|path| std::path::Path::new(path).is_file())
-                {
-                    // Marker is already valid for this version; skip the write
-                    // to avoid clobbering the off-tree binary_path.
-                    println!(
-                        "Nu {} is already active (latest installed; off-tree path preserved).",
-                        version
-                    );
-                    return Ok(());
-                }
-            }
-            version_manager::write_active_version(root, &version)?;
-            println!("Switched to Nu {} (latest installed).", version);
-            refresh_cached_nu_paths_after_switch(root)?;
-            Ok(())
-        }
-        None => {
-            bail!(
-                "No Nu versions installed.\n\
-                 Run 'numan setup nu' or 'numan setup nu <version>' first."
-            )
-        }
-    }
-}
-
-/// Switch to a specific Nu version.
-fn execute_switch(root: &Path, version: &str) -> Result<()> {
-    let version = version_manager::normalize_version(version)?;
-    // Resolve on-tree or off-tree so versions shown by `numan use list`
-    // (including off-tree marker selections) remain switchable.
-    let Some(resolved) = version_manager::resolve_installed_version(root, &version)? else {
-        let installed = version_manager::list_installed_versions(root)?;
-        let hint = if installed.is_empty() {
-            format!(
-                "No Nu versions installed.\n\
-                 Run 'numan setup nu {}' to install.",
-                version
-            )
-        } else {
-            format!(
-                "Nu {} is not installed.\n\
-                 Installed versions: {}\n\
-                 Run 'numan setup nu {}' to install, or 'numan use list' to see available versions.",
-                version,
-                installed.join(", "),
-                version
-            )
-        };
-        bail!("{}", hint);
+    let Some(version) = latest else {
+        bail!(
+            "No Nu versions installed.\n\
+             Run 'numan setup nu' or 'numan setup nu <version>' first."
+        )
     };
 
-    let on_tree = version_manager::version_binary(root, &version);
-    if resolved == on_tree {
-        version_manager::write_active_version(root, &version)
-            .with_context(|| format!("Failed to switch to Nu {}", version))?;
-    } else {
-        version_manager::write_active_version_with_binary(root, &version, &resolved)
-            .with_context(|| format!("Failed to switch to Nu {}", version))?;
-    }
-    println!("Switched to Nu {}.", version);
-    refresh_cached_nu_paths_after_switch(root)?;
-    Ok(())
-}
-
-/// Keep `nu_state/paths.json` aligned with the newly selected active Nu.
-///
-/// `activate` loads the cached paths and only checks that the cached binary
-/// still hashes — side-by-side installs leave the previous binary intact, so
-/// a stale cache would silently keep activating against the old Nu. Re-probe
-/// when possible; if probing fails, delete the cache so callers fail closed
-/// with an `init --refresh` hint instead of using the wrong Nu.
-fn refresh_cached_nu_paths_after_switch(root: &Path) -> Result<()> {
-    let paths_file = root.join("nu_state").join("paths.json");
-    if !paths_file.is_file() {
-        return Ok(());
-    }
-
-    match NuPaths::detect_with_root(root) {
-        Ok(refreshed) => {
-            refreshed.save(root).with_context(|| {
-                format!(
-                    "Failed to write refreshed Nu paths to '{}'",
-                    paths_file.display()
-                )
-            })?;
-            println!("Refreshed cached Nu paths for the selected version.");
-            Ok(())
-        }
-        Err(e) => {
-            std::fs::remove_file(&paths_file).with_context(|| {
-                format!(
-                    "Failed to clear stale Nu paths at '{}' after version switch",
-                    paths_file.display()
-                )
-            })?;
-            eprintln!(
-                "warning: could not re-probe Nu after switch ({e:#}). \
-                 Cleared cached paths; run '{CMD_INIT_REFRESH}' before activating packages."
-            );
-            Ok(())
+    // Self-heal dangling off-tree `binary_path` before same-target reconcile so
+    // a later `use list` / resolver sees a valid on-tree selection.
+    if let Some(existing) = version_manager::read_active_version(root)? {
+        if existing.version == version {
+            if let Some(path) = existing.binary_path.as_deref() {
+                if !std::path::Path::new(path).is_file() {
+                    version_manager::write_active_version(root, &version)?;
+                }
+            }
         }
     }
+
+    activation_switch::switch_active_nu_version(root, &version, hooks, pre_mutation_snapshot_id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::nu::paths::NuPaths;
     use crate::state::snapshot::{list_snapshots, SnapshotReason, SnapshotTrigger};
     use crate::util::fs_safety::acquire_mutation_lock;
     use tempfile::TempDir;
@@ -560,5 +519,171 @@ mod tests {
             root,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn execute_with_hooks_and_refresh_integration() {
+        use crate::core::integrity;
+        use crate::nu::autoload::FakeCandidateRunner;
+        use crate::state::activation_profile::{ActivationProfile, ProfileKind};
+        use crate::state::lockfile::{Lockfile, LockfileEntry, PluginActivation};
+        use std::cell::RefCell;
+        use std::collections::BTreeMap;
+        use std::rc::Rc;
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        create_fake_version(root, "0.113.1");
+        create_fake_version(root, "0.114.0");
+        version_manager::write_active_version(root, "0.113.1").unwrap();
+
+        let (nu_exe_113, hash_113) = {
+            let binary = version_manager::version_binary(root, "0.113.1");
+            let hash = integrity::compute_sha256(b"fake");
+            (binary.to_string_lossy().into_owned(), hash)
+        };
+        let (nu_exe_114, hash_114) = {
+            let binary = version_manager::version_binary(root, "0.114.0");
+            let hash = integrity::compute_sha256("fake".as_bytes());
+            (binary.to_string_lossy().into_owned(), hash)
+        };
+
+        let vendor = root.join("vendor");
+        std::fs::create_dir_all(&vendor).unwrap();
+        let registry = root.join("plugin-registry.msgpack.z");
+        std::fs::write(&registry, b"reg").unwrap();
+
+        let paths = NuPaths {
+            nu_executable: nu_exe_113.clone(),
+            nu_version: "0.113.1".to_string(),
+            plugin_registry_path: registry.to_string_lossy().into_owned(),
+            nu_executable_hash: hash_113.clone(),
+            platform: "test".to_string(),
+            data_dir: None,
+            vendor_autoload_dirs: vec![vendor.to_string_lossy().into_owned()],
+            vendor_autoload_dir: Some(vendor.to_string_lossy().into_owned()),
+        };
+        paths.save(root).unwrap();
+
+        let payload = "packages/plugins/o/plug/1.0.0-aaa";
+        let payload_dir = root.join(payload);
+        std::fs::create_dir_all(&payload_dir).unwrap();
+        std::fs::write(payload_dir.join("nu_plugin_x"), b"fake").unwrap();
+
+        let mut lockfile = Lockfile::empty();
+        lockfile.packages.insert(
+            "o/plug".into(),
+            LockfileEntry {
+                version: "1.0.0".to_string(),
+                package_type: "plugin".to_string(),
+                source: "binary".to_string(),
+                target: None,
+                artifact_url: None,
+                artifact_sha256: None,
+                executable_path: Some("nu_plugin_x".to_string()),
+                archive_root: None,
+                include: None,
+                entry: None,
+                installed_at: "0".to_string(),
+                nu_version_at_install: None,
+                activation: Some(PluginActivation {
+                    plugin_registry_path: paths.plugin_registry_path.clone(),
+                    nu_executable_sha256: hash_113.clone(),
+                    nu_version: "0.113.1".to_string(),
+                    activated_at: "0".to_string(),
+                }),
+                registry_url: None,
+                registry_revision: None,
+                index_sha256: None,
+                signing_key_fingerprint: None,
+                git_url: None,
+                git_rev: None,
+                cargo_name: None,
+                cargo_lock_sha256: None,
+                built_sha256: None,
+                payload_path: payload.to_string(),
+                revision_id: None,
+                payload_sha256: None,
+                executable_sha256: None,
+                selection_reason: None,
+                origin: None,
+                module_activation: None,
+                module_import_mode: None,
+                locked_dependencies: BTreeMap::new(),
+            },
+        );
+        lockfile.save(root).unwrap();
+
+        let mut profile = ActivationProfile::new();
+        profile.ensure_contains("0.113", ProfileKind::Plugin, "o/plug");
+        profile.ensure_contains("0.114", ProfileKind::Plugin, "o/plug");
+        profile.save(root).unwrap();
+
+        let hook_order: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+        let o1 = Rc::clone(&hook_order);
+        let o2 = Rc::clone(&hook_order);
+        let o3 = Rc::clone(&hook_order);
+
+        let unregistrar = move |_a: &str, _b: &str, _c: &str| -> Result<()> {
+            o1.borrow_mut().push("unregister");
+            Ok(())
+        };
+        let registrar = move |_a: &str, _b: &str, _c: &str| -> Result<()> {
+            o2.borrow_mut().push("register");
+            Ok(())
+        };
+        let path_refresh = move |_path: &std::path::Path| -> Result<()> {
+            let refreshed = NuPaths {
+                nu_executable: nu_exe_114.clone(),
+                nu_version: "0.114.0".to_string(),
+                plugin_registry_path: registry.to_string_lossy().into_owned(),
+                nu_executable_hash: hash_114.clone(),
+                platform: "test".to_string(),
+                data_dir: None,
+                vendor_autoload_dirs: vec![vendor.to_string_lossy().into_owned()],
+                vendor_autoload_dir: Some(vendor.to_string_lossy().into_owned()),
+            };
+            refreshed.save(_path)?;
+            o3.borrow_mut().push("path_refresh");
+            Ok(())
+        };
+        let runner = FakeCandidateRunner::success();
+
+        execute_with_hooks_and_refresh(
+            &UseArgs {
+                version: "0.114.0".to_string(),
+            },
+            root,
+            &registrar,
+            &unregistrar,
+            Some(&runner),
+            Some(&path_refresh),
+        )
+        .unwrap();
+
+        let order = hook_order.borrow();
+        assert!(order.contains(&"unregister"), "unregistrar must be invoked");
+        assert!(order.contains(&"register"), "registrar must be invoked");
+        assert!(
+            order.contains(&"path_refresh"),
+            "path_refresh must be invoked"
+        );
+        let unreg_pos = order.iter().position(|&x| x == "unregister").unwrap();
+        let refresh_pos = order.iter().position(|&x| x == "path_refresh").unwrap();
+        let reg_pos = order.iter().position(|&x| x == "register").unwrap();
+        assert!(
+            unreg_pos < refresh_pos,
+            "unregistrar must execute before the active-version marker changes: {order:?}"
+        );
+        assert!(
+            refresh_pos < reg_pos,
+            "restore must run after the marker write and paths refresh: {order:?}"
+        );
+
+        let active = version_manager::read_active_version(root).unwrap().unwrap();
+        assert_eq!(active.version, "0.114.0", "switch must complete");
+
+        assert_pre_mutation_snapshot(root);
     }
 }

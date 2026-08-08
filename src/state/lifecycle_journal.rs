@@ -59,6 +59,8 @@ pub enum LifecycleStage {
     ImportsCommitted,
     /// Rollback: Nu path cache (`nu_state/paths.json`) committed or cleared.
     PathsCommitted,
+    /// Rollback: activation profile (`state/activation-profile.json`) committed or cleared.
+    ActivationProfileCommitted,
     /// Rollback: all owned state committed; journal clear pending.
     Completed,
 }

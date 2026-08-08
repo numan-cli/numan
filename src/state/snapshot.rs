@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::core::integrity::compute_sha256;
 use crate::nu::paths::NuPaths;
+use crate::state::activation_profile::ActivationProfile;
 use crate::state::autoload_journal::PendingAutoload;
 #[cfg(test)]
 use crate::state::autoload_journal::SCHEMA_VERSION as AUTOLOAD_SCHEMA_VERSION;
@@ -98,6 +99,10 @@ pub struct SidecarDigests {
     /// on rollback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paths_sha256: Option<String>,
+    /// Digest of the `activation-profile.json` sidecar. `None` on legacy
+    /// snapshots that predate activation-profile capture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_profile_sha256: Option<String>,
 }
 
 /// Captured Nu path-cache sidecar (`nu_state/paths.json`).
@@ -155,6 +160,10 @@ pub enum SnapshotSidecar<T> {
 /// `paths` is `None` for legacy snapshots that never captured the Nu path
 /// cache. New snapshots always record [`SnapshotPaths::Absent`] or
 /// [`SnapshotPaths::Present`].
+///
+/// `activation_profile` is `None` for legacy snapshots that never captured
+/// the activation profile. New snapshots always record
+/// [`SnapshotSidecar::Absent`] or [`SnapshotSidecar::Present`].
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     pub manifest: SnapshotManifest,
@@ -162,6 +171,7 @@ pub struct Snapshot {
     pub autoload: SnapshotAutoload,
     pub imports: Option<NupmImportsFile>,
     pub paths: Option<SnapshotPaths>,
+    pub activation_profile: Option<SnapshotSidecar<ActivationProfile>>,
 }
 
 /// A legacy timestamp-only snapshot directory.
@@ -225,12 +235,14 @@ pub fn create_snapshot(
     let imports = load_imports_sidecar(root);
     let paths = capture_paths_sidecar(root)?;
     let payload_revisions = compute_payload_revisions(root, &lockfile)?;
+    let activation_profile = capture_activation_profile_sidecar(root)?;
 
     let sidecar_digests = SidecarDigests {
         lockfile_sha256: sha256_json(&lockfile)?,
         autoload_sha256: Some(sha256_json(&autoload)?),
         imports_sha256: imports.as_ref().and_then(|i| sha256_json(i).ok()),
         paths_sha256: Some(sha256_json(&paths)?),
+        activation_profile_sha256: Some(sha256_json(&activation_profile)?),
     };
 
     let manifest = SnapshotManifest {
@@ -263,6 +275,7 @@ pub fn create_snapshot(
         write_json_atomic(&stage.join("imports.json"), imports)?;
     }
     write_json_atomic(&stage.join("paths.json"), &paths)?;
+    write_json_atomic(&stage.join("activation-profile.json"), &activation_profile)?;
 
     let dest = snapshot_dir(root, &id);
     std::fs::rename(&stage, &dest).with_context(|| {
@@ -339,12 +352,36 @@ pub fn load_snapshot(root: &Path, id: &str) -> Result<Snapshot> {
         None
     };
 
+    // Legacy snapshots omit the activation-profile digest; treat them as
+    // NotCaptured (`None`) so rollback leaves the live profile alone.
+    let activation_profile = if let Some(expected) = manifest
+        .sidecar_digests
+        .activation_profile_sha256
+        .as_deref()
+    {
+        let profile_path = dir.join("activation-profile.json");
+        if !profile_path.exists() {
+            bail!(
+                "Snapshot '{}' declares an activation-profile sidecar digest but \
+                 activation-profile.json is missing. Refuse to load an incomplete snapshot; \
+                 re-create the snapshot or restore the sidecar file.",
+                id
+            );
+        }
+        let sidecar: SnapshotSidecar<ActivationProfile> = read_json(&profile_path)?;
+        verify_digest(&sidecar, expected, "activation-profile")?;
+        Some(sidecar)
+    } else {
+        None
+    };
+
     Ok(Snapshot {
         manifest,
         lockfile,
         autoload,
         imports,
         paths,
+        activation_profile,
     })
 }
 
@@ -641,6 +678,44 @@ fn capture_paths_sidecar(root: &Path) -> Result<SnapshotPaths> {
         )
     })?;
     Ok(SnapshotPaths::Present(paths))
+}
+
+/// Capture the activation profile as a snapshot sidecar.
+///
+/// Returns [`SnapshotSidecar::Absent`] when the profile file does not exist
+/// (uninitialized roots), so rollback deletes a later-created profile.
+/// Returns [`SnapshotSidecar::Present`] when the profile exists.
+fn capture_activation_profile_sidecar(root: &Path) -> Result<SnapshotSidecar<ActivationProfile>> {
+    let path = ActivationProfile::profile_path(root);
+    if !path.is_file() {
+        return Ok(SnapshotSidecar::Absent);
+    }
+    let content = std::fs::read_to_string(&path).with_context(|| {
+        format!(
+            "Failed to read activation profile '{}'; refusing to create snapshot",
+            path.display()
+        )
+    })?;
+    let value: ActivationProfile = serde_json::from_str(&content).with_context(|| {
+        format!(
+            "Malformed activation profile at '{}' (delete it or repair JSON)",
+            path.display()
+        )
+    })?;
+    if value.schema_version != crate::state::activation_profile::ACTIVATION_PROFILE_SCHEMA_VERSION {
+        bail!(
+            "Unsupported activation-profile schema_version {} at '{}' (expected {})",
+            value.schema_version,
+            path.display(),
+            crate::state::activation_profile::ACTIVATION_PROFILE_SCHEMA_VERSION
+        );
+    }
+    let sha256 = compute_sha256(content.as_bytes());
+    Ok(SnapshotSidecar::Present {
+        content,
+        sha256,
+        value,
+    })
 }
 
 fn compute_payload_revisions(root: &Path, lockfile: &Lockfile) -> Result<BTreeMap<String, String>> {

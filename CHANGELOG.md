@@ -11,10 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Release assets** for `aarch64-unknown-linux-gnu` and `aarch64-pc-windows-msvc` (native ARM runners); `numan update --self` maps those triples
 - **Homebrew** Linux ARM archive support; **winget** verifies and submits both Windows x64 and ARM64 zips
+- **`numan use` activation profiles**: cross-minor switches auto-deactivate Numan-active plugins/modules (leave profile is a never-shrinking union per Nu minor in `state/activation-profile.json`, captured by snapshots and restored on rollback) and restore the target minor's desired set after the marker write. Same-target `use` is restore-only reconcile. User `activate`/`deactivate` keep the current minor's desired set in sync (idempotent even when already active/inactive); `remove` clears the package id from every minor.
 
 ### Changed
 
+- **`numan try`**: now takes a required `<owner/name[@version]>` argument and is compatibility-first. It attempts to install and activate the specified package for the current Nu; if incompatible, it explains which managed Nu versions the package supports and recommends the nearest one, without silently switching Nu or installing an alternative package.
 - **`numan completions <shell>`** installs by default (creates the target directory if needed). Use `--print` to emit the script on stdout for piping or custom redirects.
+- **`numan registry packages`**: clearer listing (blank line between entries, styled id/version/type, soft-wrapped dim descriptions)
 
 ### Fixed
 
@@ -37,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ```
 
   Then open a new terminal and confirm with `$env:Path -split ';'`.
+
+- **`numan doctor`**: report versioned managed Nu installs (`tools/nushell/<version>/nu`) instead of only the legacy `tools/nushell/nu` path
 
 - **`numan setup nu`**: official Nushell 0.114.x release archives exceed the old
   256 MiB extract cap (~279 MiB uncompressed on linux-gnu). Bootstrap now

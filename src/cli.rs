@@ -59,7 +59,7 @@ pub enum Commands {
     /// Install optional Nushell integration helpers
     #[command(subcommand)]
     Setup(cmd::setup::SetupCommands),
-    /// Install and activate a starter package that fits your Nu
+    /// Try a package against your current Nu and platform, with compatibility guidance
     Try(cmd::try_cmd::TryArgs),
     /// Switch the active managed Nu version (reserved, post-1.0)
     Use(cmd::use_cmd::UseArgs),
