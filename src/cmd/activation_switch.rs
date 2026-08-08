@@ -276,7 +276,15 @@ fn restore_desired(
 
     // Restore plugins first, then modules.
     for id in &desired.plugins {
-        match restore_one_plugin(root, &lockfile, registry.as_ref(), &resolver, id, hooks) {
+        match restore_one_plugin(
+            root,
+            &lockfile,
+            nu_paths,
+            registry.as_ref(),
+            &resolver,
+            id,
+            hooks,
+        ) {
             RestoreOutcome::Restored => report.restored_plugins.push(id.clone()),
             RestoreOutcome::AlreadyActive => {}
             RestoreOutcome::Missing => report.skipped_missing.push(id.clone()),
@@ -841,29 +849,22 @@ mod tests {
 
         let order: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
         let o1 = Rc::clone(&order);
-        let o2 = Rc::clone(&order);
         let unreg = move |_a: &str, _b: &str, _c: &str| -> Result<()> {
+            // Verify module was already deactivated before plugin unreg runs.
+            let lf = Lockfile::load(root).unwrap();
+            assert!(
+                lf.packages
+                    .get("o/mod")
+                    .unwrap()
+                    .module_activation
+                    .is_none(),
+                "module must be deactivated before plugin unreg"
+            );
             o1.borrow_mut().push("plugin");
             Ok(())
         };
         let reg = |_a: &str, _b: &str, _c: &str| Ok(());
-        let inner_runner = FakeCandidateRunner::success();
-
-        struct TrackingRunner<'a> {
-            inner: &'a FakeCandidateRunner,
-            order: Rc<RefCell<Vec<&'static str>>>,
-        }
-        impl CandidateRunner for TrackingRunner<'_> {
-            fn run(&self, candidate: &Path) -> Result<()> {
-                self.order.borrow_mut().push("module");
-                self.inner.run(candidate)
-            }
-        }
-
-        let runner = TrackingRunner {
-            inner: &inner_runner,
-            order: o2,
-        };
+        let runner = FakeCandidateRunner::success();
         let hooks = SwitchHooks {
             registrar: &reg,
             unregistrar: &unreg,
@@ -875,8 +876,8 @@ mod tests {
         leave_current_nu(root, "0.113", &hooks).unwrap();
         assert_eq!(
             order.borrow().as_slice(),
-            &["module", "plugin"][..],
-            "module lane executes before plugin unreg"
+            &["plugin"][..],
+            "plugin unreg runs after module lane"
         );
         let lockfile = Lockfile::load(root).unwrap();
         assert!(lockfile

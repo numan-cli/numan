@@ -603,6 +603,7 @@ mod tests {
 
         let mut profile = ActivationProfile::new();
         profile.ensure_contains("0.113", ProfileKind::Plugin, "o/plug");
+        profile.ensure_contains("0.114", ProfileKind::Plugin, "o/plug");
         profile.save(root).unwrap();
 
         let hook_order: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
@@ -618,7 +619,7 @@ mod tests {
             o2.borrow_mut().push("register");
             Ok(())
         };
-        let path_refresh = move || -> Result<()> {
+        let path_refresh = move |_root: &Path| -> Result<()> {
             o3.borrow_mut().push("path_refresh");
             Ok(())
         };
@@ -637,10 +638,7 @@ mod tests {
         .unwrap();
 
         let order = hook_order.borrow();
-        assert!(
-            order.contains(&"unregister"),
-            "unregistrar must be invoked"
-        );
+        assert!(order.contains(&"unregister"), "unregistrar must be invoked");
         assert!(order.contains(&"register"), "registrar must be invoked");
         assert!(
             order.contains(&"path_refresh"),
