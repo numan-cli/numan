@@ -144,6 +144,10 @@ fn execute_latest(
             if let Some(path) = existing.binary_path.as_deref() {
                 if !std::path::Path::new(path).is_file() {
                     version_manager::write_active_version(root, &version)?;
+                    // The cached paths.json still names the now-missing off-tree
+                    // binary; reconcile_target_profile would load it and fail
+                    // validate_drift after the marker has already changed.
+                    activation_switch::refresh_cached_nu_paths_after_switch(root)?;
                 }
             }
         }
@@ -366,6 +370,50 @@ mod tests {
             active.binary_path.is_none(),
             "dangling off-tree path must be cleared; got {:?}",
             active.binary_path
+        );
+    }
+
+    #[test]
+    fn test_use_latest_self_heal_clears_stale_paths_cache() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_fake_version(root, "0.113.1");
+        version_manager::write_active_version_with_binary(
+            root,
+            "0.113.1",
+            std::path::Path::new("/nonexistent/nu"),
+        )
+        .unwrap();
+
+        // Seed a paths.json that still points at the now-missing off-tree
+        // binary. Without a refresh after the marker repair, the same-target
+        // reconcile would load this cache and fail validate_drift.
+        let stale = NuPaths {
+            nu_executable: "/nonexistent/nu".to_string(),
+            nu_version: "0.113.1".to_string(),
+            plugin_registry_path: root.join("plugins.msgpackz").to_string_lossy().into_owned(),
+            nu_executable_hash: "deadbeef".to_string(),
+            platform: "test".to_string(),
+            data_dir: None,
+            vendor_autoload_dirs: vec![],
+            vendor_autoload_dir: None,
+        };
+        stale.save(root).unwrap();
+        assert!(root.join("nu_state/paths.json").is_file());
+
+        execute(
+            &UseArgs {
+                version: "latest".to_string(),
+            },
+            root,
+        )
+        .unwrap();
+
+        // The stale cache must be cleared so the repaired marker is the source
+        // of truth, not the dangling off-tree path.
+        assert!(
+            !root.join("nu_state/paths.json").exists(),
+            "stale paths.json must be cleared after dangling binary_path repair"
         );
     }
 

@@ -2482,7 +2482,9 @@ mod tests {
             managed.fix
         );
         assert!(
-            managed.message.contains("could not resolve managed Nu binary"),
+            managed
+                .message
+                .contains("could not resolve managed Nu binary"),
             "expected generic resolve wording: {}",
             managed.message
         );
