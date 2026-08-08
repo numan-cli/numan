@@ -176,6 +176,7 @@ fn execute_activating(
 
     if plugin_targets.is_empty() && module_targets.is_empty() {
         let lockfile = Lockfile::load(root)?;
+        snapshot_before_activate_profile_sync(root, &nu_paths, args, &lockfile)?;
         sync_user_activate_profile(root, &nu_paths, args, &lockfile)?;
         println!("Nothing to activate.");
         return Ok(());
@@ -218,6 +219,7 @@ fn execute_activating(
 
     if plugin_targets.is_empty() && module_targets.is_empty() {
         let lockfile = Lockfile::load(root)?;
+        snapshot_before_activate_profile_sync(root, &nu_paths, args, &lockfile)?;
         sync_user_activate_profile(root, &nu_paths, args, &lockfile)?;
         println!("Nothing to activate.");
         return Ok(());
@@ -334,7 +336,57 @@ fn sync_user_activate_profile(
     args: &ActivateArgs,
     lockfile: &Lockfile,
 ) -> Result<()> {
-    let ids = if args.packages.is_empty() {
+    let ids = collect_activate_profile_ids(args, lockfile, nu_paths);
+    crate::cmd::activation_switch::sync_profile_after_user_activate(
+        root,
+        &nu_paths.nu_version,
+        &ids,
+        lockfile,
+    )
+}
+
+/// Snapshot when a profile-only activate path would mutate desired state.
+fn snapshot_before_activate_profile_sync(
+    root: &Path,
+    nu_paths: &NuPaths,
+    args: &ActivateArgs,
+    lockfile: &Lockfile,
+) -> Result<()> {
+    let ids = collect_activate_profile_ids(args, lockfile, nu_paths);
+    let mutate_items: Vec<(crate::state::activation_profile::ProfileKind, &str)> = ids
+        .iter()
+        .filter_map(|id| {
+            let entry = lockfile.packages.get(id)?;
+            let kind = match entry.package_type.as_str() {
+                "plugin" => crate::state::activation_profile::ProfileKind::Plugin,
+                "module" => crate::state::activation_profile::ProfileKind::Module,
+                _ => return None,
+            };
+            Some((kind, id.as_str()))
+        })
+        .collect();
+    if crate::state::activation_profile::would_ensure_contains_any(
+        root,
+        &nu_paths.nu_version,
+        mutate_items,
+    )? {
+        create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Activate,
+            None,
+            None,
+        )?;
+    }
+    Ok(())
+}
+
+fn collect_activate_profile_ids(
+    args: &ActivateArgs,
+    lockfile: &Lockfile,
+    nu_paths: &NuPaths,
+) -> Vec<String> {
+    if args.packages.is_empty() {
         let active = crate::cmd::activation_switch::collect_currently_active(lockfile, nu_paths);
         let mut all = active.plugins;
         all.extend(active.modules);
@@ -354,13 +406,7 @@ fn sync_user_activate_profile(
             .filter(|id| active_set.contains(id.as_str()))
             .cloned()
             .collect()
-    };
-    crate::cmd::activation_switch::sync_profile_after_user_activate(
-        root,
-        &nu_paths.nu_version,
-        &ids,
-        lockfile,
-    )
+    }
 }
 
 // ── Plugin lane ────────────────────────────────────────────────────────────────

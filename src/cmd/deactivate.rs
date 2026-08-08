@@ -125,6 +125,7 @@ pub fn execute_with_candidate_runner_and_unregistrar(
     let targets_requested = classify_and_validate_packages(args, &lockfile, root, &nu_paths)?;
 
     if targets_requested.is_empty() {
+        snapshot_before_deactivate_profile_sync(root, &nu_paths, args, &lockfile)?;
         sync_user_deactivate_profile(root, &nu_paths, args, &lockfile)?;
         println!("Nothing to deactivate.");
         return Ok(());
@@ -163,6 +164,7 @@ pub fn execute_with_candidate_runner_and_unregistrar(
     let targets_requested =
         reclassify_targets(args, &lockfile, root, &nu_paths, &targets_requested)?;
     if targets_requested.is_empty() {
+        snapshot_before_deactivate_profile_sync(root, &nu_paths, args, &lockfile)?;
         sync_user_deactivate_profile(root, &nu_paths, args, &lockfile)?;
         println!("Nothing to deactivate.");
         return Ok(());
@@ -278,6 +280,56 @@ fn sync_user_deactivate_profile(
         &args.packages,
         lockfile,
     )
+}
+
+/// Snapshot when a profile-only deactivate path would clear desired state.
+fn snapshot_before_deactivate_profile_sync(
+    root: &Path,
+    nu_paths: &NuPaths,
+    args: &DeactivateArgs,
+    lockfile: &Lockfile,
+) -> Result<()> {
+    if args.packages.is_empty() {
+        return Ok(());
+    }
+    let mutate_items: Vec<(crate::state::activation_profile::ProfileKind, &str)> = args
+        .packages
+        .iter()
+        .flat_map(|id| match lockfile.packages.get(id) {
+            Some(entry) => {
+                let kind = match entry.package_type.as_str() {
+                    "plugin" => Some(crate::state::activation_profile::ProfileKind::Plugin),
+                    "module" => Some(crate::state::activation_profile::ProfileKind::Module),
+                    _ => None,
+                };
+                kind.map(|k| vec![(k, id.as_str())]).unwrap_or_default()
+            }
+            None => vec![
+                (
+                    crate::state::activation_profile::ProfileKind::Plugin,
+                    id.as_str(),
+                ),
+                (
+                    crate::state::activation_profile::ProfileKind::Module,
+                    id.as_str(),
+                ),
+            ],
+        })
+        .collect();
+    if crate::state::activation_profile::would_ensure_absent_any(
+        root,
+        &nu_paths.nu_version,
+        mutate_items,
+    )? {
+        create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Deactivate,
+            None,
+            None,
+        )?;
+    }
+    Ok(())
 }
 
 /// Full module deactivation compares unique IDs so duplicate CLI args cannot

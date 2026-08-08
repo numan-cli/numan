@@ -224,6 +224,38 @@ pub fn remove_from_all_minors(root: &Path, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// True when applying `ensure_contains` for any `(kind, id)` would change disk state.
+pub fn would_ensure_contains_any<'a, I>(root: &Path, nu_version: &str, items: I) -> Result<bool>
+where
+    I: IntoIterator<Item = (ProfileKind, &'a str)>,
+{
+    let minor = nu_minor_key_from_version(nu_version)?;
+    let mut profile = ActivationProfile::load_or_default(root)?;
+    let mut dirty = false;
+    for (kind, id) in items {
+        if profile.ensure_contains(&minor, kind, id) {
+            dirty = true;
+        }
+    }
+    Ok(dirty)
+}
+
+/// True when applying `ensure_absent` for any `(kind, id)` would change disk state.
+pub fn would_ensure_absent_any<'a, I>(root: &Path, nu_version: &str, items: I) -> Result<bool>
+where
+    I: IntoIterator<Item = (ProfileKind, &'a str)>,
+{
+    let minor = nu_minor_key_from_version(nu_version)?;
+    let mut profile = ActivationProfile::load_or_default(root)?;
+    let mut dirty = false;
+    for (kind, id) in items {
+        if profile.ensure_absent(&minor, kind, id) {
+            dirty = true;
+        }
+    }
+    Ok(dirty)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,5 +366,38 @@ mod tests {
             msg.contains("Malformed activation profile"),
             "error must contain 'Malformed activation profile': {msg}"
         );
+    }
+
+    #[test]
+    fn would_ensure_contains_and_absent_detect_dirty() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        assert!(!would_ensure_contains_any(root, "0.114.0", std::iter::empty()).unwrap());
+        assert!(would_ensure_contains_any(
+            root,
+            "0.114.0",
+            [(ProfileKind::Plugin, "a/p")],
+        )
+        .unwrap());
+        ensure_contains_for_paths(root, "0.114.0", ProfileKind::Plugin, "a/p").unwrap();
+        assert!(!would_ensure_contains_any(
+            root,
+            "0.114.0",
+            [(ProfileKind::Plugin, "a/p")],
+        )
+        .unwrap());
+        assert!(would_ensure_absent_any(
+            root,
+            "0.114.0",
+            [(ProfileKind::Plugin, "a/p")],
+        )
+        .unwrap());
+        ensure_absent_for_paths(root, "0.114.0", ProfileKind::Plugin, "a/p").unwrap();
+        assert!(!would_ensure_absent_any(
+            root,
+            "0.114.0",
+            [(ProfileKind::Plugin, "a/p")],
+        )
+        .unwrap());
     }
 }

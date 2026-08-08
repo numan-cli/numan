@@ -179,10 +179,19 @@ fn report_incompatible(
             "Nearest"
         };
         msg.push_str(&format!("\n\n{label} compatible version: {}", rec.version));
-        msg.push_str(&format!(
-            "\n\nTry:\n  numan use {}\n  numan try {}",
-            rec.version, package_spec
-        ));
+        // `numan use` only selects an already-installed managed Nu. Uninstalled
+        // recommendations must go through `setup nu` first.
+        if installed_set.contains(&rec.version) {
+            msg.push_str(&format!(
+                "\n\nTry:\n  numan use {}\n  numan try {}",
+                rec.version, package_spec
+            ));
+        } else {
+            msg.push_str(&format!(
+                "\n\nTry:\n  numan setup nu {}\n  numan try {}",
+                rec.version, package_spec
+            ));
+        }
     }
 
     bail!("{}", msg)
@@ -550,7 +559,11 @@ mod tests {
         assert!(err.contains("Compatible managed versions:"), "{err}");
         assert!(err.contains("0.113.1"), "{err}");
         assert!(err.contains("Newest compatible version: 0.113.1"), "{err}");
-        assert!(err.contains("numan use 0.113.1"), "{err}");
+        assert!(err.contains("numan setup nu 0.113.1"), "{err}");
+        assert!(
+            !err.contains("numan use 0.113.1"),
+            "uninstalled recommendation must not suggest use alone: {err}"
+        );
     }
 
     #[test]
@@ -846,6 +859,11 @@ mod tests {
         .to_string();
         assert!(err.contains("0.113.1 (installed)"), "{err}");
         assert!(err.contains("Newest compatible version: 0.113.1"), "{err}");
+        assert!(err.contains("numan use 0.113.1"), "{err}");
+        assert!(
+            !err.contains("numan setup nu 0.113.1"),
+            "installed recommendation must use `numan use`: {err}"
+        );
     }
 
     #[test]
