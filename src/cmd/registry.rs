@@ -207,6 +207,7 @@ fn list_packages(root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Convert terminal column count to usable description width.
 fn terminal_cols_to_description_width(terminal_cols: usize) -> usize {
     let available = terminal_cols.saturating_sub(4);
     if available >= 40 {
@@ -216,6 +217,7 @@ fn terminal_cols_to_description_width(terminal_cols: usize) -> usize {
     }
 }
 
+/// Usable width for indented package descriptions (leave room for `    ` prefix).
 fn package_description_width() -> usize {
     let cols = console::Term::stdout()
         .size_checked()
@@ -224,6 +226,7 @@ fn package_description_width() -> usize {
     terminal_cols_to_description_width(cols)
 }
 
+/// Soft-wrap `text` on whitespace so the terminal does not split mid-word.
 fn wrap_words(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![text.to_string()];

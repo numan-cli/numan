@@ -18,7 +18,7 @@ use crate::nu::bootstrap::managed_nu_binary;
 use crate::nu::paths::{
     discover_nu_off_path, find_nu_executable_with_root, find_nu_on_path, NuPaths,
 };
-use crate::nu::version_manager;
+use crate::nu::version_manager::{self, VersionManagerError};
 use crate::nupm_compat::NupmCompatibility;
 use crate::nupm_compat::{
     count_drifted_imports, resolve_nupm_home, scan_nupm_home, NupmHomeResolution,
@@ -517,23 +517,60 @@ fn check_nu_environments(root: &Path, options: &DoctorOptions, findings: &mut Ve
             None,
             RepairTier::None,
         )),
-        Err(e) => findings.push(finding(
-            "nu.managed.version",
-            Severity::Warn,
-            format!("Managed Nu: could not resolve active managed binary ({e})"),
-            Some(CMD_USE),
-            RepairTier::Manual,
-        )),
+        Err(e) => findings.push(managed_nu_resolve_finding(e)),
     }
 }
 
-fn resolve_managed_nu_binary(root: &Path) -> Result<Option<PathBuf>> {
+/// Map managed-Nu resolution failures to actionable doctor findings.
+///
+/// `CMD_USE` is only appropriate for a dangling active-version marker.
+/// Filesystem scan / marker parse failures need a different message and no
+/// `numan use` hint.
+fn managed_nu_resolve_finding(err: VersionManagerError) -> Finding {
+    match &err {
+        VersionManagerError::DanglingActive { .. }
+        | VersionManagerError::DanglingActiveWithOffTree { .. } => finding(
+            "nu.managed.version",
+            Severity::Warn,
+            format!("Managed Nu: could not resolve active managed binary ({err})"),
+            Some(CMD_USE),
+            RepairTier::Manual,
+        ),
+        VersionManagerError::ReadVersionsDir { .. }
+        | VersionManagerError::ReadLegacyVersion { .. }
+        | VersionManagerError::ReadMarker { .. }
+        | VersionManagerError::MalformedMarker { .. }
+        | VersionManagerError::InvalidVersion { .. } => finding(
+            "nu.managed.version",
+            Severity::Warn,
+            format!(
+                "Managed Nu: could not resolve managed Nu binary ({err}). \
+                 Check permissions on tools/nushell and nu_state, or reinstall with \
+                 `{CMD_SETUP_NU}`."
+            ),
+            None,
+            RepairTier::Manual,
+        ),
+        _ => finding(
+            "nu.managed.version",
+            Severity::Warn,
+            format!("Managed Nu: could not resolve managed Nu binary ({err})"),
+            None,
+            RepairTier::Manual,
+        ),
+    }
+}
+
+/// Resolve the managed Nu binary for doctor reporting.
+///
+/// Prefers the versioned active install (`tools/nushell/<version>/nu`), then
+/// falls back to the legacy single-binary path (`tools/nushell/nu`) so older
+/// roots still report correctly before migration.
+fn resolve_managed_nu_binary(root: &Path) -> Result<Option<PathBuf>, VersionManagerError> {
     match version_manager::active_nu_binary(root) {
         Ok(Some(path)) => return Ok(Some(path)),
         Ok(None) => {}
-        Err(e) => {
-            return Err(e).with_context(|| "Failed to resolve active managed Nu binary");
-        }
+        Err(e) => return Err(e),
     }
 
     let legacy = managed_nu_binary(root);
@@ -541,9 +578,7 @@ fn resolve_managed_nu_binary(root: &Path) -> Result<Option<PathBuf>> {
         return Ok(Some(legacy));
     }
 
-    if let Some(latest) = version_manager::latest_installed_version(root)
-        .with_context(|| "Failed to list installed managed Nu versions")?
-    {
+    if let Some(latest) = version_manager::latest_installed_version(root)? {
         let path = version_manager::version_binary(root, &latest);
         if path.is_file() {
             return Ok(Some(path));
@@ -2401,9 +2436,61 @@ mod tests {
             .expect("nu.managed.version");
         assert_eq!(managed.severity, Severity::Warn);
         assert_eq!(managed.repair, RepairTier::Manual);
+        assert_eq!(managed.fix.as_deref(), Some(CMD_USE));
+        assert!(
+            managed.message.contains("active managed binary"),
+            "dangling active should keep active-binary wording: {}",
+            managed.message
+        );
         assert!(
             !managed.message.contains("not installed"),
             "should not report 'not installed' when marker exists: {}",
+            managed.message
+        );
+    }
+
+    #[test]
+    fn doctor_reports_managed_nu_scan_failure_without_use_hint() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        // Make tools/nushell a file so read_dir fails with ReadVersionsDir.
+        let tools = root.join("tools");
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::write(tools.join("nushell"), b"not-a-directory").unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: true,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let managed = report
+            .findings
+            .iter()
+            .find(|f| f.id == "nu.managed.version")
+            .expect("nu.managed.version");
+        assert_eq!(managed.severity, Severity::Warn);
+        assert_eq!(managed.repair, RepairTier::Manual);
+        assert!(
+            managed.fix.is_none(),
+            "filesystem scan failures must not hint `{CMD_USE}`: {:?}",
+            managed.fix
+        );
+        assert!(
+            managed
+                .message
+                .contains("could not resolve managed Nu binary"),
+            "expected generic resolve wording: {}",
+            managed.message
+        );
+        assert!(
+            !managed.message.contains("active managed binary"),
+            "scan failure must not use dangling-active wording: {}",
             managed.message
         );
     }

@@ -131,6 +131,19 @@ fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> 
     };
     journal.save(root)?;
 
+    // Clear desire before any destructive change so a profile-write failure
+    // aborts the remove while the lockfile and payload are still intact and
+    // the user can retry. A leftover profile entry would make later
+    // `numan use` restore attempts target a removed package.
+    crate::state::activation_profile::remove_from_all_minors(root, &args.package).with_context(
+        || {
+            format!(
+                "Failed to clear activation profile entries for '{}'",
+                args.package
+            )
+        },
+    )?;
+
     // Remove from lockfile (atomic write).
     lockfile.packages.remove(&args.package);
     lockfile.save(root)?;
@@ -159,20 +172,7 @@ fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> 
         }
     }
 
-    // Clear desire while the remove journal is still present. Failure here
-    // must not report success: a leftover profile entry would make later
-    // `numan use` restore attempts target a removed package.
-    crate::state::activation_profile::remove_from_all_minors(root, &args.package).with_context(
-        || {
-            format!(
-                "Failed to clear activation profile entries for '{}'",
-                args.package
-            )
-        },
-    )?;
-
     PendingLifecycle::clear(root)?;
-
     println!("{} Removed {}", console::style("✓").green(), args.package);
 
     Ok(())

@@ -617,7 +617,7 @@ pub fn sync_profile_after_user_deactivate(
 }
 
 /// Keep `nu_state/paths.json` aligned with the newly selected active Nu.
-fn refresh_cached_nu_paths_after_switch(root: &Path) -> Result<()> {
+pub(crate) fn refresh_cached_nu_paths_after_switch(root: &Path) -> Result<()> {
     let paths_file = root.join("nu_state").join("paths.json");
     if !paths_file.is_file() {
         return Ok(());
