@@ -29,9 +29,15 @@ and must stay aligned with `REVIEW.md`.
 
 ## CI gates (must pass)
 
-- `cargo test` — full suite
-- `cargo clippy -- -D warnings`
-- `cargo fmt --check`
+PR CI (`.github/workflows/ci.yml`):
+
+- **Test** — `cargo test`
+- **Clippy** — `cargo clippy -- -D warnings`
+- **Format** — `cargo fmt --check`
+- **MSRV (1.88)** — `cargo +1.88 check --locked --all-targets`
+- **Package** — `cargo package --locked`
+- **Deny** — `cargo deny` (CI: `EmbarkStudios/cargo-deny-action@v2`)
+- **Real-Nu acceptance** — `cargo test -- --ignored` with Nu 0.113 on PATH (PR job skips Stage 1 / active-plugin update suites)
 
 ## Severity labels
 
