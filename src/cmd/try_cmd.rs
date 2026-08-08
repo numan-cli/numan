@@ -313,7 +313,7 @@ where
 
     println!("Trying '{package_spec}' for Nu {}...", nu.version);
 
-    let _lock = acquire_mutation_lock(root)?;
+    let mutation_lock = acquire_mutation_lock(root)?;
     let root_buf = root.to_path_buf();
     let options = transaction::InstallOptions {
         root: &root_buf,
@@ -361,7 +361,7 @@ where
             check: false,
         },
         root,
-        &_lock,
+        &mutation_lock,
     ) {
         eprintln!("Installed '{package_id}' but activation failed: {e:#}");
         bail!("Activation failed after install.");
