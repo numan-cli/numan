@@ -18,6 +18,7 @@ use std::path::Path;
 
 use crate::nu::autoload::{validate_candidate, write_candidate, CandidateRunner};
 use crate::nu::paths::NuPaths;
+use crate::state::activation_profile::ActivationProfile;
 use crate::state::autoload_state::AutoloadState;
 use crate::state::lifecycle_journal::{LifecycleOp, LifecycleStage, PendingLifecycle};
 use crate::state::snapshot::{
@@ -254,6 +255,26 @@ pub fn rollback_to_snapshot(
         }
     }
     journal.stage = LifecycleStage::PathsCommitted;
+    journal.save(root)?;
+
+    // Commit 6: activation profile. Legacy snapshots (`activation_profile ==
+    // None`) leave the live profile untouched. When captured, restore the
+    // snapshot's profile or delete the live file if the snapshot recorded
+    // absence.
+    match &snapshot.activation_profile {
+        None => {}
+        Some(SnapshotSidecar::Present { value, .. }) => {
+            value.save(root)?;
+        }
+        Some(SnapshotSidecar::Absent) => {
+            let profile_path = ActivationProfile::profile_path(root);
+            if profile_path.exists() {
+                std::fs::remove_file(&profile_path)
+                    .with_context(|| format!("Failed to remove '{}'", profile_path.display()))?;
+            }
+        }
+    }
+    journal.stage = LifecycleStage::ActivationProfileCommitted;
     journal.save(root)?;
 
     journal.stage = LifecycleStage::Completed;

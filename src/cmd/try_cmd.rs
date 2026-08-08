@@ -1,6 +1,6 @@
 use crate::cmd::activate::{self, ActivateArgs};
 use crate::core::nu_version::NuVersion;
-use crate::core::package::{Package, PackageType};
+use crate::core::package::{Package, PackageType, VersionEntry};
 use crate::core::platform::Platform;
 use crate::core::registry::RegistryManager;
 use crate::core::resolve::{self, Incompatibility, Resolver};
@@ -93,12 +93,16 @@ fn report_incompatible(
     package: &Package,
     platform: &Platform,
     current_nu: &NuVersion,
-    package_id: &str,
+    package_spec: &str,
     current_issue: &Incompatibility,
     installed: &[String],
+    target_entry: Option<&VersionEntry>,
 ) -> Result<()> {
     let candidates = collect_candidate_nu_versions(package, installed);
-    let compatible = resolve::compatible_nu_versions(package, platform, &candidates);
+    let compatible = match target_entry {
+        Some(entry) => resolve::compatible_nu_versions_for_entry(entry, platform, &candidates),
+        None => resolve::compatible_nu_versions(package, platform, &candidates),
+    };
     let installed_set: HashSet<String> = installed.iter().cloned().collect();
 
     if compatible.is_empty() {
@@ -177,7 +181,7 @@ fn report_incompatible(
         msg.push_str(&format!("\n\n{label} compatible version: {}", rec.version));
         msg.push_str(&format!(
             "\n\nTry:\n  numan use {}\n  numan try {}",
-            rec.version, package_id
+            rec.version, package_spec
         ));
     }
 
@@ -278,15 +282,24 @@ where
             package,
             platform,
             nu,
-            package_id,
+            package_spec,
             &current_issue,
             &installed,
+            None,
         );
     };
 
     if let Some(issue) = resolver.classify_version(target_entry) {
         let installed = list_installed_nu_versions(root);
-        return report_incompatible(package, platform, nu, package_id, &issue, &installed);
+        return report_incompatible(
+            package,
+            platform,
+            nu,
+            package_spec,
+            &issue,
+            &installed,
+            Some(target_entry),
+        );
     }
 
     println!("Trying '{package_spec}' for Nu {}...", nu.version);
@@ -827,6 +840,7 @@ mod tests {
                 constraint: ">=0.113.0 <0.114.0".to_string(),
             },
             &installed,
+            None,
         )
         .unwrap_err()
         .to_string();
@@ -915,6 +929,152 @@ mod tests {
         let expected = format_overlay_use_hint(&full).unwrap();
         assert!(expected.starts_with("overlay use \""));
         assert!(expected.contains("wttr.nu"));
+    }
+
+    // --- Explicit-version failure paths ---
+
+    #[test]
+    fn try_package_invalid_version_format_errors() {
+        let root = tempfile::tempdir().unwrap();
+        let package = pkg("test/plugin", "*", PackageType::Plugin);
+        let platform = windows_platform();
+        let nu = NuVersion::parse("0.114.1").unwrap();
+        let args = TryArgs {
+            package: Some("test/plugin@not-a-version".to_string()),
+            no_activate: false,
+        };
+        let err = try_package(
+            &args,
+            root.path(),
+            &package,
+            "test/plugin@not-a-version",
+            "test/plugin",
+            Some("not-a-version"),
+            &platform,
+            &nu,
+            |_, _, _| panic!("install must not be called"),
+            |_, _| panic!("activate must not be called"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("Invalid version"), "{err}");
+        assert!(err.contains("not-a-version"), "{err}");
+    }
+
+    #[test]
+    fn try_package_unavailable_version_errors() {
+        let root = tempfile::tempdir().unwrap();
+        let package = pkg("test/plugin", "*", PackageType::Plugin);
+        let platform = windows_platform();
+        let nu = NuVersion::parse("0.114.1").unwrap();
+        let args = TryArgs {
+            package: Some("test/plugin@2.0.0".to_string()),
+            no_activate: false,
+        };
+        let err = try_package(
+            &args,
+            root.path(),
+            &package,
+            "test/plugin@2.0.0",
+            "test/plugin",
+            Some("2.0.0"),
+            &platform,
+            &nu,
+            |_, _, _| panic!("install must not be called"),
+            |_, _| panic!("activate must not be called"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("Version 2.0.0 not available"), "{err}");
+        assert!(err.contains("1.0.0"), "{err}"); // lists available versions
+    }
+
+    #[test]
+    fn try_package_incompatible_pinned_version_reports_scoped_compat() {
+        // Package has two releases: v1.0.0 works with Nu >=0.112.0 <0.114.0,
+        // v2.0.0 works with Nu >=0.115.0 <0.116.0. User pins @1.0.0 while
+        // running Nu 0.114.1 (too new for v1.0.0). The report must scope
+        // compatibility to v1.0.0's constraint only, not v2.0.0's.
+        let root = tempfile::tempdir().unwrap();
+        let mut package = pkg("test/plugin", ">=0.115.0 <0.116.0", PackageType::Plugin);
+        package.versions[0].version = semver::Version::new(2, 0, 0);
+        package.versions.push({
+            let mut older = package.versions[0].clone();
+            older.version = semver::Version::new(1, 0, 0);
+            older.nu_version = ">=0.112.0 <0.114.0".to_string();
+            older.verified_with = vec!["0.113.1".to_string()];
+            older
+        });
+        package.versions.sort_by(|a, b| b.version.cmp(&a.version));
+
+        let platform = windows_platform();
+        let nu = NuVersion::parse("0.114.1").unwrap();
+        let args = TryArgs {
+            package: Some("test/plugin@1.0.0".to_string()),
+            no_activate: false,
+        };
+        let err = try_package(
+            &args,
+            root.path(),
+            &package,
+            "test/plugin@1.0.0",
+            "test/plugin",
+            Some("1.0.0"),
+            &platform,
+            &nu,
+            |_, _, _| panic!("install must not be called"),
+            |_, _| panic!("activate must not be called"),
+        )
+        .unwrap_err()
+        .to_string();
+        // Must report incompatibility for the pinned version.
+        assert!(err.contains("not compatible with Nu 0.114.1"), "{err}");
+        // Must recommend an older Nu (from v1.0.0's constraint), not 0.115.x.
+        assert!(err.contains("0.113.1"), "{err}");
+        assert!(
+            !err.contains("0.115"),
+            "must not recommend v2.0.0's Nu: {err}"
+        );
+        // Retry hint must include @1.0.0.
+        assert!(err.contains("numan try test/plugin@1.0.0"), "{err}");
+    }
+
+    // --- Lock handoff regression test ---
+
+    #[test]
+    fn try_package_releases_lock_before_activation() {
+        // The activate callback must be able to acquire the same root mutation
+        // lock. If _lock is still held, acquire_mutation_lock will fail and
+        // activation will error.
+        let root = tempfile::tempdir().unwrap();
+        let package = pkg("test/plugin", "*", PackageType::Plugin);
+        let platform = windows_platform();
+        let nu = NuVersion::parse("0.114.1").unwrap();
+        let args = TryArgs {
+            package: Some("test/plugin".to_string()),
+            no_activate: false,
+        };
+
+        let activated = Cell::new(false);
+        let result = try_package(
+            &args,
+            root.path(),
+            &package,
+            "test/plugin",
+            "test/plugin",
+            None,
+            &platform,
+            &nu,
+            |_, _, _| Ok(install_result("test/plugin", "1.0.0", root.path())),
+            |_, root| {
+                // If the install lock is still held, this will fail.
+                let _lock = acquire_mutation_lock(root)?;
+                activated.set(true);
+                Ok(())
+            },
+        );
+        assert!(result.is_ok(), "{result:?}");
+        assert!(activated.get(), "activate callback must have run");
     }
 
     #[test]

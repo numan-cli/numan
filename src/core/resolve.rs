@@ -523,6 +523,33 @@ pub fn compatible_nu_versions(
     compatible
 }
 
+/// Return the Nu versions from `candidates` where the specific `entry` is
+/// compatible for the current platform.
+///
+/// Unlike [`compatible_nu_versions`], this scopes compatibility to a single
+/// version entry rather than any entry in the package. Used when the user
+/// pinned `owner/name@version` so the recommendation reflects that release's
+/// constraint, not a different release that happens to be compatible.
+pub fn compatible_nu_versions_for_entry(
+    entry: &VersionEntry,
+    platform: &Platform,
+    candidates: &[NuVersion],
+) -> Vec<NuVersion> {
+    let mut compatible = Vec::new();
+    let mut seen = HashSet::new();
+    for candidate in candidates {
+        if !seen.insert((candidate.major, candidate.minor, candidate.patch)) {
+            continue;
+        }
+        let resolver = Resolver::new(platform, candidate);
+        if resolver.is_compatible(entry) {
+            compatible.push(candidate.clone());
+        }
+    }
+    compatible.sort_by_key(|v| (v.major, v.minor, v.patch));
+    compatible
+}
+
 fn version_score(v: &NuVersion) -> u64 {
     v.major * 1_000_000_000 + v.minor * 1_000_000 + v.patch
 }
@@ -591,34 +618,29 @@ pub fn select_recommended_nu<'a>(
 
     // Compatible on both sides or none (current not in list). Prefer nearest
     // installed, otherwise nearest catalog version; ties go to newer.
+    let nearest = nearest_comparator(current_score);
     let installed_all: Vec<&'a NuVersion> = compatible
         .iter()
         .filter(|v| installed.contains(&v.version))
         .collect();
     if !installed_all.is_empty() {
-        return installed_all
-            .iter()
-            .min_by(|a, b| {
-                let da = (version_score(a) as i64 - current_score as i64).abs();
-                let db = (version_score(b) as i64 - current_score as i64).abs();
-                let ord = da.cmp(&db);
-                if ord == std::cmp::Ordering::Equal {
-                    return version_score(b).cmp(&version_score(a));
-                }
-                ord
-            })
-            .copied();
+        return installed_all.iter().copied().min_by(nearest);
     }
 
-    compatible.iter().min_by(|a, b| {
-        let da = (version_score(a) as i64 - current_score as i64).abs();
-        let db = (version_score(b) as i64 - current_score as i64).abs();
-        let ord = da.cmp(&db);
-        if ord == std::cmp::Ordering::Equal {
-            return version_score(b).cmp(&version_score(a));
-        }
-        ord
-    })
+    compatible.iter().min_by(nearest)
+}
+
+/// Comparator that orders Nu versions by distance from `current_score`,
+/// tie-breaking toward the higher version score.
+fn nearest_comparator(
+    current_score: u64,
+) -> impl Fn(&&NuVersion, &&NuVersion) -> std::cmp::Ordering {
+    move |a, b| {
+        let da = version_score(a).abs_diff(current_score);
+        let db = version_score(b).abs_diff(current_score);
+        da.cmp(&db)
+            .then_with(|| version_score(b).cmp(&version_score(a)))
+    }
 }
 
 #[cfg(test)]
@@ -938,7 +960,7 @@ mod tests {
         assert!(candidate_nu_versions_from_constraint("*").is_empty());
     }
 
-    fn plugin_with_verified(verified: &[&str]) -> Package {
+    fn windows_plugin() -> Package {
         let platform = Platform {
             os: Os::Windows,
             arch: Arch::X86_64,
@@ -966,7 +988,7 @@ mod tests {
             versions: vec![VersionEntry {
                 version: semver::Version::new(1, 0, 0),
                 nu_version: ">=0.112.0 <0.114.0".to_string(),
-                verified_with: verified.iter().map(|v| v.to_string()).collect(),
+                verified_with: vec!["0.113.1".to_string()],
                 artifact: Artifact {
                     kind: "binary".to_string(),
                     url: None,
@@ -991,7 +1013,7 @@ mod tests {
             env: Env::Msvc,
             triple: "x86_64-pc-windows-msvc".to_string(),
         };
-        let pkg = plugin_with_verified(&["0.113.1"]);
+        let pkg = windows_plugin();
         let candidates = vec![
             NuVersion::parse("0.112.0").unwrap(),
             NuVersion::parse("0.113.1").unwrap(),
@@ -1011,7 +1033,7 @@ mod tests {
             env: Env::Gnu,
             triple: "x86_64-unknown-linux-gnu".to_string(),
         };
-        let pkg = plugin_with_verified(&["0.113.1"]);
+        let pkg = windows_plugin();
         let candidates = vec![
             NuVersion::parse("0.112.0").unwrap(),
             NuVersion::parse("0.113.1").unwrap(),

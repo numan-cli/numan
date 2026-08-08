@@ -1,4 +1,4 @@
-//! Desired per-Nu-minor activation profile (`nu_state/activation-profile.json`).
+//! Desired per-Nu-minor activation profile (`state/activation-profile.json`).
 //!
 //! The profile records which plugins/modules Numan should restore when
 //! switching to a given Nu minor via `numan use`. It is **desired state**:
@@ -83,7 +83,7 @@ impl ActivationProfile {
     }
 
     pub fn profile_path(root: &Path) -> std::path::PathBuf {
-        root.join("nu_state").join("activation-profile.json")
+        root.join("state").join("activation-profile.json")
     }
 
     pub fn load(root: &Path) -> Result<Option<Self>> {
