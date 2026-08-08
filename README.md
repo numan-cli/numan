@@ -460,7 +460,7 @@ For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 | **3–4** | Plugin + module activation, journals, managed autoloads | ✅ |
 | **5** | `update` / `remove` / `gc`, lockfile v2, [snapshots + rollback](docs/snapshots-and-rollback.md) | ✅ (source builds deferred; active-plugin update opt-in) |
 | **6** | [nupm](docs/nupm-compatibility.md) status, inspect, import, drift | ✅ |
-| **7** | Doctor, completions, onboarding, CI hardening, [winget packaging](docs/PACKAGING.md) | ✅ — [plan](docs/plans/Phase7Plan.md) |
+| **7** | Doctor, completions, onboarding, CI hardening, [winget + Homebrew tap](docs/PACKAGING.md) | ✅ — [plan](docs/plans/Phase7Plan.md) |
 | **Post-7.6** | Production [official registry](https://tonythethompson.github.io/numan-registry/) cutover; `numan init` and `numan doctor` auto-configure `official` | ✅ (v0.1.4) |
 
 ### Next (toward 1.0)

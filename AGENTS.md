@@ -15,8 +15,11 @@ cargo run -- list
 cargo run -- nupm status --nupm-home <path>
 cargo run -- nupm inspect <package-path>
 
-# Test
+# Test (default suite)
 cargo test
+
+# Real-Nu acceptance tests (ignored by default; CI runs these with Nu 0.113 on PATH)
+cargo test -- --ignored
 
 # Test single module
 cargo test core::platform
@@ -164,8 +167,11 @@ tests/
 1. Create feature branch from `master`
 2. Implement with tests
 3. `cargo test` — all tests must pass
-4. Update AGENTS.md if structure/conventions change
-5. Open PR with description
+4. `cargo clippy -- -D warnings` — no warnings
+5. `cargo fmt` — formatting clean (CI checks `fmt --check`)
+6. `cargo test -- --ignored` — real-Nu acceptance tests (requires Nu 0.113 on PATH; CI runs these automatically)
+7. Update AGENTS.md if structure/conventions change
+8. Open PR with description
 
 ## PR review guidance
 
