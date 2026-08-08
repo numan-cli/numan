@@ -1,8 +1,31 @@
-# Numan PR review
+---
+name: code-review
+description: >-
+  Review Numan pull requests against REVIEW.md severity labels, architecture
+  invariants, CI gates, and phase-specific notes. Use for Copilot code review,
+  PR review requests, and any pull-request or diff review in this repository.
+---
 
-Use this file when reviewing pull requests (human or automated). [`AGENTS.md`](AGENTS.md) remains the source for project structure and build commands; this file focuses on **what to flag in review**.
+# Numan code review
 
-Copilot / IDE apply-to instructions live at [`.github/instructions/review.instructions.md`](.github/instructions/review.instructions.md) and must stay aligned with this document.
+When reviewing a pull request or diff in this repository, follow the canonical
+guide at [`REVIEW.md`](../../../REVIEW.md). Prefer that file over paraphrased
+memory. [`AGENTS.md`](../../../AGENTS.md) remains the source for project
+structure and build commands.
+
+Path-specific Copilot apply-to instructions live at
+[`.github/instructions/review.instructions.md`](../../instructions/review.instructions.md)
+and must stay aligned with `REVIEW.md`.
+
+## How to review
+
+1. Read the PR description and changed files; stay within the stated scope.
+2. Apply severity labels from `REVIEW.md` (P0–P3). Lead with P0/P1 findings.
+3. Flag any violation of the architecture invariants listed below.
+4. Check the review checklist and phase-specific notes when relevant paths
+   change (lockfile, journals, nupm compat, activation lifecycle).
+5. Leave actionable comments with concrete fixes. Do not approve or request
+   changes as a human gate; report findings only.
 
 ## CI gates (must pass)
 
@@ -29,7 +52,7 @@ PR CI (`.github/workflows/ci.yml`):
 
 1. **Install is inert** — `numan install` must not invoke Nu or touch autoload/plugin registration.
 2. **Nu integration is activate/deactivate-owned** — only the activate/deactivate lifecycle boundary invokes plugin register/unregister; an explicitly opted-in `update` may coordinate that boundary (exact `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1`) but must not own or invoke Nu callbacks directly.
-3. **Mutation lock** — all mutating commands (`install`, `remove`, `update`, `gc`, future `nupm import`) must call `acquire_mutation_lock(root)`.
+3. **Mutation lock** — all mutating commands (`install`, `remove`, `update`, `gc`, nupm import) must call `acquire_mutation_lock(root)`.
 4. **Atomic JSON writes** — lockfile, journals, and state files use `write_json_atomic`; no partial writes.
 5. **Journals under `state/`** — pending activation, autoload, lifecycle journals live under `$NUMAN_ROOT/state/`.
 6. **Module autoload identity** — four-part match (Nu exe hash, Nu version, vendor autoload dir, managed file path); lockfile `module_activation` is ground truth.
@@ -50,5 +73,5 @@ PR CI (`.github/workflows/ci.yml`):
 ## Phase-specific notes
 
 - **Lockfile v2** — preserve `origin`, `revision_id`, `payload_sha256`, and journal recovery semantics on lifecycle changes.
-- **nupm compat (Phase 6+)** — follow [`docs/nupm-compatibility.md`](docs/nupm-compatibility.md) supported/rejected profiles; fixtures under `tests/fixtures/nupm/` are the contract for parser/classifier tests.
-- **Active-plugin update** — deactivate→upgrade→activate only with exact `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1`; fail closed otherwise. See [`docs/active-plugin-gate.md`](docs/active-plugin-gate.md).
+- **nupm compat (Phase 6+)** — follow [`docs/nupm-compatibility.md`](../../../docs/nupm-compatibility.md) supported/rejected profiles; fixtures under `tests/fixtures/nupm/` are the contract for parser/classifier tests.
+- **Active-plugin update** — deactivate→upgrade→activate only with exact `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1`; fail closed otherwise. See [`docs/active-plugin-gate.md`](../../../docs/active-plugin-gate.md).
