@@ -30,6 +30,11 @@ pub struct SwitchActivationReport {
     pub skipped_missing: Vec<String>,
     pub skipped_incompatible: Vec<String>,
     pub failed: Vec<(String, String)>,
+    /// Lifecycle errors that did not invalidate the per-module classification
+    /// (e.g. a journal-cleanup failure after activation records and
+    /// autoload-state.json were already committed). Surfaced as warnings so a
+    /// successful restore is not reported as a package failure.
+    pub lifecycle_errors: Vec<String>,
 }
 
 impl SwitchActivationReport {
@@ -61,6 +66,9 @@ impl SwitchActivationReport {
                 "{} Failed to restore {id}: {err}",
                 console::style("✗").red()
             );
+        }
+        for err in &self.lifecycle_errors {
+            eprintln!("{} {err}", console::style("✗").red());
         }
     }
 
@@ -362,9 +370,23 @@ fn restore_desired(
                 }
             }
             Err(e) => {
+                // The error may originate after activation records and
+                // autoload-state.json were already committed (e.g. a
+                // journal-cleanup failure), so reload the lockfile and classify
+                // each module by its on-disk state rather than marking every
+                // requested module failed. Match the Ok(failed) branch.
+                let lockfile = Lockfile::load(root)?;
+                let active = collect_currently_active(&lockfile, nu_paths);
                 for id in module_ids {
-                    report.failed.push((id, e.to_string()));
+                    if active.modules.contains(&id) {
+                        report.restored_modules.push(id);
+                    } else {
+                        report
+                            .failed
+                            .push((id, "module activation lane reported failure".into()));
+                    }
                 }
+                report.lifecycle_errors.push(e.to_string());
             }
         }
     }
@@ -1322,5 +1344,82 @@ mod tests {
             .unwrap()
             .module_activation
             .is_some());
+    }
+
+    #[test]
+    fn restore_classifies_modules_after_post_commit_journal_cleanup_error() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        let (exe, hash) = write_fake_nu(root, "0.113.1", b"nu-113");
+        let vendor = root.join("vendor");
+        let paths = save_paths(root, &exe, "0.113.1", &hash, &vendor);
+        version_manager::write_active_version(root, "0.113.1").unwrap();
+
+        let m_pay = "packages/modules/o/mod/1.0.0-bbb";
+        seed_module_payload(root, m_pay);
+
+        let mut lockfile = Lockfile::empty();
+        lockfile
+            .packages
+            .insert("o/mod".into(), module_entry(&paths, m_pay, false));
+        lockfile.save(root).unwrap();
+
+        let mut profile = ActivationProfile::new();
+        profile.ensure_contains("0.113", ProfileKind::Module, "o/mod");
+        profile.save(root).unwrap();
+
+        // Inject a journal-cleanup failure after activation records and
+        // autoload-state.json are committed (run_module_lane step 12).
+        std::fs::write(
+            root.join("state").join(".numan-test-fail-autoload-delete"),
+            b"",
+        )
+        .unwrap();
+
+        let reg = |_a: &str, _b: &str, _c: &str| Ok(());
+        let unreg = |_a: &str, _b: &str, _c: &str| Ok(());
+        let inner_runner = FakeCandidateRunner::success();
+        let hooks = SwitchHooks {
+            registrar: &reg,
+            unregistrar: &unreg,
+            runner: Some(&inner_runner),
+            path_refresh: None,
+        };
+        let _lock = acquire_mutation_lock(root).unwrap();
+        let report = reconcile_target_profile(root, "0.113", &hooks, None).unwrap();
+
+        // The module was committed before the journal-cleanup error, so it
+        // must be classified as restored rather than failed.
+        assert!(
+            report.restored_modules.contains(&"o/mod".to_string()),
+            "committed module must be restored, got restored_modules={:?} failed={:?}",
+            report.restored_modules,
+            report.failed
+        );
+        assert!(
+            report.failed.is_empty(),
+            "no module should be marked failed when activation committed, got failed={:?}",
+            report.failed
+        );
+        assert!(
+            !report.lifecycle_errors.is_empty(),
+            "journal-cleanup error must be retained as a lifecycle error"
+        );
+        assert!(
+            report.lifecycle_errors[0].contains("injected journal-cleanup failure"),
+            "lifecycle error must carry the injected failure, got {:?}",
+            report.lifecycle_errors
+        );
+        assert!(
+            !report.has_lifecycle_failure(),
+            "a post-commit journal-cleanup error must not bail the switch"
+        );
+
+        // The pending-autoload journal must remain for doctor/recovery.
+        assert!(
+            root.join("state").join("pending-autoload.json").is_file(),
+            "journal must be preserved after the cleanup failure"
+        );
     }
 }

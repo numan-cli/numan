@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 /// Try a package against the current Nu environment and explain compatibility.
 #[derive(Parser, Debug)]
 pub struct TryArgs {
-    /// Package to try (owner/name or owner/name@version)
+    /// Package to try (owner/name[@version])
     pub package: Option<String>,
 
     /// Install only; do not activate
@@ -200,7 +200,7 @@ fn report_incompatible(
 pub fn execute(args: &TryArgs, root: &Path) -> Result<()> {
     let package_spec = args.package.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| {
         anyhow::anyhow!(
-            "a package is required\n\nUsage:\n  numan try <owner/name[@version]>\n\nExample:\n  numan try idanarye/nu_plugin_skim"
+            "a package is required\n\nUsage:\n  numan try owner/name[@version]\n\nExample:\n  numan try idanarye/nu_plugin_skim"
         )
     })?;
 
@@ -525,6 +525,25 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let args = TryArgs {
             package: None,
+            no_activate: false,
+        };
+        let err = execute(&args, root.path()).unwrap_err().to_string();
+        assert!(err.contains("a package is required"), "{err}");
+        assert!(
+            err.contains("numan try owner/name[@version]"),
+            "usage must use the lowercase syntax without angle brackets: {err}"
+        );
+        assert!(
+            err.contains("idanarye/nu_plugin_skim"),
+            "example must be retained: {err}"
+        );
+    }
+
+    #[test]
+    fn try_rejects_empty_package_argument() {
+        let root = tempfile::tempdir().unwrap();
+        let args = TryArgs {
+            package: Some(String::new()),
             no_activate: false,
         };
         let err = execute(&args, root.path()).unwrap_err().to_string();
@@ -1107,12 +1126,14 @@ mod tests {
     #[test]
     fn print_install_only_hint_rejects_malformed_lockfile() {
         let root = tempfile::tempdir().unwrap();
+        // Write invalid JSON to the authoritative lockfile path consumed by
+        // Lockfile::load so the error originates from serde_json, not from a
+        // missing file (which yields an empty lockfile and a different error).
         std::fs::write(root.path().join("lockfile"), "{not-json").unwrap();
         let err = print_install_only_hint(root.path(), "any/pkg").unwrap_err();
-        let msg = format!("{err:#}");
         assert!(
-            msg.contains("Failed to load lockfile") || msg.contains("expected"),
-            "malformed lockfile must surface: {msg}"
+            err.chain().any(|e| e.is::<serde_json::Error>()),
+            "malformed lockfile must surface a JSON parse error, got chain: {err:#}"
         );
     }
 }

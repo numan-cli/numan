@@ -712,6 +712,13 @@ fn run_module_lane(
     }
 
     // Step 12: Clear the journal
+    if root
+        .join("state")
+        .join(".numan-test-fail-autoload-delete")
+        .exists()
+    {
+        bail!("injected journal-cleanup failure");
+    }
     PendingAutoload::delete(root)?;
 
     // Step 13: (Lock release happens via RAII when _lock is dropped in caller)
