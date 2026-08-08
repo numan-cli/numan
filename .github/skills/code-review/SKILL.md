@@ -45,7 +45,7 @@ and must stay aligned with `REVIEW.md`.
 ## Architecture invariants (flag violations)
 
 1. **Install is inert** — `numan install` must not invoke Nu or touch autoload/plugin registration.
-2. **Activate is separate** — only activation/deactivation commands modify Nu integration state.
+2. **Nu integration is activate/deactivate-owned** — only the activate/deactivate lifecycle boundary invokes plugin register/unregister; an explicitly opted-in `update` may coordinate that boundary (exact `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1`) but must not own or invoke Nu callbacks directly.
 3. **Mutation lock** — all mutating commands (`install`, `remove`, `update`, `gc`, nupm import) must call `acquire_mutation_lock(root)`.
 4. **Atomic JSON writes** — lockfile, journals, and state files use `write_json_atomic`; no partial writes.
 5. **Journals under `state/`** — pending activation, autoload, lifecycle journals live under `$NUMAN_ROOT/state/`.
