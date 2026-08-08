@@ -35,9 +35,11 @@ The tap repository **must be public**. A private tap is the main reason earlier
 rewritten) to an SSH remote (`git@github.com:...`) and SSH host-key checks
 fail, the tap stays stale and installs can keep an old formula.
 
-Recover by switching the tap to HTTPS, then reinstalling:
+Recover by uninstalling the stale formula, switching the tap to HTTPS, then
+reinstalling:
 
 ```bash
+brew uninstall numan
 brew untap tonythethompson/numan
 brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan
 brew install tonythethompson/numan/numan

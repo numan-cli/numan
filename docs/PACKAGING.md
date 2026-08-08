@@ -65,10 +65,11 @@ The Homebrew tap repository must stay **public**. Private visibility is why
 `brew tap tonythethompson/numan` previously failed for most users.
 
 If `brew update` fails with `Host key verification failed` for this tap, the
-local clone is on an SSH remote and can leave an old formula installed. Recover
-with:
+local clone is on an SSH remote and can leave an old formula installed. Uninstall
+the stale formula first so `brew untap` can proceed, then recover with:
 
 ```bash
+brew uninstall numan
 brew untap tonythethompson/numan
 brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan
 brew install tonythethompson/numan/numan
