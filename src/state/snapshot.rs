@@ -242,9 +242,7 @@ pub fn create_snapshot(
         autoload_sha256: Some(sha256_json(&autoload)?),
         imports_sha256: imports.as_ref().and_then(|i| sha256_json(i).ok()),
         paths_sha256: Some(sha256_json(&paths)?),
-        activation_profile_sha256: activation_profile
-            .as_ref()
-            .and_then(|p| sha256_json(p).ok()),
+        activation_profile_sha256: Some(sha256_json(&activation_profile)?),
     };
 
     let manifest = SnapshotManifest {
@@ -277,9 +275,7 @@ pub fn create_snapshot(
         write_json_atomic(&stage.join("imports.json"), imports)?;
     }
     write_json_atomic(&stage.join("paths.json"), &paths)?;
-    if let Some(ref profile) = activation_profile {
-        write_json_atomic(&stage.join("activation-profile.json"), profile)?;
-    }
+    write_json_atomic(&stage.join("activation-profile.json"), &activation_profile)?;
 
     let dest = snapshot_dir(root, &id);
     std::fs::rename(&stage, &dest).with_context(|| {
@@ -372,14 +368,9 @@ pub fn load_snapshot(root: &Path, id: &str) -> Result<Snapshot> {
                 id
             );
         }
-        let profile: ActivationProfile = read_json(&profile_path)?;
-        verify_digest(&profile, expected, "activation-profile")?;
-        Some(SnapshotSidecar::Present {
-            content: std::fs::read_to_string(&profile_path)
-                .with_context(|| format!("Failed to read '{}'", profile_path.display()))?,
-            sha256: expected.to_string(),
-            value: profile,
-        })
+        let sidecar: SnapshotSidecar<ActivationProfile> = read_json(&profile_path)?;
+        verify_digest(&sidecar, expected, "activation-profile")?;
+        Some(sidecar)
     } else {
         None
     };
@@ -691,19 +682,38 @@ fn capture_paths_sidecar(root: &Path) -> Result<SnapshotPaths> {
 
 /// Capture the activation profile as a snapshot sidecar.
 ///
-/// Returns `None` when the profile file does not exist (legacy/uninitialized
-/// roots), so the snapshot omits the sidecar and rollback leaves the live
-/// profile untouched (matching legacy behavior).
-fn capture_activation_profile_sidecar(root: &Path) -> Result<Option<ActivationProfile>> {
+/// Returns [`SnapshotSidecar::Absent`] when the profile file does not exist
+/// (uninitialized roots), so rollback deletes a later-created profile.
+/// Returns [`SnapshotSidecar::Present`] when the profile exists.
+fn capture_activation_profile_sidecar(root: &Path) -> Result<SnapshotSidecar<ActivationProfile>> {
     let path = ActivationProfile::profile_path(root);
     if !path.is_file() {
-        return Ok(None);
+        return Ok(SnapshotSidecar::Absent);
     }
-    ActivationProfile::load(root).with_context(|| {
+    let content = std::fs::read_to_string(&path).with_context(|| {
         format!(
-            "Failed to load activation profile '{}'; refusing to create snapshot",
+            "Failed to read activation profile '{}'; refusing to create snapshot",
             path.display()
         )
+    })?;
+    let value = ActivationProfile::load(root)
+        .with_context(|| {
+            format!(
+                "Failed to load activation profile '{}'; refusing to create snapshot",
+                path.display()
+            )
+        })?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Activation profile '{}' vanished between existence check and load",
+                path.display()
+            )
+        })?;
+    let sha256 = compute_sha256(content.as_bytes());
+    Ok(SnapshotSidecar::Present {
+        content,
+        sha256,
+        value,
     })
 }
 
