@@ -696,19 +696,20 @@ fn capture_activation_profile_sidecar(root: &Path) -> Result<SnapshotSidecar<Act
             path.display()
         )
     })?;
-    let value = ActivationProfile::load(root)
-        .with_context(|| {
-            format!(
-                "Failed to load activation profile '{}'; refusing to create snapshot",
-                path.display()
-            )
-        })?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Activation profile '{}' vanished between existence check and load",
-                path.display()
-            )
-        })?;
+    let value: ActivationProfile = serde_json::from_str(&content).with_context(|| {
+        format!(
+            "Malformed activation profile at '{}' (delete it or repair JSON)",
+            path.display()
+        )
+    })?;
+    if value.schema_version != crate::state::activation_profile::ACTIVATION_PROFILE_SCHEMA_VERSION {
+        bail!(
+            "Unsupported activation-profile schema_version {} at '{}' (expected {})",
+            value.schema_version,
+            path.display(),
+            crate::state::activation_profile::ACTIVATION_PROFILE_SCHEMA_VERSION
+        );
+    }
     let sha256 = compute_sha256(content.as_bytes());
     Ok(SnapshotSidecar::Present {
         content,
