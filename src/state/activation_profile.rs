@@ -373,31 +373,17 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
         assert!(!would_ensure_contains_any(root, "0.114.0", std::iter::empty()).unwrap());
-        assert!(would_ensure_contains_any(
-            root,
-            "0.114.0",
-            [(ProfileKind::Plugin, "a/p")],
-        )
-        .unwrap());
+        assert!(
+            would_ensure_contains_any(root, "0.114.0", [(ProfileKind::Plugin, "a/p")],).unwrap()
+        );
         ensure_contains_for_paths(root, "0.114.0", ProfileKind::Plugin, "a/p").unwrap();
-        assert!(!would_ensure_contains_any(
-            root,
-            "0.114.0",
-            [(ProfileKind::Plugin, "a/p")],
-        )
-        .unwrap());
-        assert!(would_ensure_absent_any(
-            root,
-            "0.114.0",
-            [(ProfileKind::Plugin, "a/p")],
-        )
-        .unwrap());
+        assert!(
+            !would_ensure_contains_any(root, "0.114.0", [(ProfileKind::Plugin, "a/p")],).unwrap()
+        );
+        assert!(would_ensure_absent_any(root, "0.114.0", [(ProfileKind::Plugin, "a/p")],).unwrap());
         ensure_absent_for_paths(root, "0.114.0", ProfileKind::Plugin, "a/p").unwrap();
-        assert!(!would_ensure_absent_any(
-            root,
-            "0.114.0",
-            [(ProfileKind::Plugin, "a/p")],
-        )
-        .unwrap());
+        assert!(
+            !would_ensure_absent_any(root, "0.114.0", [(ProfileKind::Plugin, "a/p")],).unwrap()
+        );
     }
 }

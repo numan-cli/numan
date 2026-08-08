@@ -70,11 +70,7 @@ pub fn execute(args: &ActivateArgs, root: &Path) -> Result<()> {
 ///
 /// Used by `numan try` so install→activate stays atomic under one lock.
 /// Does not support `--list` / `--check` (those are lock-free read paths).
-pub fn execute_under_lock(
-    args: &ActivateArgs,
-    root: &Path,
-    lock: &MutationLock,
-) -> Result<()> {
+pub fn execute_under_lock(args: &ActivateArgs, root: &Path, lock: &MutationLock) -> Result<()> {
     execute_under_lock_with_hooks(args, root, lock, &run_plugin_add, None)
 }
 
