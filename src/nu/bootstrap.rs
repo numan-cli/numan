@@ -558,11 +558,12 @@ pub fn register_existing_nu(binary: &Path, options: &NuSetupOptions) -> Result<P
 
     // Refuse temporary roots before any process-global PATH mutation so a
     // later `persist_path_dir` refusal cannot leave PATH half-updated.
-    // `persist_path_dir` short-circuits under `NUMAN_TEST_NO_PERSIST_USER_PATH`
-    // (set by `PathRestoreGuard`), so the half-update risk does not apply and
-    // ignored acceptance tests may stage binaries under tempfile roots.
-    if !options.skip_path
-        && std::env::var_os("NUMAN_TEST_NO_PERSIST_USER_PATH").is_none()
+    // Unconditional on `skip_path`: even a session-only registration must not
+    // put a temp dir on the process PATH. `persist_path_dir` short-circuits
+    // under `NUMAN_TEST_NO_PERSIST_USER_PATH` (set by `PathRestoreGuard`), so
+    // the half-update risk does not apply and ignored acceptance tests may
+    // stage binaries under tempfile roots.
+    if std::env::var_os("NUMAN_TEST_NO_PERSIST_USER_PATH").is_none()
         && path_is_under_temp_dir(&parent)
     {
         bail!(
