@@ -1892,6 +1892,41 @@ mod tests {
     }
 
     #[test]
+    fn fake_unregistrar_failure_retains_profile_desire() {
+        use crate::state::activation_profile::{ActivationProfile, ProfileKind};
+
+        let env = PluginTestEnv::new();
+        env.write_nu_paths();
+        env.seed_active_plugin("owner/highlight");
+
+        let mut profile = ActivationProfile::new();
+        profile.ensure_contains("0.113", ProfileKind::Plugin, "owner/highlight");
+        profile.save(env.root()).unwrap();
+
+        let args = DeactivateArgs {
+            packages: vec!["owner/highlight".to_string()],
+            verbose: false,
+        };
+        let err = execute_with_unregistrar(&args, env.root(), &|_nu, _name, _cfg| {
+            bail!("simulated unregister failure")
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("failed to deactivate"));
+
+        let profile = ActivationProfile::load(env.root())
+            .unwrap()
+            .expect("profile present");
+        assert!(
+            profile
+                .set_for_minor("0.113")
+                .plugins
+                .iter()
+                .any(|id| id == "owner/highlight"),
+            "failed deactivate must retain profile desire"
+        );
+    }
+
+    #[test]
     fn remove_succeeds_after_activation_cleared() {
         use crate::util::hints;
 

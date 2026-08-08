@@ -612,6 +612,13 @@ mod tests {
         let o3 = Rc::clone(&hook_order);
 
         let unregistrar = move |_a: &str, _b: &str, _c: &str| -> Result<()> {
+            let active = version_manager::read_active_version(root)
+                .expect("active version readable during leave")
+                .expect("active version present during leave");
+            assert_eq!(
+                active.version, "0.113.1",
+                "unregistrar must run before active-version marker changes"
+            );
             o1.borrow_mut().push("unregister");
             Ok(())
         };
@@ -638,17 +645,10 @@ mod tests {
         .unwrap();
 
         let order = hook_order.borrow();
-        assert!(order.contains(&"unregister"), "unregistrar must be invoked");
-        assert!(order.contains(&"register"), "registrar must be invoked");
-        assert!(
-            order.contains(&"path_refresh"),
-            "path_refresh must be invoked"
-        );
-        let unreg_pos = order.iter().position(|&x| x == "unregister").unwrap();
-        let version_changed_pos = order.len();
-        assert!(
-            unreg_pos < version_changed_pos,
-            "unregistrar must execute before active-version marker changes"
+        assert_eq!(
+            order.as_slice(),
+            &["unregister", "path_refresh", "register"][..],
+            "leave (unregister) then marker/path refresh then restore (register)"
         );
 
         let active = version_manager::read_active_version(root).unwrap().unwrap();
