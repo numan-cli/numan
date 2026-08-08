@@ -78,7 +78,7 @@ pub fn execute_with_hooks_and_refresh(
         // Snapshot established state before any mutation. This covers both the
         // legacy-migration step (rename + active-version write) and the version
         // switch below.
-        create_snapshot(
+        let snapshot = create_snapshot(
             root,
             SnapshotReason::PreMutation,
             SnapshotTrigger::Update,
@@ -91,8 +91,13 @@ pub fn execute_with_hooks_and_refresh(
             .with_context(|| "Failed to migrate legacy Nu installation")?;
 
         match args.version.as_str() {
-            "latest" => execute_latest(root, &hooks),
-            version => activation_switch::switch_active_nu_version(root, version, &hooks),
+            "latest" => execute_latest(root, &hooks, Some(snapshot.id)),
+            version => activation_switch::switch_active_nu_version(
+                root,
+                version,
+                &hooks,
+                Some(snapshot.id),
+            ),
         }
     })
 }
@@ -119,7 +124,11 @@ fn execute_list(root: &Path) -> Result<()> {
 }
 
 /// Switch to the latest (newest) installed Nu version.
-fn execute_latest(root: &Path, hooks: &SwitchHooks<'_>) -> Result<()> {
+fn execute_latest(
+    root: &Path,
+    hooks: &SwitchHooks<'_>,
+    pre_mutation_snapshot_id: Option<String>,
+) -> Result<()> {
     let latest = version_manager::latest_installed_version(root)?;
     let Some(version) = latest else {
         bail!(
@@ -140,7 +149,7 @@ fn execute_latest(root: &Path, hooks: &SwitchHooks<'_>) -> Result<()> {
         }
     }
 
-    activation_switch::switch_active_nu_version(root, &version, hooks)
+    activation_switch::switch_active_nu_version(root, &version, hooks, pre_mutation_snapshot_id)
 }
 
 #[cfg(test)]

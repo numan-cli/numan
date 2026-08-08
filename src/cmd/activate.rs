@@ -735,6 +735,7 @@ pub(crate) fn activate_modules_unlocked(
     root: &Path,
     package_ids: &[String],
     runner: &dyn CandidateRunner,
+    pre_mutation_snapshot_id: Option<String>,
 ) -> Result<bool> {
     if package_ids.is_empty() {
         return Ok(false);
@@ -762,7 +763,7 @@ pub(crate) fn activate_modules_unlocked(
         &module_targets,
         &managed_file_path,
         runner,
-        None,
+        pre_mutation_snapshot_id,
     )
 }
 

@@ -475,6 +475,7 @@ pub(crate) fn deactivate_modules_unlocked(
     root: &Path,
     package_ids: &[String],
     runner: Option<&dyn CandidateRunner>,
+    pre_mutation_snapshot_id: Option<String>,
 ) -> Result<()> {
     if package_ids.is_empty() {
         return Ok(());
@@ -520,7 +521,7 @@ pub(crate) fn deactivate_modules_unlocked(
         &mut lockfile,
         &targets,
         runner,
-        None,
+        pre_mutation_snapshot_id,
     )
 }
 

@@ -523,6 +523,7 @@ pub fn register_existing_nu(binary: &Path, options: &NuSetupOptions) -> Result<P
         .with_context(|| format!("'{}' is not a runnable Nushell binary", binary.display()))?;
 
     let parent = path_parent_for_registration(input.as_path(), &resolved)?;
+    let parent = normalize_path_entry(&parent);
 
     if options.caller_consented_destructive {
         // Audit trail for the hoisted consent: the caller (typically
@@ -553,6 +554,16 @@ pub fn register_existing_nu(binary: &Path, options: &NuSetupOptions) -> Result<P
             options.yes,
             "Nushell PATH setup cancelled.",
         )?;
+    }
+
+    // Refuse temporary roots before any process-global PATH mutation so a
+    // later `persist_path_dir` refusal cannot leave PATH half-updated.
+    if !options.skip_path && path_is_under_temp_dir(&parent) {
+        bail!(
+            "Refusing to add temporary directory '{}' to the user PATH. \
+             Install or register a stable Nushell location instead.",
+            parent.display()
+        );
     }
 
     prepend_process_path(&parent)?;
@@ -1181,10 +1192,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn persist_user_path_honors_test_no_persist_flag() {
-        use crate::util::test_paths::PathRestoreGuard;
-        let _guard = PathRestoreGuard::new();
+        use crate::util::test_paths::{HomeRestoreGuard, PathRestoreGuard};
+        let _path_guard = PathRestoreGuard::new();
+        let _home_guard = HomeRestoreGuard::new();
         let home = TempDir::new().unwrap();
-        let original_home = std::env::var_os("HOME");
         std::env::set_var("HOME", home.path());
 
         let binary = home.path().join("fixture-nu");
@@ -1201,11 +1212,6 @@ mod tests {
                 !home.path().join(name).exists(),
                 "must not create {name} while PathRestoreGuard is held"
             );
-        }
-
-        match original_home {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
         }
     }
 
