@@ -103,5 +103,5 @@ PY
 | GitHub Release | Download archive from [Releases](https://github.com/tonythethompson/numan/releases) |
 | crates.io | `cargo install numan-cli` |
 | From source | `cargo install --path .` or `cargo install --git https://github.com/tonythethompson/numan` |
-| Homebrew | `brew tap tonythethompson/numan && brew install numan` (see [PACKAGING.md](PACKAGING.md)) |
+| Homebrew | `brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan && brew install numan` (see [PACKAGING.md](PACKAGING.md)) |
 | winget | `winget install tonythethompson.numan` (see [PACKAGING.md](PACKAGING.md)) |

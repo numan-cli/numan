@@ -8,18 +8,56 @@ review; digests and bottle stanzas may lag until the next tagged release whose
 pre-Linux-ARM contract (macOS ARM + Linux x86_64 only) because no published
 release yet ships `aarch64-unknown-linux-gnu`. The live tap is
 [`tonythethompson/homebrew-numan`](https://github.com/tonythethompson/homebrew-numan)
-(`brew tap tonythethompson/numan`), updated by the publish workflow after each
+(tap with the HTTPS remote below), updated by the publish workflow after each
 `v*.*.*` release.
 
 ## Install
 
+Prefer the explicit HTTPS remote so `brew update` does not depend on SSH host
+keys or GitHub SSH auth:
+
 ```bash
-brew tap tonythethompson/numan
+brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan
 brew install numan
 ```
 
+`brew tap tonythethompson/numan` alone also works when Homebrew clones over
+HTTPS (the usual default for public taps).
+
 The tap repository **must be public**. A private tap is the main reason earlier
 `brew tap` / `brew install` attempts failed for users.
+
+## Troubleshooting
+
+### `Host key verification failed` while updating the tap
+
+`brew update` fetches each tapped repo with git. If this tap was cloned (or
+rewritten) to an SSH remote (`git@github.com:...`) and SSH host-key checks
+fail, the tap stays stale and installs can keep an old formula.
+
+Recover by uninstalling the stale formula, switching the tap to HTTPS, then
+reinstalling:
+
+```bash
+brew uninstall numan
+brew untap tonythethompson/numan
+brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan
+brew install tonythethompson/numan/numan
+```
+
+Or keep the tap and only fix the remote:
+
+```bash
+git -C "$(brew --repo tonythethompson/numan)" remote set-url origin https://github.com/tonythethompson/homebrew-numan.git
+brew update
+brew reinstall tonythethompson/numan/numan
+```
+
+If git still rewrites HTTPS to SSH, check for `url.*.insteadOf` rules:
+
+```bash
+git config --global --get-regexp '^url\..*\.insteadof$'
+```
 
 ## Updating for a release
 
