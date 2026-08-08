@@ -154,13 +154,12 @@ pub fn leave_current_nu(
 ) -> Result<SwitchActivationReport> {
     let mut report = SwitchActivationReport::default();
     let paths_present = root.join("nu_state").join("paths.json").is_file();
-    let lockfile = match Lockfile::load(root) {
-        Ok(lf) => lf,
-        Err(_) => {
-            // No lockfile yet: nothing to leave.
-            return Ok(report);
-        }
-    };
+    // A missing lockfile already yields an empty lockfile. Any error here means
+    // unreadable or malformed state, which must stop the switch.
+    let lockfile = Lockfile::load(root).with_context(|| {
+        "Cannot switch Nu version: the lockfile could not be read. \
+         Repair or restore it, then retry `numan use`."
+    })?;
 
     if !paths_present {
         // Without NuPaths we cannot match is_active_for. Fail closed when any
@@ -381,7 +380,10 @@ fn classify_restore_target(
                     return RestoreClass::Incompatible;
                 }
             } else if expected_type == "plugin" && !resolver.has_compatible_version(&pkg) {
-                // Installed version not in index; still refuse if no version works.
+                // Plugins require a binary target match, so an installed
+                // version absent from the current index can still be
+                // incompatible. Modules are pure Nu scripts with no target
+                // constraint, so we trust the lockfile and restore them.
                 return RestoreClass::Incompatible;
             }
         }

@@ -527,16 +527,13 @@ fn check_nu_environments(root: &Path, options: &DoctorOptions, findings: &mut Ve
     }
 }
 
-/// Resolve the managed Nu binary for doctor reporting.
-///
-/// Prefers the versioned active install (`tools/nushell/<version>/nu`), then
-/// falls back to the legacy single-binary path (`tools/nushell/nu`) so older
-/// roots still report correctly before migration.
 fn resolve_managed_nu_binary(root: &Path) -> Result<Option<PathBuf>> {
     match version_manager::active_nu_binary(root) {
         Ok(Some(path)) => return Ok(Some(path)),
         Ok(None) => {}
-        Err(e) => return Err(e.into()),
+        Err(e) => {
+            return Err(e).with_context(|| "Failed to resolve active managed Nu binary");
+        }
     }
 
     let legacy = managed_nu_binary(root);
@@ -544,7 +541,9 @@ fn resolve_managed_nu_binary(root: &Path) -> Result<Option<PathBuf>> {
         return Ok(Some(legacy));
     }
 
-    if let Some(latest) = version_manager::latest_installed_version(root)? {
+    if let Some(latest) = version_manager::latest_installed_version(root)
+        .with_context(|| "Failed to list installed managed Nu versions")?
+    {
         let path = version_manager::version_binary(root, &latest);
         if path.is_file() {
             return Ok(Some(path));

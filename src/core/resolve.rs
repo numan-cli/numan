@@ -463,9 +463,10 @@ fn parse_triple(v: &str) -> Result<VersionTriple> {
 
 /// Return candidate Nu versions derived from a package version's `nu_version` constraint.
 ///
-/// This is metadata-driven: it includes the lower bound, a patch just below an
-/// exclusive upper bound, and any verified-with versions. The returned strings
-/// are not guaranteed to satisfy the constraint; callers must validate them.
+/// This is metadata-driven: it includes the lower bound and a patch just below
+/// an exclusive upper bound. The returned strings are not guaranteed to satisfy
+/// the constraint; callers must validate them. Verified-with versions are added
+/// separately by the caller.
 pub fn candidate_nu_versions_from_constraint(constraint: &str) -> Vec<String> {
     let mut out = Vec::new();
 

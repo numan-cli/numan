@@ -661,10 +661,15 @@ mod tests {
             "path_refresh must be invoked"
         );
         let unreg_pos = order.iter().position(|&x| x == "unregister").unwrap();
-        let version_changed_pos = order.len();
+        let refresh_pos = order.iter().position(|&x| x == "path_refresh").unwrap();
+        let reg_pos = order.iter().position(|&x| x == "register").unwrap();
         assert!(
-            unreg_pos < version_changed_pos,
-            "unregistrar must execute before active-version marker changes"
+            unreg_pos < refresh_pos,
+            "unregistrar must execute before the active-version marker changes: {order:?}"
+        );
+        assert!(
+            refresh_pos < reg_pos,
+            "restore must run after the marker write and paths refresh: {order:?}"
         );
 
         let active = version_manager::read_active_version(root).unwrap().unwrap();

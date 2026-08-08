@@ -266,7 +266,20 @@ fn sync_user_activate_profile(
         all.extend(active.modules);
         all
     } else {
-        args.packages.clone()
+        // Only record packages that are actually active now. A failed lane
+        // must not become desired state for `numan use` restore.
+        let active = crate::cmd::activation_switch::collect_currently_active(lockfile, nu_paths);
+        let active_set: std::collections::HashSet<&str> = active
+            .plugins
+            .iter()
+            .map(|s| s.as_str())
+            .chain(active.modules.iter().map(|s| s.as_str()))
+            .collect();
+        args.packages
+            .iter()
+            .filter(|id| active_set.contains(id.as_str()))
+            .cloned()
+            .collect()
     };
     crate::cmd::activation_switch::sync_profile_after_user_activate(
         root,
