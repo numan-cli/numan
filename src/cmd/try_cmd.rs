@@ -36,19 +36,34 @@ struct StarterSpec {
 
 /// Curated starters preferred before falling back to the first compatible registry package.
 const STARTERS: &[StarterSpec] = &[
+    // Primary: interactive fuzzy finder — a "wow" demo that shows Nu's structured data
     StarterSpec {
         id: "idanarye/nu_plugin_skim",
         nu_minor: Some((0, 114)),
         os: None,
     },
+    // Interactive TUI data explorer — visually impressive for newcomers
     StarterSpec {
-        id: "abusch/nu_plugin_semver",
-        nu_minor: Some((0, 113)),
-        os: Some(Os::Windows),
+        id: "tonythethompson/nu_plugin_explore",
+        nu_minor: Some((0, 114)),
+        os: None,
     },
+    // Syntax highlighting — immediate visual payoff, works on any data
+    StarterSpec {
+        id: "cptpiepmatz/nu_plugin_highlight",
+        nu_minor: Some((0, 114)),
+        os: None,
+    },
+    // Test framework — practical for all users
     StarterSpec {
         id: "vyadh/nutest",
         nu_minor: Some((0, 114)),
+        os: None,
+    },
+    // Universal fallbacks (any Nu version)
+    StarterSpec {
+        id: "cptpiepmatz/nu_plugin_highlight",
+        nu_minor: None,
         os: None,
     },
     StarterSpec {
@@ -216,7 +231,7 @@ fn select_starter(
         }
     }
 
-    // 3. Curated starter with a suggested Nu pin (prefer skim / Windows semver / nutest).
+    // 3. Curated starter with a suggested Nu pin (prefer skim / explore / highlight / nutest).
     let mut suggested_pin = None;
     for spec in STARTERS {
         if let Some(os) = spec.os {
@@ -263,6 +278,13 @@ fn print_usage_hint(package_id: &str, packages: &[Package]) {
     match pkg.map(|p| &p.package_type) {
         Some(PackageType::Module) if package_id.contains("nutest") => {
             println!("In Nu, try:  use nutest; help commands | where name =~ test");
+        }
+        Some(PackageType::Plugin) if package_id.contains("explore") => {
+            println!("In Nu, try:  open Cargo.toml | nu_plugin_explore");
+            println!("             (use arrow keys to navigate, 'q' to quit)");
+        }
+        Some(PackageType::Plugin) if package_id.contains("highlight") => {
+            println!("In Nu, try:  open Cargo.toml | nu_plugin_highlight");
         }
         Some(PackageType::Plugin) if package_id.contains("semver") => {
             println!("In Nu, try:  help commands | where name =~ semver");
@@ -386,8 +408,9 @@ mod tests {
         let resolver = Resolver::new(&platform, &nu);
         let packages = vec![
             pkg("idanarye/nu_plugin_skim", ">=0.114.0 <0.115.0", true),
+            pkg("tonythethompson/nu_plugin_explore", ">=0.114.0 <0.115.0", true),
+            pkg("cptpiepmatz/nu_plugin_highlight", ">=0.114.0 <0.115.0", true),
             pkg("vyadh/nutest", ">=0.103.0", false),
-            pkg("abusch/nu_plugin_semver", ">=0.113.0 <0.114.0", true),
         ];
         match select_starter(&packages, &resolver, &platform, &nu) {
             StarterSelection::Compatible(id) => assert_eq!(id, "idanarye/nu_plugin_skim"),
@@ -396,31 +419,32 @@ mod tests {
     }
 
     #[test]
-    fn select_starter_prefers_nutest_on_114_without_skim() {
+    fn select_starter_prefers_explore_on_114_without_skim() {
         let platform = windows_platform();
         let nu = NuVersion::parse("0.114.1").unwrap();
         let resolver = Resolver::new(&platform, &nu);
         let packages = vec![
-            pkg("abusch/nu_plugin_semver", ">=0.113.0 <0.114.0", true),
+            pkg("tonythethompson/nu_plugin_explore", ">=0.114.0 <0.115.0", true),
+            pkg("cptpiepmatz/nu_plugin_highlight", ">=0.114.0 <0.115.0", true),
             pkg("vyadh/nutest", ">=0.114.0", false),
         ];
         match select_starter(&packages, &resolver, &platform, &nu) {
-            StarterSelection::Compatible(id) => assert_eq!(id, "vyadh/nutest"),
+            StarterSelection::Compatible(id) => assert_eq!(id, "tonythethompson/nu_plugin_explore"),
             other => panic!("unexpected selection: {other:?}"),
         }
     }
 
     #[test]
-    fn select_starter_offers_pin_when_only_113_plugin() {
+    fn select_starter_falls_back_to_highlight_on_any_nu() {
         let platform = windows_platform();
-        let nu = NuVersion::parse("0.114.1").unwrap();
+        let nu = NuVersion::parse("0.113.1").unwrap();
         let resolver = Resolver::new(&platform, &nu);
-        let packages = vec![pkg("abusch/nu_plugin_semver", ">=0.113.0 <0.114.0", true)];
+        let packages = vec![
+            pkg("cptpiepmatz/nu_plugin_highlight", ">=0.113.0 <0.115.0", true),
+            pkg("vyadh/nutest", ">=0.103.0", false),
+        ];
         match select_starter(&packages, &resolver, &platform, &nu) {
-            StarterSelection::NeedsPin { id, diagnosis } => {
-                assert_eq!(id, "abusch/nu_plugin_semver");
-                assert_eq!(diagnosis.suggested_pin.as_deref(), Some("0.113.1"));
-            }
+            StarterSelection::Compatible(id) => assert_eq!(id, "cptpiepmatz/nu_plugin_highlight"),
             other => panic!("unexpected selection: {other:?}"),
         }
     }
