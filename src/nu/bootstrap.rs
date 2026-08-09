@@ -732,13 +732,9 @@ where
         .map(normalize_release_tag)
         .unwrap_or_else(|| "latest".to_string());
 
-    // The gate is flow-aware: a pinned install short-circuits only when the
-    // requested version's binary already exists; the `latest` flow has no
-    // version to probe, so any existing versioned install counts as
-    // "already installed" (matching the old legacy-binary heuristic).
-    let any_version_installed =
-        options.version.is_none() && !version_manager::list_installed_versions(root)?.is_empty();
-    if (dest.is_file() || any_version_installed) && !options.force {
+    // A latest request must resolve and install the current release; an
+    // arbitrary older version must not satisfy this gate.
+    if dest.is_file() && !options.force {
         // For the `latest` flow `dest` is the legacy placeholder (never a
         // file in the versioned world); resolve the effective installed
         // binary so PATH prepend/persist point at a real versioned file.
@@ -829,17 +825,18 @@ where
 
     let installed = install(root, platform)?;
 
-    // Persist the freshly installed (pinned) version as the active version so
-    // `numan use list` and downstream activation see it as the selected Nu.
-    // `latest` is left to `numan use latest` — the user explicitly resolves the
-    // release tag there.
-    if let Some(version) = &options.version {
-        let pinned = version_manager::normalize_version(version)
-            .with_context(|| format!("Failed to normalize requested version '{}'", version))?;
-        version_manager::write_active_version(root, &pinned).with_context(|| {
+    // The installer returns the concrete versioned binary for both pinned and
+    // latest releases; persist that version as the active selection.
+    if let Some(version) = installed
+        .parent()
+        .and_then(|dir| dir.file_name())
+        .and_then(|name| name.to_str())
+    {
+        let installed_version = version_manager::normalize_version(version)?;
+        version_manager::write_active_version(root, &installed_version).with_context(|| {
             format!(
                 "Failed to persist installed Nu version '{}' as active",
-                pinned
+                installed_version
             )
         })?;
     }
