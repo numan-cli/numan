@@ -155,6 +155,9 @@ fn print_onboarding_next_steps(official_configured: bool) {
     println!(
         "Run 'numan doctor' to verify setup and apply safe repairs (use 'numan doctor --scan' for report-only output)."
     );
+    println!(
+        "Run 'numan completions nushell' to enable tab completion for Numan commands."
+    );
 }
 
 fn execute_refresh<F>(
