@@ -464,15 +464,21 @@ fn check_nu_paths(
 
 /// Report PATH vs managed Nu versions (informational; never prefer managed as PATH).
 fn check_nu_environments(root: &Path, options: &DoctorOptions, findings: &mut Vec<Finding>) {
+    let mut path_version: Option<String> = None;
+    let mut managed_version: Option<String> = None;
+
     match find_nu_on_path() {
         Ok(path) => match probe_nu_version(Path::new(&path), options) {
-            Ok(version) => findings.push(finding(
-                "nu.path.version",
-                Severity::Info,
-                format!("PATH Nu: {version}"),
-                None,
-                RepairTier::None,
-            )),
+            Ok(version) => {
+                findings.push(finding(
+                    "nu.path.version",
+                    Severity::Info,
+                    format!("PATH Nu: {version}"),
+                    None,
+                    RepairTier::None,
+                ));
+                path_version = Some(version);
+            }
             Err(e) => findings.push(finding(
                 "nu.path.version",
                 Severity::Info,
@@ -492,13 +498,16 @@ fn check_nu_environments(root: &Path, options: &DoctorOptions, findings: &mut Ve
 
     match resolve_managed_nu_binary(root) {
         Ok(Some(managed)) => match probe_nu_version(&managed, options) {
-            Ok(version) => findings.push(finding(
-                "nu.managed.version",
-                Severity::Info,
-                format!("Managed Nu: {version} ({})", managed.display()),
-                None,
-                RepairTier::None,
-            )),
+            Ok(version) => {
+                findings.push(finding(
+                    "nu.managed.version",
+                    Severity::Info,
+                    format!("Managed Nu: {version} ({})", managed.display()),
+                    None,
+                    RepairTier::None,
+                ));
+                managed_version = Some(version);
+            }
             Err(e) => findings.push(finding(
                 "nu.managed.version",
                 Severity::Info,
@@ -518,6 +527,24 @@ fn check_nu_environments(root: &Path, options: &DoctorOptions, findings: &mut Ve
             RepairTier::None,
         )),
         Err(e) => findings.push(managed_nu_resolve_finding(e)),
+    }
+
+    // Warn if both exist but differ — plugins built for one won't load in the other.
+    if let (Some(ref path_v), Some(ref managed_v)) = (&path_version, &managed_version) {
+        if path_v != managed_v {
+            findings.push(finding(
+                "nu.version_mismatch",
+                Severity::Warn,
+                format!(
+                    "PATH Nu ({path_v}) differs from managed Nu ({managed_v}). \
+                     Plugins are ABI-locked to a specific Nu minor version — \
+                     packages installed under one will not load in the other."
+                ),
+                Some("Ensure you are running the Nu version that matches your installed packages. \
+                      Use `numan setup nu` to align, or `numan activate` under the correct shell."),
+                RepairTier::None,
+            ));
+        }
     }
 }
 
