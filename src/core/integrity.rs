@@ -1,11 +1,31 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
+use std::io::{BufReader, Read};
 use std::path::Path;
 
+fn hash_file(path: &Path) -> Result<String> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("Failed to open '{}' for SHA-256 hashing", path.display()))?;
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let read = reader.read(&mut buffer).with_context(|| {
+            format!(
+                "Failed to read '{}' while computing SHA-256",
+                path.display()
+            )
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
 pub fn verify_file(path: &Path, expected_sha256: &str) -> Result<bool> {
-    let content = std::fs::read(path)?;
-    let hash = compute_sha256(&content);
-    Ok(hash == expected_sha256)
+    Ok(hash_file(path)? == expected_sha256)
 }
 
 pub fn compute_sha256(data: &[u8]) -> String {
@@ -21,8 +41,8 @@ pub fn verify_bytes(data: &[u8], expected_sha256: &str) -> Result<bool> {
 }
 
 pub fn verify_and_report(path: &Path, expected_sha256: &str, pkg_name: &str) -> Result<()> {
-    if !verify_file(path, expected_sha256)? {
-        let actual = compute_sha256(&std::fs::read(path)?);
+    let actual = hash_file(path)?;
+    if actual != expected_sha256 {
         bail!(
             "Integrity check failed for '{pkg_name}'.
        Expected: sha256:{expected_sha256}

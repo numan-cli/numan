@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use std::io::IsTerminal;
 use std::path::Path;
 
 use crate::state::lifecycle_journal::{LifecycleOp, LifecycleStage, PendingLifecycle};
@@ -15,21 +16,78 @@ pub struct RemoveArgs {
     /// Package to remove (owner/name)
     package: String,
 
+    /// Skip interactive confirmation (required in non-interactive sessions)
+    #[arg(long)]
+    yes: bool,
+
     /// Remove even if the package has an active *module* activation record (does not bypass active plugin activation; see Issue #22)
     #[arg(long)]
     force: bool,
 }
 
 pub fn execute(args: &RemoveArgs, root: &Path) -> Result<()> {
-    let _lock = acquire_mutation_lock(root)?;
+    execute_with_tty(args, root, std::io::stdin().is_terminal())
+}
 
-    let mut lockfile = Lockfile::load(root)?;
+/// Same as [`execute`] with an injectable terminal-status seam for tests.
+fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> {
+    // Destructive: permanently deletes the package payload and lockfile entry.
+    // Refuse unattended (non-TTY) sessions without explicit --yes so safe-batch
+    // automation has to opt in; interactive TTY sessions still confirm below.
+    crate::util::confirm::require_tty_or_yes_with_seam(args.yes, "package removal", is_tty)?;
+    crate::util::confirm::confirm_or_bail(
+        &format!(
+            "Remove package '{}' ? This deletes its payload.",
+            args.package
+        ),
+        args.yes,
+        "Cancelled.",
+    )?;
+
+    // Validate before taking the mutation lock so a typo'd package id fails
+    // fast, and so an idle interactive prompt does not block other destructive
+    // ops on the same root (mirrors snapshot delete/rollback ordering).
+    let lockfile = Lockfile::load(root)?;
 
     let entry = match lockfile.packages.get(&args.package) {
         Some(e) => e.clone(),
         None => bail!("Package '{}' is not installed.", args.package),
     };
 
+    ensure_plugin_not_active(&entry, &args.package)?;
+    if !args.force && entry.module_activation.is_some() {
+        bail!(
+            "Package '{}' is currently active as a module. \
+             Run `numan deactivate {}` first or use --force.",
+            args.package,
+            args.package
+        );
+    }
+
+    // Interactive confirmation after validation so a typo'd package id fails
+    // fast, and so `--yes` truly means "skip confirmation" rather than only
+    // the non-TTY gate.
+    crate::util::confirm::confirm_or_bail(
+        &format!(
+            "Remove package '{}' (payload will be deleted permanently)?",
+            args.package
+        ),
+        args.yes,
+        "Package removal cancelled.",
+    )?;
+
+    let _lock = acquire_mutation_lock(root)?;
+
+    // Reload under the lock so the confirm-time view cannot race a concurrent
+    // install/activate that landed while the user was at the prompt.
+    let mut lockfile = Lockfile::load(root)?;
+    let entry = match lockfile.packages.get(&args.package) {
+        Some(e) => e.clone(),
+        None => bail!(
+            "Package '{}' is no longer installed (removed while confirmation was pending).",
+            args.package
+        ),
+    };
     ensure_plugin_not_active(&entry, &args.package)?;
     if !args.force && entry.module_activation.is_some() {
         bail!(
@@ -73,6 +131,19 @@ pub fn execute(args: &RemoveArgs, root: &Path) -> Result<()> {
     };
     journal.save(root)?;
 
+    // Clear desire before any destructive change so a profile-write failure
+    // aborts the remove while the lockfile and payload are still intact and
+    // the user can retry. A leftover profile entry would make later
+    // `numan use` restore attempts target a removed package.
+    crate::state::activation_profile::remove_from_all_minors(root, &args.package).with_context(
+        || {
+            format!(
+                "Failed to clear activation profile entries for '{}'",
+                args.package
+            )
+        },
+    )?;
+
     // Remove from lockfile (atomic write).
     lockfile.packages.remove(&args.package);
     lockfile.save(root)?;
@@ -102,7 +173,6 @@ pub fn execute(args: &RemoveArgs, root: &Path) -> Result<()> {
     }
 
     PendingLifecycle::clear(root)?;
-
     println!("{} Removed {}", console::style("✓").green(), args.package);
 
     Ok(())
@@ -246,5 +316,56 @@ mod tests {
             ..base_entry()
         };
         ensure_removable(&entry, "owner/mod", true).unwrap();
+    }
+
+    #[test]
+    fn execute_refuses_non_tty_without_yes() {
+        // Force non-TTY via the injectable seam so the guard is deterministic
+        // regardless of process stdin terminal status.
+        let dir = tempfile::tempdir().unwrap();
+        let err = execute_with_tty(
+            &RemoveArgs {
+                package: "owner/pkg".to_string(),
+                yes: false,
+                force: false,
+            },
+            dir.path(),
+            false,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(
+                "Refusing destructive package removal in non-interactive session without --yes."
+            ),
+            "guard bail must be the audit contract, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn execute_bypasses_guard_with_explicit_yes() {
+        let dir = tempfile::tempdir().unwrap();
+        // --yes must get past the destructive guard regardless of TTY; the
+        // downstream "not installed" bail proves the guard was the only blocker.
+        // Force non-TTY so this never depends on process stdin terminal status.
+        let err = execute_with_tty(
+            &RemoveArgs {
+                package: "owner/pkg".to_string(),
+                yes: true,
+                force: false,
+            },
+            dir.path(),
+            false,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("is not installed"),
+            "expected downstream bail, got: {msg}"
+        );
+        assert!(
+            !msg.contains("Refusing destructive"),
+            "--yes must bypass the guard: {msg}"
+        );
     }
 }

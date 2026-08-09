@@ -6,9 +6,15 @@ Copilot / IDE apply-to instructions live at [`.github/instructions/review.instru
 
 ## CI gates (must pass)
 
-- `cargo test` — full suite
-- `cargo clippy -- -D warnings`
-- `cargo fmt --check`
+PR CI (`.github/workflows/ci.yml`):
+
+- **Test** — `cargo test`
+- **Clippy** — `cargo clippy -- -D warnings`
+- **Format** — `cargo fmt --check`
+- **MSRV (1.88)** — `cargo +1.88 check --locked --all-targets`
+- **Package** — `cargo package --locked`
+- **Deny** — `cargo deny` (CI: `EmbarkStudios/cargo-deny-action@v2`)
+- **Real-Nu acceptance** — `cargo test -- --ignored` with Nu 0.113 on PATH (PR job skips Stage 1 / active-plugin update suites)
 
 ## Severity labels
 
@@ -22,7 +28,7 @@ Copilot / IDE apply-to instructions live at [`.github/instructions/review.instru
 ## Architecture invariants (flag violations)
 
 1. **Install is inert** — `numan install` must not invoke Nu or touch autoload/plugin registration.
-2. **Activate is separate** — only activation/deactivation commands modify Nu integration state.
+2. **Nu integration is activate/deactivate-owned** — only the activate/deactivate lifecycle boundary invokes plugin register/unregister; an explicitly opted-in `update` may coordinate that boundary (exact `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1`) but must not own or invoke Nu callbacks directly.
 3. **Mutation lock** — all mutating commands (`install`, `remove`, `update`, `gc`, future `nupm import`) must call `acquire_mutation_lock(root)`.
 4. **Atomic JSON writes** — lockfile, journals, and state files use `write_json_atomic`; no partial writes.
 5. **Journals under `state/`** — pending activation, autoload, lifecycle journals live under `$NUMAN_ROOT/state/`.
@@ -45,3 +51,4 @@ Copilot / IDE apply-to instructions live at [`.github/instructions/review.instru
 
 - **Lockfile v2** — preserve `origin`, `revision_id`, `payload_sha256`, and journal recovery semantics on lifecycle changes.
 - **nupm compat (Phase 6+)** — follow [`docs/nupm-compatibility.md`](docs/nupm-compatibility.md) supported/rejected profiles; fixtures under `tests/fixtures/nupm/` are the contract for parser/classifier tests.
+- **Active-plugin update** — deactivate→upgrade→activate only with exact `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1`; fail closed otherwise. See [`docs/active-plugin-gate.md`](docs/active-plugin-gate.md).

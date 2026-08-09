@@ -1,21 +1,34 @@
-# Packaging (winget)
+# Packaging (Homebrew, winget)
 
-Third-party install manifests live under `packaging/`. They pin GitHub Release binaries and are submitted to winget-pkgs automatically on each published release.
+Third-party install manifests live under `packaging/`. They pin GitHub Release
+binaries. WinGet and Homebrew tap updates are submitted automatically after each
+published `v*.*.*` release.
 
 ## Release packaging checklist
 
 After a GitHub Release is published (see [RELEASING.md](RELEASING.md)):
 
-1. Download `SHA256SUMS` from the release assets.
-2. After a `v*.*.*` tag-triggered Release workflow completes, the [`Publish to WinGet`](../.github/workflows/winget.yml) workflow verifies the Release workflow's `winget-release-ready` artifact and that the non-draft release contains the published Windows `.zip` asset, then generates and submits the update PR. Automatic runs only accept Release workflows whose head branch is a `v`-prefixed tag (same contract as [RELEASING.md](RELEASING.md)). It requires the repository's `WINGET_TOKEN` secret and the existing `tonythethompson/winget-pkgs` fork. Manual `workflow_dispatch` recovery requires an explicit `release_tag` input (also `v*.*.*`).
-3. **winget** — the generated PR contains `packaging/winget/manifests/t/tonythethompson/numan/<version>/` with three manifests (schema **1.12.0**):
-   - `tonythethompson.numan.yaml` (version)
-   - `tonythethompson.numan.installer.yaml`
-   - `tonythethompson.numan.locale.en-US.yaml`
-   - Set `PackageIdentifier` to `tonythethompson.numan` (all-lowercase; matches open community PR)
-   - Set `InstallerSha256` to uppercase hex from `SHA256SUMS`
-   - Update nested `RelativeFilePath` if the archive folder name changed
-   - **One version per PR** — the workflow submits only the new version; WinGetSvc validation rejects duplicate publisher paths.
+1. Confirm platform archives and `SHA256SUMS` on the release.
+2. Confirm [`Publish to WinGet`](../.github/workflows/winget.yml) ran (requires
+   `WINGET_TOKEN`) and opened/updated the winget-pkgs PR.
+3. Confirm [`Publish to Homebrew tap`](../.github/workflows/homebrew.yml) ran
+   (requires `HOMEBREW_TAP_TOKEN`) and pushed `Formula/numan.rb` to
+   [`tonythethompson/homebrew-numan`](https://github.com/tonythethompson/homebrew-numan).
+4. Spot-check on a Mac or Linux Homebrew host:
+
+   ```bash
+   brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan
+   brew update
+   brew install numan
+   numan --version
+   ```
+
+Manual Homebrew dry-run (no tap push):
+
+```bash
+gh release download vX.Y.Z --pattern SHA256SUMS
+python3 scripts/render_homebrew_formula.py --version X.Y.Z --sha256sums SHA256SUMS --write
+```
 
 ## Install channels
 
@@ -24,22 +37,42 @@ After a GitHub Release is published (see [RELEASING.md](RELEASING.md)):
 | GitHub Release | Download archive from [Releases](https://github.com/tonythethompson/numan/releases) |
 | crates.io | `cargo install numan-cli` |
 | From git | `cargo install --git https://github.com/tonythethompson/numan` |
-| winget (local manifest) | `winget install --manifest packaging/winget/manifests/t/tonythethompson/numan/<version>` |
-| winget (community) | `winget install tonythethompson.numan` (after the automated winget-pkgs PR merges) |
+| Homebrew (tap) | `brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan && brew install numan` |
+| winget (community) | `winget install tonythethompson.numan` |
 
 ## Archive layout
 
-Release archives extract to `numan-<version>-<target>/` containing the `numan` (or `numan.exe`) binary. Winget nested installers assume this layout.
+Release archives extract to `numan-<version>-<target>/` containing the `numan`
+(or `numan.exe`) binary. Homebrew and winget installers assume this layout.
 
 ## Installation coverage
 
-| Installation channel | Linux x86_64 | macOS Apple Silicon | macOS Intel | Windows x86_64 | Windows ARM64 |
-|-----------------------|---------------|---------------------|-------------|----------------|---------------|
-| GitHub release archive | yes | yes | yes | yes | no |
+| Installation channel | Linux x86_64 | Linux aarch64 | macOS Apple Silicon | Windows x86_64 | Windows ARM64 |
+|-----------------------|---------------|---------------|---------------------|----------------|---------------|
+| GitHub release archive | yes | yes | yes | yes | yes |
 | `cargo install numan-cli` | source build | source build | source build | source build | not validated |
-| `cargo install --git` | source build | source build | source build | source build | not validated |
-| winget | — | — | — | yes | — |
+| Homebrew tap | yes | yes | yes | — | — |
+| winget | — | — | — | yes | yes |
 
-Cargo installs compile Numan locally for the host target. Windows ARM64 is not currently an official release target: the release workflow does not publish a Windows ARM64 archive, and CI does not validate an ARM64 runner or cross-target build.
+## Secrets
+
+| Secret | Purpose |
+|--------|---------|
+| `WINGET_TOKEN` | Open winget-pkgs update PRs |
+| `HOMEBREW_TAP_TOKEN` | Push formula updates to `tonythethompson/homebrew-numan` |
+
+The Homebrew tap repository must stay **public**. Private visibility is why
+`brew tap tonythethompson/numan` previously failed for most users.
+
+If `brew update` fails with `Host key verification failed` for this tap, the
+local clone is on an SSH remote and can leave an old formula installed. Uninstall
+the stale formula first so `brew untap` can proceed, then recover with:
+
+```bash
+brew uninstall numan
+brew untap tonythethompson/numan
+brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan
+brew install tonythethompson/numan/numan
+```
 
 Scoop is not packaged yet; see [Phase7Plan.md](plans/Phase7Plan.md).

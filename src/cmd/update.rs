@@ -30,6 +30,11 @@ pub struct UpdateArgs {
     #[arg(long)]
     check: bool,
 
+    /// Update the numan binary itself from GitHub Releases (or print the
+    /// package-manager upgrade command for Homebrew / winget / cargo installs)
+    #[arg(long = "self")]
+    self_update: bool,
+
     /// Verbose output
     #[arg(short, long)]
     verbose: bool,
@@ -80,6 +85,15 @@ pub fn execute_with_hooks(
     root: &PathBuf,
     hooks: &UpdateHooks<'_>,
 ) -> Result<()> {
+    if args.self_update {
+        if args.package.is_some() {
+            bail!("--self cannot be combined with a package name");
+        }
+        // Self-update replaces the CLI binary; it does not touch package state
+        // and must not take the root mutation lock.
+        return crate::cmd::self_update::execute(args.check, args.verbose);
+    }
+
     if args.check {
         warn_stale_lifecycle_journal(root)?;
     }
@@ -625,6 +639,32 @@ mod tests {
     use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
     use std::collections::BTreeMap;
     use tempfile::TempDir;
+
+    #[test]
+    fn self_update_rejects_combined_package_name() {
+        let args = UpdateArgs {
+            package: Some("owner/pkg".to_string()),
+            check: false,
+            self_update: true,
+            verbose: false,
+        };
+        let root = PathBuf::from("/tmp/numan-self-update-unused-root");
+        let lifecycle = CommandPluginLifecycle;
+        let err = execute_with_hooks(
+            &args,
+            &root,
+            &UpdateHooks {
+                lifecycle: &lifecycle,
+                install: None,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("--self cannot be combined with a package name"),
+            "{err}"
+        );
+    }
 
     struct SuccessfulPluginLifecycle;
 

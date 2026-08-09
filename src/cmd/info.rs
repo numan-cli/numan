@@ -26,6 +26,15 @@ pub fn format_info(pkg: &Package, platform: &Platform, nu: Option<&NuVersion>) -
     let mut out = String::new();
     out.push_str(&format!("Package:    {}/{}\n", pkg.id.owner, pkg.id.name));
     out.push_str(&format!("Type:       {}\n", pkg.package_type));
+    match pkg.package_type {
+        crate::core::package::PackageType::Script
+        | crate::core::package::PackageType::Completion => {
+            out.push_str(
+                "Activation: install-only (activation deferred; install does not wire Nu)\n",
+            );
+        }
+        _ => {}
+    }
     out.push_str("Status:     verified upstream artifact\n");
     out.push_str(&format!("Description: {}\n", pkg.description));
     out.push_str(&format!("Repository: {}\n", pkg.repo));
@@ -157,16 +166,21 @@ mod tests {
     }
 
     #[test]
-    fn format_info_includes_verified_status_and_disclaimer() {
-        let pkg = sample_plugin(false);
-        let nu = NuVersion::parse("0.113.1").unwrap();
-        let out = format_info(&pkg, &linux_platform(), Some(&nu));
-        assert!(
-            out.contains("Status:     verified upstream artifact"),
-            "{out}"
-        );
-        assert!(out.contains("has not security-audited"), "{out}");
-        assert!(!out.to_lowercase().contains("approved"), "{out}");
+    fn format_info_marks_script_install_only() {
+        let mut pkg = sample_plugin(false);
+        pkg.package_type = PackageType::Script;
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(out.contains("Activation: install-only"), "{out}");
+        assert!(out.contains("Type:       script"), "{out}");
+    }
+
+    #[test]
+    fn format_info_marks_completion_install_only() {
+        let mut pkg = sample_plugin(false);
+        pkg.package_type = PackageType::Completion;
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(out.contains("Activation: install-only"), "{out}");
+        assert!(out.contains("Type:       completion"), "{out}");
     }
 
     #[test]

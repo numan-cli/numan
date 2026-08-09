@@ -6,10 +6,10 @@ plan — catalog intake, signing, plugin backfills, client compat,
 lifecycle evidence, and the active-plugin gate — lives in the
 consolidated cross-repo plan:
 
-[**`numan/docs/plans/consolidated-multi-repo-roadmap.md`**](https://github.com/tonythethompson/numan/blob/master/docs/plans/consolidated-multi-repo-roadmap.md)
+[**`numan/docs/plans/consolidated-multi-repo-roadmap.md`**](https://github.com/tonythethompson/numan/blob/14f8e8c0934049c0030626b4a0d917255e988105/docs/plans/consolidated-multi-repo-roadmap.md)
 
 The cross-repo drill is enforced by
-[`scripts/check-roadmap-drift.py`](https://github.com/tonythethompson/numan/blob/master/scripts/check-roadmap-drift.py),
+[`scripts/check-roadmap-drift.py`](https://github.com/tonythethompson/numan/blob/14f8e8c0934049c0030626b4a0d917255e988105/scripts/check-roadmap-drift.py),
 which CI runs at `.github/workflows/roadmap-drift.yml` and which fails
 this PR if the local roadmap drifts from the consolidated truth.
 

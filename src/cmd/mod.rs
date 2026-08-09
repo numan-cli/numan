@@ -1,4 +1,5 @@
 pub mod activate;
+pub mod activation_switch;
 pub mod completions;
 pub mod deactivate;
 pub mod doctor;
@@ -13,6 +14,7 @@ pub mod plugin_lifecycle;
 pub mod registry;
 pub mod remove;
 pub mod search;
+pub mod self_update;
 pub mod setup;
 pub mod snapshot;
 pub mod try_cmd;
