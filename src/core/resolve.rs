@@ -351,7 +351,8 @@ fn append_nu_mismatch_remediation(msg: &mut String, package: &Package, pin: Opti
         );
     }
     msg.push_str(
-        "\n         - Or pick a different package that supports your current Nu (`numan search <query>`)",
+        "\n         - Or pick a different package that supports your current Nu (`numan search <query>`)\
+         \n         - To see why this package is incompatible: `numan search <name> --all`",
     );
     msg.push_str("\n       Nothing was installed. No changes were made.");
 }
