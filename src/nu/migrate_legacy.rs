@@ -184,6 +184,12 @@ pub fn migrate_legacy_install_with_detector(
         let bin_name = nu_binary_name();
         for entry in std::fs::read_dir(&versioned_dir)? {
             let entry = entry?;
+            if crate::util::fs_safety::is_symlink_or_reparse(&entry.path())? {
+                bail!(
+                    "Refusing to migrate: version entry '{}' is a symlink or reparse point.",
+                    entry.path().display()
+                );
+            }
             if !entry.file_type()?.is_dir() {
                 continue;
             }
@@ -251,6 +257,9 @@ pub fn migrate_legacy_install_with_detector(
 
     let version_dir = version_install_dir(root, &version);
     let version_journal_path = PendingMigration::journal_path(root);
+    crate::util::fs_safety::assert_not_symlink(&version_dir, "migration version directory")?;
+    let new_binary = version_binary(root, &version);
+    crate::util::fs_safety::assert_not_symlink(&new_binary, "migration destination binary")?;
     std::fs::create_dir_all(&version_dir).with_context(|| {
         format!(
             "Failed to create version directory '{}' (migration journal at Prepared: '{}')",
@@ -270,7 +279,6 @@ pub fn migrate_legacy_install_with_detector(
         })?;
     }
 
-    let new_binary = version_binary(root, &version);
     std::fs::rename(&legacy_binary, &new_binary).with_context(|| {
         format!(
             "Failed to move '{}' to '{}' (migration journal at Prepared: a future reconcile will clean up '<{}>/')",
