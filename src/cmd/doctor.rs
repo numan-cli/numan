@@ -18,7 +18,7 @@ use crate::nu::bootstrap::managed_nu_binary;
 use crate::nu::paths::{
     discover_nu_off_path, find_nu_executable_with_root, find_nu_on_path, NuPaths,
 };
-use crate::nu::version_manager;
+use crate::nu::version_manager::{self, VersionManagerError};
 use crate::nupm_compat::NupmCompatibility;
 use crate::nupm_compat::{
     count_drifted_imports, resolve_nupm_home, scan_nupm_home, NupmHomeResolution,
@@ -28,6 +28,7 @@ use crate::state::autoload_state::AutoloadState;
 use crate::state::journal::PendingActivation;
 use crate::state::lifecycle_journal::PendingLifecycle;
 use crate::state::lockfile::Lockfile;
+use crate::state::migration_journal::{self as migration_journal, PendingMigration};
 use crate::state::nupm_import::NupmImportsFile;
 use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
@@ -35,7 +36,7 @@ use crate::util::fs_safety::{acquire_mutation_lock, assert_managed_file_owned};
 use crate::util::hints::{
     self, active_plugin_mutation_gated_doctor_message, registry_none_fix, setup_nu_use_existing,
     ACTIVE_PLUGIN_MUTATION_GATED_FIX, CMD_ACTIVATE, CMD_DEACTIVATE, CMD_DOCTOR_FIX, CMD_INIT,
-    CMD_INIT_REFRESH, CMD_REGISTRY_SYNC, CMD_SETUP_NU,
+    CMD_INIT_REFRESH, CMD_REGISTRY_SYNC, CMD_SETUP_NU, CMD_USE,
 };
 use crate::util::stdio_redirect::StdoutToStderr;
 
@@ -127,7 +128,7 @@ pub struct DoctorOptions {
     pub activate_repair: Option<fn(&ActivateArgs, &Path) -> Result<()>>,
     /// Override deactivate repair (tests inject fakes; production uses `deactivate::execute`).
     pub deactivate_repair: Option<fn(&DeactivateArgs, &Path) -> Result<()>>,
-    /// Override Nushell bootstrap repair (tests inject fakes; production uses `setup::execute_nu_impl`).
+    /// Override Nushell bootstrap repair (tests inject fakes; production uses `setup::execute_nu_repair`).
     pub nu_setup_repair: Option<fn(&NuSetupArgs, &Path) -> Result<()>>,
     /// Override off-PATH Nu discovery (tests inject a known binary path).
     pub discover_off_path: Option<fn() -> Option<PathBuf>>,
@@ -489,9 +490,8 @@ fn check_nu_environments(root: &Path, options: &DoctorOptions, findings: &mut Ve
         )),
     }
 
-    let managed = managed_nu_binary(root);
-    if managed.is_file() {
-        match probe_nu_version(&managed, options) {
+    match resolve_managed_nu_binary(root) {
+        Ok(Some(managed)) => match probe_nu_version(&managed, options) {
             Ok(version) => findings.push(finding(
                 "nu.managed.version",
                 Severity::Info,
@@ -509,16 +509,83 @@ fn check_nu_environments(root: &Path, options: &DoctorOptions, findings: &mut Ve
                 None,
                 RepairTier::None,
             )),
-        }
-    } else {
-        findings.push(finding(
+        },
+        Ok(None) => findings.push(finding(
             "nu.managed.version",
             Severity::Info,
             "Managed Nu: not installed",
             None,
             RepairTier::None,
-        ));
+        )),
+        Err(e) => findings.push(managed_nu_resolve_finding(e)),
     }
+}
+
+/// Map managed-Nu resolution failures to actionable doctor findings.
+///
+/// `CMD_USE` is only appropriate for a dangling active-version marker.
+/// Filesystem scan / marker parse failures need a different message and no
+/// `numan use` hint.
+fn managed_nu_resolve_finding(err: VersionManagerError) -> Finding {
+    match &err {
+        VersionManagerError::DanglingActive { .. }
+        | VersionManagerError::DanglingActiveWithOffTree { .. } => finding(
+            "nu.managed.version",
+            Severity::Warn,
+            format!("Managed Nu: could not resolve active managed binary ({err})"),
+            Some(CMD_USE),
+            RepairTier::Manual,
+        ),
+        VersionManagerError::ReadVersionsDir { .. }
+        | VersionManagerError::ReadLegacyVersion { .. }
+        | VersionManagerError::ReadMarker { .. }
+        | VersionManagerError::MalformedMarker { .. }
+        | VersionManagerError::InvalidVersion { .. } => finding(
+            "nu.managed.version",
+            Severity::Warn,
+            format!(
+                "Managed Nu: could not resolve managed Nu binary ({err}). \
+                 Check permissions on tools/nushell and nu_state, or reinstall with \
+                 `{CMD_SETUP_NU}`."
+            ),
+            None,
+            RepairTier::Manual,
+        ),
+        _ => finding(
+            "nu.managed.version",
+            Severity::Warn,
+            format!("Managed Nu: could not resolve managed Nu binary ({err})"),
+            None,
+            RepairTier::Manual,
+        ),
+    }
+}
+
+/// Resolve the managed Nu binary for doctor reporting.
+///
+/// Prefers the versioned active install (`tools/nushell/<version>/nu`), then
+/// falls back to the legacy single-binary path (`tools/nushell/nu`) so older
+/// roots still report correctly before migration.
+fn resolve_managed_nu_binary(root: &Path) -> Result<Option<PathBuf>, VersionManagerError> {
+    match version_manager::active_nu_binary(root) {
+        Ok(Some(path)) => return Ok(Some(path)),
+        Ok(None) => {}
+        Err(e) => return Err(e),
+    }
+
+    let legacy = managed_nu_binary(root);
+    if legacy.is_file() {
+        return Ok(Some(legacy));
+    }
+
+    if let Some(latest) = version_manager::latest_installed_version(root)? {
+        let path = version_manager::version_binary(root, &latest);
+        if path.is_file() {
+            return Ok(Some(path));
+        }
+    }
+
+    Ok(None)
 }
 
 fn probe_nu_version(path: &Path, options: &DoctorOptions) -> Result<String> {
@@ -645,6 +712,92 @@ fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Fi
             None,
             RepairTier::Manual,
         ));
+    }
+
+    // PR69 WCk: surface read/parse errors instead of silently dropping them.
+    // A malformed `migration-journal.json` previously produced no finding at
+    // all, so `doctor --fix` could report a clean result while the recovery
+    // state is unreadable. Each Err branch carries the journal path so the
+    // fix hint is unambiguous.
+    match PendingMigration::load(root) {
+        Ok(Some(j)) => {
+            let journal_path = PendingMigration::journal_path(root);
+            // Only Auto when validate_reconcile says repair can succeed
+            // (normalization, symlink safety, Renamed binary presence, and
+            // Prepared orphan emptiness). Otherwise Manual so doctor --fix
+            // does not exit 0 after a Failed reconcile.
+            match migration_journal::validate_reconcile(root, &j) {
+                Err(e) => {
+                    // Hint from journal stage + binary probe, not error-string wording.
+                    let binary_present = match version_manager::normalize_version(&j.version) {
+                        Ok(normalized) => {
+                            version_manager::version_binary(root, &normalized).is_file()
+                        }
+                        Err(_) => false,
+                    };
+                    let fix = if matches!(j.stage, migration_journal::MigrationStage::Renamed)
+                        && !binary_present
+                    {
+                        format!(
+                            "Run `{CMD_SETUP_NU} {}` to repair, or delete the stale journal at '{}'",
+                            j.version,
+                            journal_path.display()
+                        )
+                    } else {
+                        format!("Delete the stale journal at '{}'", journal_path.display())
+                    };
+                    findings.push(finding(
+                        "journal.migration_invalid",
+                        Severity::Error,
+                        e.to_string(),
+                        Some(&fix),
+                        RepairTier::Manual,
+                    ));
+                }
+                Ok(normalized) => {
+                    // Hint `numan use <v>` when the versioned binary is present
+                    // (switch can succeed after reconcile). Otherwise prefer
+                    // doctor --fix / setup nu — Prepared without a binary only
+                    // clears the journal.
+                    let binary_present =
+                        version_manager::version_binary(root, &normalized).is_file();
+                    let fix = if binary_present {
+                        format!("{CMD_USE} {}", j.version)
+                    } else {
+                        format!(
+                            "{CMD_DOCTOR_FIX} (or `{CMD_SETUP_NU} {}` to install)",
+                            j.version
+                        )
+                    };
+                    findings.push(finding(
+                        "journal.migration_pending",
+                        Severity::Warn,
+                        format!(
+                            "Pending legacy-Nu migration journal (stage: {}, version: {})",
+                            j.stage, j.version
+                        ),
+                        Some(fix.as_str()),
+                        RepairTier::Auto,
+                    ));
+                }
+            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            let journal_path = PendingMigration::journal_path(root);
+            let fix = format!("Delete the stale journal at '{}'", journal_path.display());
+            findings.push(finding(
+                "journal.migration_invalid",
+                Severity::Error,
+                format!(
+                    "Migration journal at '{}' is unreadable: {e}. \
+                     Delete the stale journal to recover.",
+                    journal_path.display()
+                ),
+                Some(&fix),
+                RepairTier::Manual,
+            ));
+        }
     }
 }
 
@@ -1150,6 +1303,35 @@ fn apply_repairs(
 
     drop(lock.take());
 
+    // Reconcile pending migration journals BEFORE off-PATH Nu registration.
+    // A Prepared orphan empty `<version>/` under tools/nushell makes
+    // `setup nu use` refuse without `--force`; cleaning it first lets one
+    // `doctor --fix` pass complete both repairs.
+    if findings
+        .iter()
+        .any(|f| f.id == "journal.migration_pending" && f.severity == Severity::Warn)
+    {
+        let id = "journal.migration_repaired".to_string();
+        let _migration_repair_lock = acquire_mutation_lock(root)?;
+        match migration_journal::reconcile(root) {
+            Ok(Some(_)) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Applied,
+                reason: None,
+            }),
+            Ok(None) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Skipped,
+                reason: None,
+            }),
+            Err(e) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Failed,
+                reason: Some(e.to_string()),
+            }),
+        }
+    }
+
     if findings
         .iter()
         .any(|f| f.id == "nu.binary.found_off_path" && f.severity == Severity::Warn)
@@ -1162,20 +1344,31 @@ fn apply_repairs(
                 reason: Some("snapshot_unavailable".to_string()),
             });
         } else if let Some(off_path) = resolve_off_path(options) {
-            let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
-            // Never pass `--yes` here: `setup nu use` may wipe a managed install
-            // and that path is fail-closed without explicit consent / TTY.
-            match setup_fn(&NuSetupArgs::use_existing(off_path, false), root) {
-                Ok(()) => records.push(RepairRecord {
+            // Doctor never auto-passes `--force`: wiping a managed install needs
+            // an explicit `numan setup nu use --force`. Skip with a clear reason
+            // instead of recording a Failed repair when the managed tree exists.
+            if crate::nu::bootstrap::managed_nu_dir(root).is_dir() {
+                records.push(RepairRecord {
                     id,
-                    status: RepairStatus::Applied,
-                    reason: None,
-                }),
-                Err(e) => records.push(RepairRecord {
-                    id,
-                    status: RepairStatus::Failed,
-                    reason: Some(e.to_string()),
-                }),
+                    status: RepairStatus::Skipped,
+                    reason: Some("managed_tree_present_requires_force".to_string()),
+                });
+            } else {
+                let setup_fn = options.nu_setup_repair.unwrap_or(setup::execute_nu_repair);
+                // Never pass `--yes` here: `setup nu use` may wipe a managed install
+                // and that path is fail-closed without explicit consent / TTY.
+                match setup_fn(&NuSetupArgs::use_existing(off_path, false, false), root) {
+                    Ok(()) => records.push(RepairRecord {
+                        id,
+                        status: RepairStatus::Applied,
+                        reason: None,
+                    }),
+                    Err(e) => records.push(RepairRecord {
+                        id,
+                        status: RepairStatus::Failed,
+                        reason: Some(e.to_string()),
+                    }),
+                }
             }
         } else {
             records.push(RepairRecord {
@@ -1407,6 +1600,39 @@ fn apply_repairs(
         }
     }
 
+    // The migration journal path is self-healing in normal use (top of
+    // `migrate_legacy_install_with_detector`); the doctor repair is the
+    // catch-up for users who ran `numan doctor --fix` without ever calling
+    // `numan use`. Gating on `PendingMigration::load(...).is_some()` keeps
+    // the Applied record honest — re-runs of `doctor --fix` produce no
+    // second repair.
+    if findings
+        .iter()
+        .any(|f| f.id == "journal.migration_pending" && f.severity == Severity::Warn)
+    {
+        if PendingMigration::load(root)?.is_none() {
+            return Ok(records);
+        }
+        let id = "journal.migration_repaired".to_string();
+        // chatgpt PR69 S1A: reacquire the root mutation lock before the
+        // self-healing reconcile so concurrent `numan use` cannot race the
+        // journal stage advance + directory rename the same way AGENTS.md
+        // requires install/remove/activate/deactivate/numan-use to.
+        let _migration_repair_lock = acquire_mutation_lock(root)?;
+        match migration_journal::reconcile(root) {
+            Ok(_) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Applied,
+                reason: None,
+            }),
+            Err(e) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Failed,
+                reason: Some(e.to_string()),
+            }),
+        }
+    }
+
     Ok(records)
 }
 
@@ -1457,6 +1683,8 @@ fn print_report(args: &DoctorArgs, root: &Path, report: &DoctorReport) -> Result
                 "journal.autoload_stale",
                 "journal.lifecycle_pending",
                 "journal.lifecycle_stale",
+                "journal.migration_pending",
+                "journal.migration_invalid",
             ],
         ),
         (
@@ -1555,35 +1783,9 @@ mod tests {
     use crate::core::integrity;
     use crate::nu::autoload::FakeCandidateRunner;
     use crate::state::lockfile::{LockfileEntry, PluginActivation};
+    use crate::util::test_paths::PathRestoreGuard;
     use std::collections::BTreeMap;
-    use std::sync::Mutex;
     use tempfile::TempDir;
-
-    /// Serializes tests that mutate the process-wide `PATH` env var.
-    static TEST_PATH_GUARD: Mutex<()> = Mutex::new(());
-
-    /// RAII guard that restores the original PATH on drop, ensuring restoration
-    /// during both normal return and panic unwinding.
-    struct PathRestoreGuard {
-        original: Option<std::ffi::OsString>,
-    }
-
-    impl PathRestoreGuard {
-        fn new() -> Self {
-            Self {
-                original: std::env::var_os("PATH"),
-            }
-        }
-    }
-
-    impl Drop for PathRestoreGuard {
-        fn drop(&mut self) {
-            match self.original.as_ref() {
-                Some(path) => std::env::set_var("PATH", path),
-                None => std::env::remove_var("PATH"),
-            }
-        }
-    }
 
     fn fake_paths(root: &Path, nu_exe: &Path) -> NuPaths {
         let bytes = std::fs::read(nu_exe).unwrap();
@@ -2066,7 +2268,7 @@ mod tests {
 
     #[test]
     fn doctor_reports_path_nu_version_probe_failure() {
-        let _path_guard = TEST_PATH_GUARD.lock().unwrap();
+        let _path_restore = PathRestoreGuard::new();
 
         let dir = TempDir::new().unwrap();
         let root = dir.path();
@@ -2086,7 +2288,6 @@ mod tests {
             std::fs::set_permissions(&fake_nu, perms).unwrap();
         }
 
-        let _path_restore = PathRestoreGuard::new();
         // Prepend the fake-nu dir; do not replace PATH. `find_nu_on_path` shells
         // out to `which`/`where.exe`, which must remain resolvable.
         let mut path_entries = vec![path_dir];
@@ -2170,6 +2371,127 @@ mod tests {
                 .contains("simulated version probe failure"),
             "unexpected: {}",
             managed_finding.message
+        );
+    }
+
+    #[test]
+    fn doctor_reports_versioned_managed_nu() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let binary = version_manager::version_binary(root, "0.114.1");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, b"nu").unwrap();
+        version_manager::write_active_version(root, "0.114.1").unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: true,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let managed = report
+            .findings
+            .iter()
+            .find(|f| f.id == "nu.managed.version")
+            .expect("nu.managed.version");
+        assert_eq!(managed.severity, Severity::Info);
+        assert!(
+            managed.message.starts_with("Managed Nu: 0.99.9"),
+            "unexpected message: {}",
+            managed.message
+        );
+        assert!(
+            managed.message.contains("0.114.1"),
+            "expected versioned path in message: {}",
+            managed.message
+        );
+    }
+
+    #[test]
+    fn doctor_reports_versioned_managed_nu_absent_binary() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        version_manager::write_active_version(root, "0.114.1").unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: true,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let managed = report
+            .findings
+            .iter()
+            .find(|f| f.id == "nu.managed.version")
+            .expect("nu.managed.version");
+        assert_eq!(managed.severity, Severity::Warn);
+        assert_eq!(managed.repair, RepairTier::Manual);
+        assert_eq!(managed.fix.as_deref(), Some(CMD_USE));
+        assert!(
+            managed.message.contains("active managed binary"),
+            "dangling active should keep active-binary wording: {}",
+            managed.message
+        );
+        assert!(
+            !managed.message.contains("not installed"),
+            "should not report 'not installed' when marker exists: {}",
+            managed.message
+        );
+    }
+
+    #[test]
+    fn doctor_reports_managed_nu_scan_failure_without_use_hint() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        // Make tools/nushell a file so read_dir fails with ReadVersionsDir.
+        let tools = root.join("tools");
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::write(tools.join("nushell"), b"not-a-directory").unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: true,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let managed = report
+            .findings
+            .iter()
+            .find(|f| f.id == "nu.managed.version")
+            .expect("nu.managed.version");
+        assert_eq!(managed.severity, Severity::Warn);
+        assert_eq!(managed.repair, RepairTier::Manual);
+        assert!(
+            managed.fix.is_none(),
+            "filesystem scan failures must not hint `{CMD_USE}`: {:?}",
+            managed.fix
+        );
+        assert!(
+            managed
+                .message
+                .contains("could not resolve managed Nu binary"),
+            "expected generic resolve wording: {}",
+            managed.message
+        );
+        assert!(
+            !managed.message.contains("active managed binary"),
+            "scan failure must not use dangling-active wording: {}",
+            managed.message
         );
     }
 
@@ -2281,5 +2603,616 @@ mod tests {
         assert!(json.contains("nu.path.version"));
         assert!(json.contains("nu.managed.version"));
         assert!(json.contains("registry.trust_root"));
+    }
+    #[test]
+    fn doctor_reports_migration_journal_finding() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        // Pre-stage a half-applied migration: an empty `<version>/`
+        // subdir (the reviewer's original bug state) plus a journal at
+        // `Prepared` recorded by an interrupted `migrate_legacy_install`.
+        let tools = root.join("tools").join("nushell");
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::create_dir_all(tools.join("0.113.1")).unwrap();
+        PendingMigration {
+            schema_version: crate::state::migration_journal::SCHEMA_VERSION,
+            version: "0.113.1".to_string(),
+            stage: crate::state::migration_journal::MigrationStage::Prepared,
+        }
+        .save(root)
+        .unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_pending")
+            .expect("journal.migration_pending finding");
+        assert_eq!(f.severity, Severity::Warn);
+        assert_eq!(f.repair, RepairTier::Auto);
+        assert!(
+            f.message.contains("Prepared") || f.message.contains("prepared"),
+            "finding must name the journal stage: {}",
+            f.message
+        );
+        assert!(f.message.contains("0.113.1"));
+        assert!(
+            f.fix.as_deref().is_some_and(|s| {
+                s.contains(crate::util::hints::CMD_DOCTOR_FIX)
+                    && s.contains(crate::util::hints::CMD_SETUP_NU)
+                    && s.contains("0.113.1")
+            }),
+            "Prepared-without-binary hint must prefer doctor --fix / setup nu, got {:?}",
+            f.fix
+        );
+    }
+
+    #[test]
+    fn doctor_fix_reconciles_migration_journal() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        // Same pre-stage as `doctor_reports_migration_journal_finding`.
+        let tools = root.join("tools").join("nushell");
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::create_dir_all(tools.join("0.113.1")).unwrap();
+        PendingMigration {
+            schema_version: crate::state::migration_journal::SCHEMA_VERSION,
+            version: "0.113.1".to_string(),
+            stage: crate::state::migration_journal::MigrationStage::Prepared,
+        }
+        .save(root)
+        .unwrap();
+
+        // Capture the findings first so we can call apply_repairs directly and
+        // inspect the returned RepairRecord list.
+        let scan_args = DoctorArgs {
+            scan: true,
+            json: false,
+            nupm_home: None,
+        };
+        let report = run_checks_with_options(&scan_args, root, &test_doctor_options()).unwrap();
+
+        let fix_args = DoctorArgs {
+            scan: false,
+            json: false,
+            nupm_home: None,
+        };
+        let records =
+            apply_repairs(&fix_args, root, &report.findings, &test_doctor_options()).unwrap();
+
+        // The repair record for the migration journal must be Applied.
+        let rec = records
+            .iter()
+            .find(|r| r.id == "journal.migration_repaired")
+            .expect("journal.migration_repaired repair record must be present");
+        assert_eq!(
+            rec.status,
+            RepairStatus::Applied,
+            "migration journal repair must be Applied, got: {:?}",
+            rec.status
+        );
+
+        // After repair: the empty subdir AND the journal must be gone.
+        assert!(
+            !tools.join("0.113.1").exists(),
+            "empty versioned subdir must be removed by reconcile"
+        );
+        assert!(
+            PendingMigration::load(root).unwrap().is_none(),
+            "journal must be cleared by reconcile"
+        );
+    }
+
+    #[test]
+    fn doctor_skips_off_path_repair_when_managed_tree_present() {
+        use std::sync::Mutex;
+        static OFF: Mutex<Option<PathBuf>> = Mutex::new(None);
+        static CALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+        fn discover() -> Option<PathBuf> {
+            OFF.lock().ok()?.clone()
+        }
+        fn setup_must_not_run(_: &NuSetupArgs, _: &Path) -> Result<()> {
+            CALLED.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(crate::nu::bootstrap::managed_nu_dir(root)).unwrap();
+        let off_path = root.join("off-path-nu");
+        std::fs::write(&off_path, b"fake").unwrap();
+        *OFF.lock().unwrap() = Some(off_path);
+        CALLED.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        let findings = vec![Finding {
+            id: "nu.binary.found_off_path".to_string(),
+            severity: Severity::Warn,
+            message: "off path".to_string(),
+            fix: None,
+            repair: RepairTier::Confirm,
+        }];
+        let args = DoctorArgs {
+            scan: false,
+            json: false,
+            nupm_home: None,
+        };
+        let repairs = apply_repairs(
+            &args,
+            root,
+            &findings,
+            &DoctorOptions {
+                skip_network: true,
+                discover_off_path: Some(discover),
+                nu_setup_repair: Some(setup_must_not_run),
+                ..test_doctor_options()
+            },
+        )
+        .unwrap();
+
+        assert!(
+            !CALLED.load(std::sync::atomic::Ordering::SeqCst),
+            "setup repair must not run when managed tree exists"
+        );
+        let record = repairs
+            .iter()
+            .find(|r| r.id == "nu.binary.found_off_path")
+            .expect("off-path repair record");
+        assert_eq!(record.status, RepairStatus::Skipped);
+        assert_eq!(
+            record.reason.as_deref(),
+            Some("managed_tree_present_requires_force")
+        );
+    }
+
+    /// A well-formed journal with an unknown `schema_version` must surface a
+    /// `journal.migration_invalid` finding (Error severity, Manual repair tier)
+    /// and must NOT produce a `journal.migration_pending` finding.
+    #[test]
+    fn doctor_reports_unsupported_schema_version_as_invalid() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Construct a well-formed JSON journal with an unsupported schema_version.
+        let journal_path = PendingMigration::journal_path(root);
+        std::fs::create_dir_all(journal_path.parent().unwrap()).unwrap();
+        let content = serde_json::json!({
+            "schema_version": 9999,
+            "version": "0.113.1",
+            "stage": "prepared"
+        });
+        std::fs::write(&journal_path, serde_json::to_vec(&content).unwrap()).unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let invalid = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_invalid")
+            .expect("journal.migration_invalid must be reported for unknown schema_version");
+        assert_eq!(invalid.severity, Severity::Error);
+        assert_eq!(invalid.repair, RepairTier::Manual);
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.id != "journal.migration_pending"),
+            "migration_pending must NOT be reported alongside migration_invalid"
+        );
+    }
+
+    /// PR69 WCk regression: a malformed `migration-journal.json` must
+    /// surface a `journal.migration_invalid` finding at Error severity with
+    /// a Manual repair tier. Previously the report silently dropped the
+    /// Err branch, so `doctor --fix` could report a clean result while
+    /// recovery state was unreadable.
+    #[test]
+    fn doctor_reports_malformed_migration_journal_as_invalid() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        // Lay down a journal-shaped file with garbage content so
+        // `PendingMigration::load` returns Err (parse failure).
+        let journal_path = PendingMigration::journal_path(root);
+        std::fs::create_dir_all(journal_path.parent().unwrap()).unwrap();
+        std::fs::write(&journal_path, b"{ this is not valid json").unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_invalid")
+            .expect("journal.migration_invalid finding must be published on parse Err");
+        assert_eq!(f.severity, Severity::Error);
+        assert_eq!(f.repair, RepairTier::Manual);
+        assert!(
+            f.message.contains("unreadable"),
+            "finding must mention unreadable so safe-batch can grep it: {}",
+            f.message
+        );
+        let expected_fix = format!("Delete the stale journal at '{}'", journal_path.display());
+        assert_eq!(f.fix.as_deref(), Some(expected_fix.as_str()));
+        // The well-formed pending finding must NOT be published for an
+        // invalid journal — otherwise the user sees conflicting guidance.
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.id != "journal.migration_pending"),
+            "invalid journal must NOT also produce a Pending finding"
+        );
+    }
+
+    /// Renamed journal + missing versioned binary: reconcile refuses this
+    /// state, so doctor must report Error (not Warn/Auto) so `doctor --fix`
+    /// cannot exit 0 while leaving corrupt migration state masked.
+    #[test]
+    fn doctor_reports_renamed_missing_binary_as_migration_invalid() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        // Bypass `save`'s unsafe-version guard is not needed; use a valid
+        // version string but leave the binary absent so Renamed is inconsistent.
+        std::fs::write(
+            PendingMigration::journal_path(root),
+            format!(
+                r#"{{"schema_version":{},"version":"0.113.1","stage":"renamed"}}"#,
+                crate::state::migration_journal::SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_invalid")
+            .expect("journal.migration_invalid for Renamed+missing binary");
+        assert_eq!(f.severity, Severity::Error);
+        assert_eq!(f.repair, RepairTier::Manual);
+        assert!(
+            f.message.contains("Renamed") && f.message.contains("missing"),
+            "finding must name Renamed+missing: {}",
+            f.message
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.id != "journal.migration_pending"),
+            "inconsistent Renamed journal must not also be Warn/Auto pending"
+        );
+        // exit_code must be non-zero so safe-batch / CI do not treat this as healthy
+        assert_eq!(report.exit_code(), 1);
+    }
+
+    /// Hand-edited journals may keep a safe `v`-prefix. Doctor must probe the
+    /// normalized layout path so Renamed + present `0.113.1/nu` is Warn/Auto,
+    /// not a false-positive Error/Manual "missing binary".
+    #[test]
+    fn doctor_renamed_probe_normalizes_v_prefix() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        let version_dir = version_manager::version_install_dir(root, "0.113.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        let bin = if cfg!(windows) { "nu.exe" } else { "nu" };
+        std::fs::write(version_dir.join(bin), b"binary").unwrap();
+        std::fs::write(
+            PendingMigration::journal_path(root),
+            format!(
+                r#"{{"schema_version":{},"version":"v0.113.1","stage":"renamed"}}"#,
+                crate::state::migration_journal::SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.id != "journal.migration_invalid"),
+            "v-prefixed Renamed with normalized binary present must not be invalid"
+        );
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_pending")
+            .expect("journal.migration_pending for recoverable Renamed");
+        assert_eq!(f.severity, Severity::Warn);
+        assert_eq!(f.repair, RepairTier::Auto);
+    }
+
+    #[test]
+    fn doctor_pending_renamed_with_binary_hints_numan_use() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        let version_dir = version_manager::version_install_dir(root, "0.113.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        let bin = if cfg!(windows) { "nu.exe" } else { "nu" };
+        std::fs::write(version_dir.join(bin), b"binary").unwrap();
+        std::fs::write(
+            PendingMigration::journal_path(root),
+            format!(
+                r#"{{"schema_version":{},"version":"0.113.1","stage":"renamed"}}"#,
+                crate::state::migration_journal::SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_pending")
+            .expect("journal.migration_pending when Renamed binary present");
+        assert!(
+            f.fix.as_deref().is_some_and(|s| {
+                s.starts_with(crate::util::hints::CMD_USE) && s.contains("0.113.1")
+            }),
+            "recoverable Renamed with binary should hint numan use, got {:?}",
+            f.fix
+        );
+    }
+
+    #[test]
+    fn doctor_reports_unsafe_migration_version_as_invalid() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        // Tampered journal: valid schema/stage, unsafe version component.
+        std::fs::write(
+            PendingMigration::journal_path(root),
+            format!(
+                r#"{{"schema_version":{},"version":"../etc","stage":"prepared"}}"#,
+                crate::state::migration_journal::SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_invalid")
+            .expect("journal.migration_invalid for unsafe version");
+        assert_eq!(f.severity, Severity::Error);
+        assert_eq!(f.repair, RepairTier::Manual);
+        assert!(
+            f.message.contains("unsafe"),
+            "finding must mention unsafe component: {}",
+            f.message
+        );
+        assert_eq!(report.exit_code(), 1);
+    }
+
+    fn assert_migration_invalid_manual(report: &DoctorReport) {
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_invalid")
+            .expect("journal.migration_invalid");
+        assert_eq!(f.severity, Severity::Error);
+        assert_eq!(f.repair, RepairTier::Manual);
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|x| x.id != "journal.migration_pending"),
+            "invalid journal must not also produce pending"
+        );
+        assert_eq!(report.exit_code(), 1);
+    }
+
+    /// Path-safe but non-semver journal versions fail validate_reconcile.
+    #[test]
+    fn doctor_reports_non_normalizable_migration_version_as_invalid() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        std::fs::write(
+            PendingMigration::journal_path(root),
+            format!(
+                r#"{{"schema_version":{},"version":"not-a-semver","stage":"prepared"}}"#,
+                crate::state::migration_journal::SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        assert_migration_invalid_manual(&report);
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_invalid")
+            .unwrap();
+        assert!(
+            f.message.contains("non-normalizable") || f.message.contains("not-a-semver"),
+            "finding must name non-normalizable version: {}",
+            f.message
+        );
+    }
+
+    /// Symlinked managed tree is refused by validate_reconcile.
+    #[test]
+    fn doctor_reports_symlinked_managed_dir_migration_as_invalid() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+
+        let real_managed = dir.path().join("real-nushell");
+        let version_dir = real_managed.join("0.113.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        let bin = if cfg!(windows) { "nu.exe" } else { "nu" };
+        std::fs::write(version_dir.join(bin), b"binary").unwrap();
+
+        let tools = root.join("tools");
+        std::fs::create_dir_all(&tools).unwrap();
+        let managed_link = tools.join("nushell");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real_managed, &managed_link).unwrap();
+        #[cfg(windows)]
+        {
+            // Symlink creation needs Developer Mode or elevation on Windows.
+            // Skip rather than unwrap-fail when privileges are missing; Unix
+            // plus mock-platform coverage elsewhere still exercise reparse logic.
+            if std::os::windows::fs::symlink_dir(&real_managed, &managed_link).is_err() {
+                return;
+            }
+        }
+
+        std::fs::write(
+            PendingMigration::journal_path(root),
+            format!(
+                r#"{{"schema_version":{},"version":"0.113.1","stage":"renamed"}}"#,
+                crate::state::migration_journal::SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        assert_migration_invalid_manual(&report);
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_invalid")
+            .unwrap();
+        assert!(
+            f.message.contains("symlink") || f.message.contains("reparse"),
+            "finding must name symlink/reparse guard: {}",
+            f.message
+        );
+    }
+
+    /// Non-empty Prepared orphan cannot be remove_dir'd by reconcile.
+    #[test]
+    fn doctor_reports_nonempty_prepared_orphan_as_invalid() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        let version_dir = version_manager::version_install_dir(root, "0.113.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::fs::write(version_dir.join("stray.dat"), b"foreign").unwrap();
+        std::fs::write(
+            PendingMigration::journal_path(root),
+            format!(
+                r#"{{"schema_version":{},"version":"0.113.1","stage":"prepared"}}"#,
+                crate::state::migration_journal::SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: false,
+                nupm_home: None,
+            },
+            root,
+            &test_doctor_options(),
+        )
+        .unwrap();
+
+        assert_migration_invalid_manual(&report);
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.id == "journal.migration_invalid")
+            .unwrap();
+        assert!(
+            f.message.contains("Prepared-but-orphan") || f.message.contains("not empty"),
+            "finding must name non-empty Prepared orphan: {}",
+            f.message
+        );
     }
 }

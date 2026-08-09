@@ -52,14 +52,14 @@ pub enum Commands {
     Snapshot(cmd::snapshot::SnapshotCommands),
     /// Read-only nupm discovery and inspection
     Nupm(cmd::nupm::NupmArgs),
-    /// Generate shell completion scripts
+    /// Install shell completions (use `--print` to emit the script)
     Completions(cmd::completions::CompletionsArgs),
     /// Diagnose Numan root health and apply safe repairs (use `--scan` for report-only)
     Doctor(cmd::doctor::DoctorArgs),
     /// Install optional Nushell integration helpers
     #[command(subcommand)]
     Setup(cmd::setup::SetupCommands),
-    /// Install and activate a starter package that fits your Nu
+    /// Try a package against your current Nu and platform, with compatibility guidance
     Try(cmd::try_cmd::TryArgs),
     /// Switch the active managed Nu version (reserved, post-1.0)
     Use(cmd::use_cmd::UseArgs),

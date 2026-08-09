@@ -36,11 +36,16 @@ fn nu_setup_repair_test(
 ) -> anyhow::Result<()> {
     let expected = TEST_OFF_PATH.lock().unwrap().clone();
     // The doctor passes the off-path binary via NuSetupArgs::use_existing(),
-    // which sets action = Some(NuAction::Use { path }) and leaves use_existing unset.
-    let Some(NuAction::Use { path }) = &args.action else {
+    // which sets action = Some(NuAction::Use { path, force }) and leaves use_existing unset.
+    let Some(NuAction::Use { path, force }) = &args.action else {
         panic!("expected NuAction::Use, got {:?}", args.action);
     };
     assert_eq!(Some(path.as_path()), expected.as_ref().map(|p| p.as_path()));
+    assert!(!force, "doctor must not set force=true on NuAction::Use");
+    assert!(
+        !*force,
+        "doctor found_off_path repair must not pass --force"
+    );
     assert!(
         args.use_existing.is_none(),
         "doctor must not use the deprecated flag"
@@ -59,8 +64,11 @@ fn nu_setup_repair_test(
     std::fs::write(&managed, b"managed-nu")?;
     // Use a missing binary so execute_nu fails before PATH persistence or wipe.
     let missing = root.join("missing-off-path-nu");
-    let err = setup::execute_nu(&setup::NuSetupArgs::use_existing(missing, args.yes), root)
-        .expect_err("expected resolve failure for missing off-PATH binary");
+    let err = setup::execute_nu(
+        &setup::NuSetupArgs::use_existing(missing, args.yes, false),
+        root,
+    )
+    .expect_err("expected resolve failure for missing off-PATH binary");
     assert!(
         managed.exists(),
         "doctor off-PATH repair must not delete managed tools/nushell without consent: {err}"
@@ -96,8 +104,11 @@ fn execute_nu_use_existing_refuses_without_consent_and_keeps_managed() {
     std::fs::write(&managed, b"managed-nu").unwrap();
 
     let off_path = write_valid_off_path_nu(dir.path());
-    let err = setup::execute_nu(&setup::NuSetupArgs::use_existing(off_path, false), root)
-        .expect_err("expected consent-gate refusal with yes=false");
+    let err = setup::execute_nu(
+        &setup::NuSetupArgs::use_existing(off_path, false, false),
+        root,
+    )
+    .expect_err("expected consent-gate refusal with yes=false");
     let msg = format!("{err:#}");
     assert!(
         msg.contains("non-interactive") || msg.contains("--yes"),

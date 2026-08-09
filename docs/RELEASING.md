@@ -47,12 +47,33 @@ Then:
    ```
 
 6. The [Release workflow](https://github.com/tonythethompson/numan/actions/workflows/release.yml) waits for green CI on the tagged commit, runs preflight checks, then builds archives and publishes.
-7. Confirm platform archives and `SHA256SUMS` on GitHub Releases.
-8. Confirm the **Publish to crates.io** job succeeds (requires `CRATES_IO_TOKEN` repository secret).
+7. Confirm platform archives (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`, `aarch64-apple-darwin`), `SHA256SUMS`, and `SHA256SUMS.sig` on GitHub Releases.
+8. Confirm the **Publish to crates.io** job succeeds (requires Trusted Publishing / OIDC on crates.io).
 9. Confirm the [`Publish to WinGet`](../.github/workflows/winget.yml) workflow verifies the `winget-release-ready` artifact and published Windows release asset, then opens the update PR after the `v*.*.*` tag-triggered Release workflow completes (manual recovery: dispatch with required `release_tag`).
-10. After publication, update documentation only if it needs links that depend on newly created release pages or assets; do not use this step to repair README content already shipped in the crate or tag.
+10. Confirm the [`Publish to Homebrew tap`](../.github/workflows/homebrew.yml) workflow verifies the `homebrew-release-ready` artifact and pushes `Formula/numan.rb` to [`tonythethompson/homebrew-numan`](https://github.com/tonythethompson/homebrew-numan) (requires `HOMEBREW_TAP_TOKEN`; manual recovery: dispatch with required `release_tag`).
+11. After publication, update documentation only if it needs links that depend on newly created release pages or assets; do not use this step to repair README content already shipped in the crate or tag.
 
 **Do not tag until CI is green on `master`.** The release workflow gates on CI check results for tag pushes; pushing a tag on a failing commit blocks publication.
+
+## Self-update signing (`SHA256SUMS.sig`)
+
+`numan update --self` refuses to install unless `SHA256SUMS.sig` verifies with the baked-in `RELEASE_SUMS_PUBLIC_KEY_B64` in `src/cmd/self_update.rs`.
+
+1. Keep the matching 32-byte Ed25519 seed only in the repository secret `NUMAN_RELEASE_SIGNING_KEY` (standard base64). Never commit the seed.
+2. The Release workflow requires that secret and fails the publish job if it is unset, so every public release includes `SHA256SUMS.sig` for `numan update --self`.
+3. To rotate: generate a new seed, update the secret, bump `RELEASE_SUMS_PUBLIC_KEY_B64`, and cut a new release. Older unsigned releases remain installable via brew / winget / cargo / manual download.
+
+Generate a seed and matching public key (local machine only):
+
+```bash
+python3 - <<'PY'
+import base64
+from nacl.signing import SigningKey
+sk = SigningKey.generate()
+print("NUMAN_RELEASE_SIGNING_KEY=" + base64.b64encode(sk.encode()).decode())
+print("RELEASE_SUMS_PUBLIC_KEY_B64=" + base64.b64encode(sk.verify_key.encode()).decode())
+PY
+```
 
 ## CI jobs (reference)
 
@@ -70,8 +91,10 @@ Then:
 
 - Package name: **`numan-cli`** (install with `cargo install numan-cli`).
 - Binary name: **`numan`**.
-- Set `CRATES_IO_TOKEN` in GitHub repository secrets before the first publish.
-- Dry-run locally: `cargo publish --dry-run`.
+- Publishes via **Trusted Publishing** (OIDC) from `.github/workflows/release.yml`. Configure the trusted publisher on crates.io for repository `tonythethompson/numan`, workflow `release.yml`, no environment.
+- Do **not** put `CRATES_IO_TOKEN` / crates API tokens on `homebrew-numan`; that tap only needs `HOMEBREW_TAP_TOKEN`.
+- To retry crate publish for an already-cut tag: Actions → Release → Run workflow → set tag + enable **crates_only**.
+- Dry-run locally: `cargo publish --dry-run` (still requires a normal token or owner account; CI uses Trusted Publishing).
 
 ## Install paths users should see
 
@@ -80,4 +103,5 @@ Then:
 | GitHub Release | Download archive from [Releases](https://github.com/tonythethompson/numan/releases) |
 | crates.io | `cargo install numan-cli` |
 | From source | `cargo install --path .` or `cargo install --git https://github.com/tonythethompson/numan` |
-| winget | See [PACKAGING.md](PACKAGING.md) |
+| Homebrew | `brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan && brew install numan` (see [PACKAGING.md](PACKAGING.md)) |
+| winget | `winget install tonythethompson.numan` (see [PACKAGING.md](PACKAGING.md)) |

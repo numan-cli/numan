@@ -15,6 +15,11 @@ on:
         required: false
         default: true
         type: boolean
+      crates_only:
+        description: "Only publish the crate for an existing tag (skip rebuild / GitHub Release)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -63,7 +68,10 @@ jobs:
   preflight:
     name: Release preflight
     needs: [verify-ci]
-    if: ${{ !cancelled() && (needs.verify-ci.result == 'success' || needs.verify-ci.result == 'skipped') }}
+    if: >-
+      ${{ !cancelled()
+      && (needs.verify-ci.result == 'success' || needs.verify-ci.result == 'skipped')
+      && (github.event_name != 'workflow_dispatch' || inputs.crates_only != true) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -92,14 +100,17 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             bin_name: numan
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            bin_name: numan
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bin_name: numan.exe
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            bin_name: numan.exe
           - os: macos-latest
             target: aarch64-apple-darwin
-            bin_name: numan
-          - os: macos-latest
-            target: x86_64-apple-darwin
             bin_name: numan
 
     steps:
@@ -194,6 +205,21 @@ jobs:
           sha256sum numan-* > SHA256SUMS
           cat SHA256SUMS
 
+      - name: Sign SHA256SUMS for self-update
+        working-directory: dist
+        env:
+          NUMAN_RELEASE_SIGNING_KEY: ${{ secrets.NUMAN_RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${NUMAN_RELEASE_SIGNING_KEY}" ]]; then
+            echo "::error::NUMAN_RELEASE_SIGNING_KEY is unset. Refusing to publish: \
+          standalone numan update --self requires SHA256SUMS.sig on every release."
+            exit 1
+          fi
+          python3 -m pip install --user pynacl
+          python3 "${GITHUB_WORKSPACE}/scripts/sign-sha256sums.py" SHA256SUMS SHA256SUMS.sig
+          cat SHA256SUMS.sig
+
       - name: Prepare release notes from CHANGELOG
         env:
           RELEASE_TAG: ${{ steps.meta.outputs.tag }}
@@ -222,16 +248,72 @@ jobs:
           path: winget-marker/
           retention-days: 3
 
+      # Stable producer/consumer contract for homebrew.yml (do not rename this artifact).
+      - name: Emit Homebrew release marker
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          mkdir -p homebrew-marker
+          printf '%s\n' "$RELEASE_TAG" > homebrew-marker/release-tag.txt
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: homebrew-release-ready
+          path: homebrew-marker/
+          retention-days: 3
+
   publish-crate:
     name: Publish to crates.io
     needs: [preflight, release]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: stable
+      - name: Authenticate with crates.io (Trusted Publishing)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1
       - run: cargo publish --locked
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  # Retries crates.io publish for an already-cut tag (e.g. after Trusted Publishing
+  # was enabled). Does not rebuild release assets. Requires crates.io Trusted
+  # Publishing for workflow filename `release.yml`.
+  publish-crate-existing-tag:
+    name: Publish existing tag to crates.io
+    if: github.event_name == 'workflow_dispatch' && inputs.crates_only == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+      - name: Verify Cargo.toml version matches tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          expected="${RELEASE_TAG#v}"
+          actual="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::Cargo.toml version ${actual} does not match tag ${RELEASE_TAG}"
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - name: Authenticate with crates.io (Trusted Publishing)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

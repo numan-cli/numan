@@ -125,6 +125,8 @@ pub fn execute_with_candidate_runner_and_unregistrar(
     let targets_requested = classify_and_validate_packages(args, &lockfile, root, &nu_paths)?;
 
     if targets_requested.is_empty() {
+        snapshot_before_deactivate_profile_sync(root, &nu_paths, args, &lockfile)?;
+        sync_user_deactivate_profile(root, &nu_paths, args, &lockfile)?;
         println!("Nothing to deactivate.");
         return Ok(());
     }
@@ -162,6 +164,8 @@ pub fn execute_with_candidate_runner_and_unregistrar(
     let targets_requested =
         reclassify_targets(args, &lockfile, root, &nu_paths, &targets_requested)?;
     if targets_requested.is_empty() {
+        snapshot_before_deactivate_profile_sync(root, &nu_paths, args, &lockfile)?;
+        sync_user_deactivate_profile(root, &nu_paths, args, &lockfile)?;
         println!("Nothing to deactivate.");
         return Ok(());
     }
@@ -183,6 +187,18 @@ pub fn execute_with_candidate_runner_and_unregistrar(
         None,
         None,
     )?;
+
+    let deactivated_ids: Vec<String> = targets_requested
+        .plugins
+        .iter()
+        .map(|p| p.package_id.clone())
+        .chain(
+            targets_requested
+                .modules
+                .iter()
+                .map(|m| m.package_id.clone()),
+        )
+        .collect();
 
     let mut any_failed = false;
 
@@ -214,12 +230,105 @@ pub fn execute_with_candidate_runner_and_unregistrar(
         )?;
     }
 
+    let lockfile = Lockfile::load(root)?;
+    let profile_ids = if args.packages.is_empty() {
+        deactivated_ids
+    } else {
+        args.packages.clone()
+    };
+    // Only clear profile for packages that are now inactive (or were already).
+    let mut clear_ids = Vec::new();
+    for id in profile_ids {
+        let clear = match lockfile.packages.get(&id) {
+            None => true,
+            Some(e) if e.package_type == "plugin" => e.activation.is_none(),
+            Some(e) if e.package_type == "module" => e.module_activation.is_none(),
+            _ => false,
+        };
+        if clear {
+            clear_ids.push(id);
+        }
+    }
+    crate::cmd::activation_switch::sync_profile_after_user_deactivate(
+        root,
+        &nu_paths.nu_version,
+        &clear_ids,
+        &lockfile,
+    )?;
+
     if any_failed {
         bail!(
             "One or more plugins failed to deactivate. Successful deactivations have been persisted."
         );
     }
 
+    Ok(())
+}
+
+fn sync_user_deactivate_profile(
+    root: &Path,
+    nu_paths: &NuPaths,
+    args: &DeactivateArgs,
+    lockfile: &Lockfile,
+) -> Result<()> {
+    if args.packages.is_empty() {
+        return Ok(());
+    }
+    crate::cmd::activation_switch::sync_profile_after_user_deactivate(
+        root,
+        &nu_paths.nu_version,
+        &args.packages,
+        lockfile,
+    )
+}
+
+/// Snapshot when a profile-only deactivate path would clear desired state.
+fn snapshot_before_deactivate_profile_sync(
+    root: &Path,
+    nu_paths: &NuPaths,
+    args: &DeactivateArgs,
+    lockfile: &Lockfile,
+) -> Result<()> {
+    if args.packages.is_empty() {
+        return Ok(());
+    }
+    let mutate_items: Vec<(crate::state::activation_profile::ProfileKind, &str)> = args
+        .packages
+        .iter()
+        .flat_map(|id| match lockfile.packages.get(id) {
+            Some(entry) => {
+                let kind = match entry.package_type.as_str() {
+                    "plugin" => Some(crate::state::activation_profile::ProfileKind::Plugin),
+                    "module" => Some(crate::state::activation_profile::ProfileKind::Module),
+                    _ => None,
+                };
+                kind.map(|k| vec![(k, id.as_str())]).unwrap_or_default()
+            }
+            None => vec![
+                (
+                    crate::state::activation_profile::ProfileKind::Plugin,
+                    id.as_str(),
+                ),
+                (
+                    crate::state::activation_profile::ProfileKind::Module,
+                    id.as_str(),
+                ),
+            ],
+        })
+        .collect();
+    if crate::state::activation_profile::would_ensure_absent_any(
+        root,
+        &nu_paths.nu_version,
+        mutate_items,
+    )? {
+        create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Deactivate,
+            None,
+            None,
+        )?;
+    }
     Ok(())
 }
 
@@ -306,8 +415,11 @@ fn run_module_deactivate_lane(
 
     let managed_path = Path::new(&managed_file_path);
 
-    if remaining_ids.is_empty() {
-        run_full_deactivation(
+    // Full deactivation (no candidate validation) is reserved for the no-runner,
+    // drift-tolerant path. When a runner is provided, validate the final module
+    // state so callers can observe and test the module lane ordering.
+    if runner.is_none() && remaining_ids.is_empty() {
+        return run_full_deactivation(
             root,
             nu_paths,
             lockfile,
@@ -317,32 +429,100 @@ fn run_module_deactivate_lane(
             &managed_file_path,
             &currently_active_ids,
             pre_mutation_snapshot_id,
-        )
-    } else {
-        nu_paths.validate_drift()?;
-
-        let real_runner;
-        let runner_ref: &dyn CandidateRunner = if let Some(r) = runner {
-            r
-        } else {
-            real_runner = NuCandidateRunner::new(&nu_paths.nu_executable);
-            &real_runner
-        };
-
-        run_partial_deactivation(
-            root,
-            nu_paths,
-            lockfile,
-            targets_requested,
-            &remaining_ids,
-            managed_path,
-            &vendor_autoload_dir,
-            &managed_file_path,
-            &currently_active_ids,
-            runner_ref,
-            pre_mutation_snapshot_id,
-        )
+        );
     }
+
+    nu_paths.validate_drift()?;
+
+    let real_runner;
+    let runner_ref: &dyn CandidateRunner = if let Some(r) = runner {
+        r
+    } else {
+        real_runner = NuCandidateRunner::new(&nu_paths.nu_executable);
+        &real_runner
+    };
+
+    run_partial_deactivation(
+        root,
+        nu_paths,
+        lockfile,
+        targets_requested,
+        &remaining_ids,
+        managed_path,
+        &vendor_autoload_dir,
+        &managed_file_path,
+        &currently_active_ids,
+        runner_ref,
+        pre_mutation_snapshot_id,
+    )?;
+
+    // When a runner-driven deactivation removes the last module, delete the
+    // managed autoload file and state so the result matches the full path.
+    if remaining_ids.is_empty() {
+        delete_managed_file(managed_path).with_context(|| {
+            "Failed to delete managed autoload file after final module deactivation"
+        })?;
+        AutoloadState::delete(root)
+            .with_context(|| "Failed to delete autoload state after final module deactivation")?;
+    }
+
+    Ok(())
+}
+
+/// Deactivate named modules without acquiring the mutation lock, snapshotting, or
+/// syncing the activation profile. Caller must hold the root mutation lock.
+pub(crate) fn deactivate_modules_unlocked(
+    root: &Path,
+    package_ids: &[String],
+    runner: Option<&dyn CandidateRunner>,
+    pre_mutation_snapshot_id: Option<String>,
+) -> Result<()> {
+    if package_ids.is_empty() {
+        return Ok(());
+    }
+
+    let nu_paths = NuPaths::load(root)?;
+    let mut lockfile = Lockfile::load(root)?;
+
+    let mut targets = Vec::new();
+    for pkg_id in package_ids {
+        let entry = lockfile
+            .packages
+            .get(pkg_id)
+            .with_context(|| format!("Package '{pkg_id}' is not installed"))?;
+        if entry.package_type != "module" {
+            bail!(
+                "Package '{pkg_id}' is not a module (type: {})",
+                entry.package_type
+            );
+        }
+        let Some(ma) = &entry.module_activation else {
+            continue;
+        };
+        targets.push(ActiveModule {
+            package_id: pkg_id.clone(),
+            vendor_autoload_dir: ma.vendor_autoload_dir.clone(),
+            managed_file_path: ma.managed_file_path.clone(),
+        });
+    }
+
+    if targets.is_empty() {
+        return Ok(());
+    }
+
+    let args = DeactivateArgs {
+        packages: package_ids.to_vec(),
+        verbose: false,
+    };
+    run_module_deactivate_lane(
+        &args,
+        root,
+        &nu_paths,
+        &mut lockfile,
+        &targets,
+        runner,
+        pre_mutation_snapshot_id,
+    )
 }
 
 // ── Package classification ─────────────────────────────────────────────────────
@@ -366,7 +546,8 @@ pub fn plugin_name_from_executable_path(executable_path: &str) -> String {
 /// - Script/completion packages return a deferred-feature error.
 /// - Unknown package IDs fail.
 /// - Plugins that are not currently active are skipped when listed explicitly
-///   (idempotent after journal reconcile). Modules that are not active still fail.
+///   (idempotent after journal reconcile). Modules that are not active are also
+///   skipped when listed explicitly (profile sync still clears desire).
 /// - No IDs means deactivate all currently active plugins and modules.
 fn classify_and_validate_packages(
     args: &DeactivateArgs,
@@ -456,7 +637,8 @@ fn classify_and_validate_packages(
                 }
                 "module" => match &entry.module_activation {
                     None => {
-                        bail!("Package '{pkg_id}' is a module but is not currently active.");
+                        // Already inactive: skip lifecycle (profile sync still runs).
+                        continue;
                     }
                     Some(ma) => {
                         modules.push(ActiveModule {
@@ -1440,7 +1622,7 @@ mod tests {
     }
 
     #[test]
-    fn inactive_module_returns_error() {
+    fn inactive_module_is_skipped_idempotently() {
         let dir = TempDir::new().unwrap();
         let lockfile =
             make_lockfile_with_modules(vec![("owner/mymod", "module", false /* inactive */)]);
@@ -1451,11 +1633,11 @@ mod tests {
             verbose: false,
         };
 
-        let err = classify_and_validate_packages(&args, &lockfile, dir.path(), &fake_nu_paths())
-            .unwrap_err();
+        let targets =
+            classify_and_validate_packages(&args, &lockfile, dir.path(), &fake_nu_paths()).unwrap();
         assert!(
-            err.to_string().contains("not currently active"),
-            "Expected not-active error, got: {err}"
+            targets.is_empty(),
+            "inactive module should be skipped (profile sync clears desire separately)"
         );
     }
 

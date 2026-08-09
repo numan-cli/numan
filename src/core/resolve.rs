@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use std::collections::HashSet;
 
 use crate::core::nu_version::NuVersion;
 use crate::core::package::{Package, PackageType, VersionEntry};
@@ -461,11 +462,195 @@ fn parse_triple(v: &str) -> Result<VersionTriple> {
     Ok((parts[0].parse()?, parts[1].parse()?, parts[2].parse()?))
 }
 
+/// Return candidate Nu versions derived from a package version's `nu_version` constraint.
+///
+/// This is metadata-driven: it includes the lower bound and a patch just below
+/// an exclusive upper bound. The returned strings are not guaranteed to satisfy
+/// the constraint; callers must validate them. Verified-with versions are added
+/// separately by the caller.
+pub fn candidate_nu_versions_from_constraint(constraint: &str) -> Vec<String> {
+    let mut out = Vec::new();
+
+    // Exact-minor legacy form: =0.113.x -> try 0.113.1 and 0.113.0.
+    if let Some(ver) = constraint.strip_prefix('=') {
+        if let Some(ver) = ver.strip_prefix("0.") {
+            if let Some(ver) = ver.strip_suffix(".x") {
+                if let Ok(minor) = ver.parse::<u64>() {
+                    out.push(format!("0.{minor}.1"));
+                    out.push(format!("0.{minor}.0"));
+                }
+            }
+        }
+    }
+
+    let (min, max_exclusive) = parse_constraint_bounds(constraint);
+    if let Some((maj, min_minor, patch)) = min {
+        out.push(format!("{maj}.{min_minor}.{patch}"));
+    }
+    if let Some((maj, max_minor, patch)) = max_exclusive {
+        if max_minor == 0 && patch == 0 {
+            // <0.0.0: nothing useful to derive.
+        } else if patch == 0 {
+            // <0.X.0: the previous minor's newest common patch.
+            let candidate_minor = max_minor - 1;
+            out.push(format!("{maj}.{candidate_minor}.1"));
+            out.push(format!("{maj}.{candidate_minor}.0"));
+        } else {
+            out.push(format!("{maj}.{max_minor}.{}", patch - 1));
+        }
+    }
+
+    out
+}
+
+/// Return the Nu versions from `candidates` where `package` has at least one
+/// compatible version entry for the current platform.
+pub fn compatible_nu_versions(
+    package: &Package,
+    platform: &Platform,
+    candidates: &[NuVersion],
+) -> Vec<NuVersion> {
+    let mut compatible = Vec::new();
+    let mut seen = HashSet::new();
+    for candidate in candidates {
+        if !seen.insert((candidate.major, candidate.minor, candidate.patch)) {
+            continue;
+        }
+        let resolver = Resolver::new(platform, candidate);
+        if resolver.has_compatible_version(package) {
+            compatible.push(candidate.clone());
+        }
+    }
+    compatible.sort_by_key(|v| (v.major, v.minor, v.patch));
+    compatible
+}
+
+/// Return the Nu versions from `candidates` where the specific `entry` is
+/// compatible for the current platform.
+///
+/// Unlike [`compatible_nu_versions`], this scopes compatibility to a single
+/// version entry rather than any entry in the package. Used when the user
+/// pinned `owner/name@version` so the recommendation reflects that release's
+/// constraint, not a different release that happens to be compatible.
+pub fn compatible_nu_versions_for_entry(
+    entry: &VersionEntry,
+    platform: &Platform,
+    candidates: &[NuVersion],
+) -> Vec<NuVersion> {
+    let mut compatible = Vec::new();
+    let mut seen = HashSet::new();
+    for candidate in candidates {
+        if !seen.insert((candidate.major, candidate.minor, candidate.patch)) {
+            continue;
+        }
+        let resolver = Resolver::new(platform, candidate);
+        if resolver.is_compatible(entry) {
+            compatible.push(candidate.clone());
+        }
+    }
+    compatible.sort_by_key(|v| (v.major, v.minor, v.patch));
+    compatible
+}
+
+fn version_score(v: &NuVersion) -> u64 {
+    v.major * 1_000_000_000 + v.minor * 1_000_000 + v.patch
+}
+
+/// Pick the nearest sensible compatible Nu version.
+///
+/// * If all compatible versions are older than `current`, prefer the newest
+///   installed older version, otherwise the newest older catalog version.
+/// * If all compatible versions are newer, prefer the earliest installed newer
+///   version, otherwise the earliest newer catalog version.
+/// * If compatible versions exist on both sides, prefer the nearest installed
+///   version, otherwise the nearest catalog version (ties go to newer).
+pub fn select_recommended_nu<'a>(
+    current: &NuVersion,
+    compatible: &'a [NuVersion],
+    installed: &HashSet<String>,
+) -> Option<&'a NuVersion> {
+    if compatible.is_empty() {
+        return None;
+    }
+
+    let current_score = version_score(current);
+    let older: Vec<&'a NuVersion> = compatible
+        .iter()
+        .filter(|v| version_score(v) < current_score)
+        .collect();
+    let newer: Vec<&'a NuVersion> = compatible
+        .iter()
+        .filter(|v| version_score(v) > current_score)
+        .collect();
+
+    let older_installed: Vec<&'a NuVersion> = older
+        .iter()
+        .filter(|v| installed.contains(&v.version))
+        .copied()
+        .collect();
+    let newer_installed: Vec<&'a NuVersion> = newer
+        .iter()
+        .filter(|v| installed.contains(&v.version))
+        .copied()
+        .collect();
+
+    if !older.is_empty() && newer.is_empty() {
+        // Need an older version; prefer newest installed, else newest overall.
+        if let Some(v) = older_installed
+            .iter()
+            .max_by_key(|v| version_score(v))
+            .copied()
+        {
+            return Some(v);
+        }
+        return older.iter().max_by_key(|v| version_score(v)).copied();
+    }
+
+    if !newer.is_empty() && older.is_empty() {
+        // Need a newer version; prefer earliest installed, else earliest overall.
+        if let Some(v) = newer_installed
+            .iter()
+            .min_by_key(|v| version_score(v))
+            .copied()
+        {
+            return Some(v);
+        }
+        return newer.iter().min_by_key(|v| version_score(v)).copied();
+    }
+
+    // Compatible on both sides or none (current not in list). Prefer nearest
+    // installed, otherwise nearest catalog version; ties go to newer.
+    let nearest = nearest_comparator(current_score);
+    let installed_all: Vec<&'a NuVersion> = compatible
+        .iter()
+        .filter(|v| installed.contains(&v.version))
+        .collect();
+    if !installed_all.is_empty() {
+        return installed_all.iter().copied().min_by(nearest);
+    }
+
+    compatible.iter().min_by(nearest)
+}
+
+/// Comparator that orders Nu versions by distance from `current_score`,
+/// tie-breaking toward the higher version score.
+fn nearest_comparator(
+    current_score: u64,
+) -> impl Fn(&&NuVersion, &&NuVersion) -> std::cmp::Ordering {
+    move |a, b| {
+        let da = version_score(a).abs_diff(current_score);
+        let db = version_score(b).abs_diff(current_score);
+        da.cmp(&db)
+            .then_with(|| version_score(b).cmp(&version_score(a)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::package::*;
-    use std::collections::{BTreeMap, HashMap};
+    use crate::core::platform::{Arch, Env, Os};
+    use std::collections::{BTreeMap, HashMap, HashSet};
 
     fn test_plugin() -> Package {
         let mut targets = HashMap::new();
@@ -759,5 +944,152 @@ mod tests {
         let pkg = test_plugin();
         let v = semver::Version::new(99, 0, 0);
         assert!(resolver.resolve_exact(&pkg, &v).is_err());
+    }
+
+    #[test]
+    fn candidate_nu_versions_from_constraint_derives_bounds() {
+        let mut candidates = candidate_nu_versions_from_constraint(">=0.112.0 <0.114.0");
+        candidates.sort();
+        assert_eq!(candidates, vec!["0.112.0", "0.113.0", "0.113.1"]);
+
+        let exact = candidate_nu_versions_from_constraint("=0.113.x");
+        assert!(exact.contains(&"0.113.0".to_string()));
+        assert!(exact.contains(&"0.113.1".to_string()));
+
+        let minimum = candidate_nu_versions_from_constraint(">=0.113.0");
+        assert_eq!(minimum, vec!["0.113.0"]);
+
+        assert!(candidate_nu_versions_from_constraint("*").is_empty());
+    }
+
+    fn windows_plugin() -> Package {
+        let platform = Platform {
+            os: Os::Windows,
+            arch: Arch::X86_64,
+            env: Env::Msvc,
+            triple: "x86_64-pc-windows-msvc".to_string(),
+        };
+        let targets = {
+            let mut m = HashMap::new();
+            m.insert(
+                platform.triple.clone(),
+                TargetArtifact {
+                    url: "https://example.com/p.zip".to_string(),
+                    sha256: "aa".to_string(),
+                    executable_path: "p.exe".to_string(),
+                },
+            );
+            m
+        };
+        Package {
+            id: ScopedId::new("test", "plugin"),
+            description: "d".to_string(),
+            repo: "https://example.com".to_string(),
+            package_type: PackageType::Plugin,
+            tags: vec![],
+            versions: vec![VersionEntry {
+                version: semver::Version::new(1, 0, 0),
+                nu_version: ">=0.112.0 <0.114.0".to_string(),
+                verified_with: vec!["0.113.1".to_string()],
+                artifact: Artifact {
+                    kind: "binary".to_string(),
+                    url: None,
+                    sha256: None,
+                    targets,
+                    archive_root: None,
+                    include: None,
+                    entry: None,
+                },
+                source: None,
+                dependencies: BTreeMap::new(),
+                activation: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn compatible_nu_versions_lists_all_matching_nus() {
+        let platform = Platform {
+            os: Os::Windows,
+            arch: Arch::X86_64,
+            env: Env::Msvc,
+            triple: "x86_64-pc-windows-msvc".to_string(),
+        };
+        let pkg = windows_plugin();
+        let candidates = vec![
+            NuVersion::parse("0.112.0").unwrap(),
+            NuVersion::parse("0.113.1").unwrap(),
+            NuVersion::parse("0.114.1").unwrap(),
+        ];
+        let compatible = compatible_nu_versions(&pkg, &platform, &candidates);
+        assert_eq!(compatible.len(), 2);
+        assert_eq!(compatible[0].version, "0.112.0");
+        assert_eq!(compatible[1].version, "0.113.1");
+    }
+
+    #[test]
+    fn compatible_nu_versions_respects_platform() {
+        let platform = Platform {
+            os: Os::Linux,
+            arch: Arch::X86_64,
+            env: Env::Gnu,
+            triple: "x86_64-unknown-linux-gnu".to_string(),
+        };
+        let pkg = windows_plugin();
+        let candidates = vec![
+            NuVersion::parse("0.112.0").unwrap(),
+            NuVersion::parse("0.113.1").unwrap(),
+        ];
+        assert!(compatible_nu_versions(&pkg, &platform, &candidates).is_empty());
+    }
+
+    #[test]
+    fn select_recommended_nu_prefers_newest_older() {
+        let current = NuVersion::parse("0.114.1").unwrap();
+        let compatible = vec![
+            NuVersion::parse("0.112.0").unwrap(),
+            NuVersion::parse("0.113.1").unwrap(),
+        ];
+        let installed = HashSet::new();
+        let rec = select_recommended_nu(&current, &compatible, &installed).unwrap();
+        assert_eq!(rec.version, "0.113.1");
+    }
+
+    #[test]
+    fn select_recommended_nu_prefers_earliest_newer() {
+        let current = NuVersion::parse("0.112.0").unwrap();
+        let compatible = vec![
+            NuVersion::parse("0.113.1").unwrap(),
+            NuVersion::parse("0.114.0").unwrap(),
+        ];
+        let installed = HashSet::new();
+        let rec = select_recommended_nu(&current, &compatible, &installed).unwrap();
+        assert_eq!(rec.version, "0.113.1");
+    }
+
+    #[test]
+    fn select_recommended_nu_prefers_installed() {
+        let current = NuVersion::parse("0.114.1").unwrap();
+        let compatible = vec![
+            NuVersion::parse("0.112.0").unwrap(),
+            NuVersion::parse("0.113.1").unwrap(),
+        ];
+        let mut installed = HashSet::new();
+        installed.insert("0.112.0".to_string());
+        let rec = select_recommended_nu(&current, &compatible, &installed).unwrap();
+        assert_eq!(rec.version, "0.112.0");
+    }
+
+    #[test]
+    fn select_recommended_nu_chooses_nearest_when_both_sides() {
+        let current = NuVersion::parse("0.113.0").unwrap();
+        let compatible = vec![
+            NuVersion::parse("0.112.0").unwrap(),
+            NuVersion::parse("0.114.0").unwrap(),
+        ];
+        let installed = HashSet::new();
+        let rec = select_recommended_nu(&current, &compatible, &installed).unwrap();
+        // Both are the same numeric distance; tie goes to newer.
+        assert_eq!(rec.version, "0.114.0");
     }
 }

@@ -96,6 +96,50 @@ pub fn acquire_mutation_lock(root: &Path) -> Result<MutationLock> {
     })
 }
 
+/// Acquire the root mutation lock, run a destructive setup subcommand, and
+/// release the lock on return.
+///
+/// Every destructive setup entry point (install, off-path registration,
+/// PATH-Nu registration, managed removal, `numan setup loader`, and
+/// derive/active/upgrade via `numan use`) flows through this helper so the
+/// lock boundary has exactly one source of truth — closing PR #69's WCr
+/// (`setup_family_mutation_lock`) and ensuring that a concurrent `numan use`,
+/// `numan install`, or `numan doctor --fix` cannot interleave filesystem
+/// mutations on the same root.
+///
+/// `what` is a short human-readable label (e.g. `"Nushell install"`,
+/// `"off-path Nu registration"`, `"managed Nushell removal"`); it lands
+/// in the audit log alongside the `(audit)` prefix so safe-batch automation
+/// can grep one consistent shape across the whole destructive setup
+/// surface:
+///
+/// ```text
+/// (audit) setup mutation lock acquired for {what} on '{root}'.
+/// ```
+///
+/// The closure runs while the lock is held; returns the closure's
+/// `Result<T>` verbatim. The lock is released on Drop at the end of this
+/// function's scope (also on panic — RAII).
+///
+/// Use [`crate::util::confirm::require_tty_or_yes`] for non-TTY / `--yes`
+/// gating; this helper does **not** add TTY checks.
+pub fn setup_subcommand_lock<T, F>(root: &Path, what: &str, f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T>,
+{
+    let _lock = acquire_mutation_lock(root).with_context(|| {
+        format!(
+            "Refusing destructive '{what}' on '{}': another Numan mutation is already in progress.",
+            root.display()
+        )
+    })?;
+    eprintln!(
+        "(audit) setup mutation lock acquired for {what} on '{}'.",
+        root.display()
+    );
+    f()
+}
+
 // ── Ownership marker ──────────────────────────────────────────────────────────
 
 /// The exact two-line UTF-8 prefix that every Numan-generated autoload file
@@ -179,15 +223,30 @@ pub fn assert_contained(root: &Path, relative: &Path) -> Result<PathBuf> {
         .canonicalize()
         .with_context(|| format!("Failed to canonicalize root '{}'", root.display()))?;
 
-    // Canonicalize the joined path only if it exists; otherwise fall back
-    // to a normalized lexical check that does not require the path to exist yet.
+    // Canonicalize the joined path only if it exists; otherwise append the
+    // relative components onto the *canonical* root. Lexically normalizing
+    // `root.join(relative)` would keep pre-canonicalize prefixes (e.g. macOS
+    // `/var` vs `/private/var`) and spuriously fail the `starts_with` check
+    // for not-yet-created paths such as `tools/nushell/<version>/`.
     let canonical_joined = if joined.exists() {
         joined
             .canonicalize()
             .with_context(|| format!("Failed to canonicalize '{}'", joined.display()))?
     } else {
-        // Path does not yet exist — normalize lexically.
-        normalize_lexical(&joined)
+        let mut out = canonical_root.clone();
+        for component in relative.components() {
+            match component {
+                Component::CurDir => {}
+                Component::Normal(c) => out.push(c),
+                Component::ParentDir => {
+                    // Should not occur after is_safe_relative_path; defensive.
+                    out.pop();
+                }
+                // RootDir / Prefix already rejected by is_safe_relative_path.
+                _ => {}
+            }
+        }
+        out
     };
 
     if !canonical_joined.starts_with(&canonical_root) {
@@ -201,23 +260,26 @@ pub fn assert_contained(root: &Path, relative: &Path) -> Result<PathBuf> {
     Ok(canonical_joined)
 }
 
-/// Lexically normalize a path without requiring it to exist on disk.
+/// Refuse migration/reconcile when the managed Nushell layout escapes `$NUMAN_ROOT`.
 ///
-/// Processes components sequentially, collapsing `.` and refusing `..`
-/// (which should have been caught by [`is_safe_relative_path`] already).
-fn normalize_lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                // Should not occur if is_safe_relative_path was enforced first.
-                out.pop();
-            }
-            other => out.push(other),
-        }
+/// Checks:
+/// 1. `tools` and `tools/nushell` are not themselves symlinks/reparse points
+/// 2. When those paths exist, their canonical forms stay under the canonical root
+///    (catches a symlinked *ancestor* such as `$NUMAN_ROOT/tools` → elsewhere,
+///    where the leaf `nushell` directory is a real dir and a leaf-only symlink
+///    check would miss the escape)
+pub fn assert_managed_nushell_layout(root: &Path) -> Result<()> {
+    let tools = root.join("tools");
+    assert_not_symlink(&tools, "managed tools directory")?;
+    let managed = tools.join("nushell");
+    assert_not_symlink(&managed, "managed Nushell directory")?;
+    if tools.exists() {
+        let _ = assert_contained(root, Path::new("tools"))?;
     }
-    out
+    if managed.exists() {
+        let _ = assert_contained(root, Path::new("tools/nushell"))?;
+    }
+    Ok(())
 }
 
 // ── Managed-file ownership guard ──────────────────────────────────────────────
@@ -321,6 +383,23 @@ mod tests {
     }
 
     #[test]
+    fn contained_nonexistent_path_uses_canonical_root_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Not-yet-created leaf must still pass under a (possibly
+        // symlink-prefixed) temp root — e.g. macOS /var → /private/var.
+        let result = assert_contained(root, Path::new("tools/nushell/0.113.1")).unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+        assert!(
+            result.starts_with(&canonical_root),
+            "expected {} under {}",
+            result.display(),
+            canonical_root.display()
+        );
+        assert!(result.ends_with(Path::new("tools/nushell/0.113.1")));
+    }
+
+    #[test]
     fn rejects_parent_traversal_in_assert_contained() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -393,5 +472,72 @@ mod tests {
         std::fs::write(&target, b"hello").unwrap();
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert!(is_symlink_or_reparse(&link).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_nushell_layout_refuses_symlinked_tools_ancestor() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(outside.join("nushell")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("tools")).unwrap();
+        let err = assert_managed_nushell_layout(root).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("symlink") || msg.contains("reparse") || msg.contains("containment"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn managed_nushell_layout_accepts_plain_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("tools/nushell")).unwrap();
+        assert_managed_nushell_layout(root).unwrap();
+    }
+
+    // ── setup_subcommand_lock ───────────────────────────────────────────────
+
+    #[test]
+    fn setup_subcommand_lock_runs_closure_and_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let seen = setup_subcommand_lock(root, "test op", || Ok::<_, anyhow::Error>(42)).unwrap();
+        assert_eq!(seen, 42);
+        // Lock is released on Drop: a second acquisition after the first
+        // closure returned must succeed.
+        acquire_mutation_lock(root).expect("lock should be free after first closure returns");
+    }
+
+    #[test]
+    fn setup_subcommand_lock_propagates_closure_error_and_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let err = setup_subcommand_lock::<(), _>(root, "test op", || {
+            anyhow::bail!("closure failed");
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("closure failed"));
+        // Lock must still be released on the error path so a retry succeeds.
+        acquire_mutation_lock(root).expect("lock should be free even on error");
+    }
+
+    #[test]
+    fn setup_subcommand_lock_second_concurrent_call_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Hold the lock outside the helper. A second attempt must fail fast
+        // with the "another Numan mutation" message — this is the property
+        // AGENTS.md relies on to serialize destructive setup across
+        // concurrent invocations of the same binary on the same root.
+        let _held = acquire_mutation_lock(root).expect("first acquire");
+        let err = setup_subcommand_lock::<(), _>(root, "test op", || Ok(()))
+            .expect_err("concurrent acquire must fail");
+        assert!(
+            err.to_string().contains("another Numan mutation"),
+            "unexpected error: {err}"
+        );
     }
 }

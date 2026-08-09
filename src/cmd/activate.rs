@@ -17,7 +17,7 @@ use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::format_timestamp;
 
 use super::print_autoload_recovery;
-use crate::util::fs_safety::acquire_mutation_lock;
+use crate::util::fs_safety::{acquire_mutation_lock, MutationLock};
 use crate::util::hints::{self, CMD_ACTIVATE, CMD_INIT_REFRESH};
 
 #[derive(Args, Debug)]
@@ -66,6 +66,14 @@ pub fn execute(args: &ActivateArgs, root: &Path) -> Result<()> {
     execute_with_registrar_and_runner(args, root, &run_plugin_add, None)
 }
 
+/// Activate while the caller already holds the root mutation lock.
+///
+/// Used by `numan try` so install→activate stays atomic under one lock.
+/// Does not support `--list` / `--check` (those are lock-free read paths).
+pub fn execute_under_lock(args: &ActivateArgs, root: &Path, lock: &MutationLock) -> Result<()> {
+    execute_under_lock_with_hooks(args, root, lock, &run_plugin_add, None)
+}
+
 /// Testability entry point — accepts an injectable plugin registrar.
 ///
 /// The registrar receives `(nu_executable, plugin_binary_path, plugin_config_path)`
@@ -94,6 +102,21 @@ pub fn execute_with_candidate_runner(
     execute_with_registrar_and_runner(args, root, registrar, Some(runner))
 }
 
+/// Testability entry for [`execute_under_lock`].
+pub fn execute_under_lock_with_hooks(
+    args: &ActivateArgs,
+    root: &Path,
+    lock: &MutationLock,
+    registrar: &dyn Fn(&str, &str, &str) -> Result<()>,
+    runner: Option<&dyn CandidateRunner>,
+) -> Result<()> {
+    let _held = lock;
+    if args.list || args.check {
+        bail!("execute_under_lock does not support --list or --check");
+    }
+    execute_activating(args, root, registrar, runner, true)
+}
+
 fn execute_with_registrar_and_runner(
     args: &ActivateArgs,
     root: &Path,
@@ -118,39 +141,67 @@ fn execute_with_registrar_and_runner(
         return execute_check(args, &lockfile, &nu_paths, root);
     }
 
-    // 4. Preflight: validate any pending journal identity before touching targets.
-    //    This is read-only — bails if a stale-identity journal exists so the user
-    //    is warned before the consent table is printed.
+    execute_activating(args, root, registrar, runner, false)
+}
+
+/// Shared activation mutation path.
+///
+/// When `caller_holds_lock` is true, this skips acquiring `mutation.lock` and
+/// keeps the consent→mutate window under the caller's held lock (no unlock gap).
+fn execute_activating(
+    args: &ActivateArgs,
+    root: &Path,
+    registrar: &dyn Fn(&str, &str, &str) -> Result<()>,
+    runner: Option<&dyn CandidateRunner>,
+    caller_holds_lock: bool,
+) -> Result<()> {
+    let nu_paths = NuPaths::load(root)?;
+    nu_paths.validate_drift()?;
+
+    // Preflight: validate any pending journal identity before touching targets.
     check_journals_for_stale_identity(root, &nu_paths)?;
 
-    // 5. Reconcile interrupted work and resolve consent targets while holding
-    //    the mutation lock. This prevents a journal from being skipped by an
-    //    early no-op return.
-    let planning_lock = acquire_mutation_lock(root)?;
-    let mut lockfile = Lockfile::load(root)?;
-    reconcile_plugin_journal(root, &nu_paths, &mut lockfile)?;
-    print_autoload_recovery(reconcile_pending_autoload(root, &nu_paths, &mut lockfile)?);
-    lockfile = Lockfile::load(root)?;
-    let plugin_targets = resolve_plugin_targets(args, &lockfile, &nu_paths, root)?;
-    let module_targets = resolve_module_targets(args, &lockfile, &nu_paths)?;
+    let planning_lock = if caller_holds_lock {
+        None
+    } else {
+        Some(acquire_mutation_lock(root)?)
+    };
 
-    // Check for deferred-feature errors (script/completion types)
-    // These are already caught in resolve functions.
+    let (plugin_targets, module_targets, managed_file_path) =
+        prepare_activation_targets(args, root, &nu_paths)?;
 
     if plugin_targets.is_empty() && module_targets.is_empty() {
+        let lockfile = Lockfile::load(root)?;
+        snapshot_before_activate_profile_sync(root, &nu_paths, args, &lockfile)?;
+        sync_user_activate_profile(root, &nu_paths, args, &lockfile)?;
         println!("Nothing to activate.");
         return Ok(());
     }
 
-    // 7. Resolve module autoload paths for the consent table
-    let managed_file_path = if !module_targets.is_empty() {
-        Some(resolve_managed_file_path(&nu_paths)?)
-    } else {
-        None
-    };
-    drop(planning_lock);
+    // Consent table is informational only. When we acquired the lock ourselves,
+    // drop it across consent then reacquire so long-lived waiters are not blocked
+    // by a human reading stdout (CLI path). Callers that already hold the lock
+    // (e.g. `numan try`) keep it continuously so install→activate cannot race.
+    if caller_holds_lock {
+        print_grouped_consent_table(
+            &plugin_targets,
+            &module_targets,
+            managed_file_path.as_deref(),
+            &nu_paths.plugin_registry_path,
+        );
+        return run_activation_lanes(
+            args,
+            root,
+            &nu_paths,
+            registrar,
+            runner,
+            plugin_targets,
+            module_targets,
+            managed_file_path,
+        );
+    }
 
-    // 8. Consent table (informational only; no prompt)
+    drop(planning_lock);
     print_grouped_consent_table(
         &plugin_targets,
         &module_targets,
@@ -158,36 +209,63 @@ fn execute_with_registrar_and_runner(
         &nu_paths.plugin_registry_path,
     );
 
-    // 9. Reacquire the root mutation lock after consent.
     let _lock = acquire_mutation_lock(root)?;
-
-    // Reload lockfile under the lock to get the latest state
-    let mut lockfile = Lockfile::load(root)?;
-
-    // 10. Reconcile any interrupted journals under the lock so recovery
-    //     mutations are serialized with all other writes.
-    reconcile_plugin_journal(root, &nu_paths, &mut lockfile)?;
-    print_autoload_recovery(reconcile_pending_autoload(root, &nu_paths, &mut lockfile)?);
-    // Reload after reconciliation — recovery may have mutated the lockfile.
-    lockfile = Lockfile::load(root)?;
-
-    // Re-resolve targets from the post-reconciliation lockfile so packages
-    // that were just reconciled (already activated) are correctly skipped.
-    let plugin_targets = resolve_plugin_targets(args, &lockfile, &nu_paths, root)?;
-    let module_targets = resolve_module_targets(args, &lockfile, &nu_paths)?;
+    let (plugin_targets, module_targets, managed_file_path) =
+        prepare_activation_targets(args, root, &nu_paths)?;
 
     if plugin_targets.is_empty() && module_targets.is_empty() {
+        let lockfile = Lockfile::load(root)?;
+        snapshot_before_activate_profile_sync(root, &nu_paths, args, &lockfile)?;
+        sync_user_activate_profile(root, &nu_paths, args, &lockfile)?;
         println!("Nothing to activate.");
         return Ok(());
     }
 
+    run_activation_lanes(
+        args,
+        root,
+        &nu_paths,
+        registrar,
+        runner,
+        plugin_targets,
+        module_targets,
+        managed_file_path,
+    )
+}
+
+fn prepare_activation_targets(
+    args: &ActivateArgs,
+    root: &Path,
+    nu_paths: &NuPaths,
+) -> Result<(Vec<PluginTarget>, Vec<ModuleTarget>, Option<String>)> {
+    let mut lockfile = Lockfile::load(root)?;
+    reconcile_plugin_journal(root, nu_paths, &mut lockfile)?;
+    print_autoload_recovery(reconcile_pending_autoload(root, nu_paths, &mut lockfile)?);
+    lockfile = Lockfile::load(root)?;
+    let plugin_targets = resolve_plugin_targets(args, &lockfile, nu_paths, root)?;
+    let module_targets = resolve_module_targets(args, &lockfile, nu_paths)?;
     let managed_file_path = if !module_targets.is_empty() {
-        Some(resolve_managed_file_path(&nu_paths)?)
+        Some(resolve_managed_file_path(nu_paths)?)
     } else {
         None
     };
+    Ok((plugin_targets, module_targets, managed_file_path))
+}
 
-    // 11. Snapshot current state once before first mutation
+#[allow(clippy::too_many_arguments)]
+fn run_activation_lanes(
+    args: &ActivateArgs,
+    root: &Path,
+    nu_paths: &NuPaths,
+    registrar: &dyn Fn(&str, &str, &str) -> Result<()>,
+    runner: Option<&dyn CandidateRunner>,
+    plugin_targets: Vec<PluginTarget>,
+    module_targets: Vec<ModuleTarget>,
+    managed_file_path: Option<String>,
+) -> Result<()> {
+    let mut lockfile = Lockfile::load(root)?;
+
+    // Snapshot current state once before first mutation
     let snapshot = create_snapshot(
         root,
         SnapshotReason::PreMutation,
@@ -198,12 +276,11 @@ fn execute_with_registrar_and_runner(
 
     let mut any_failed = false;
 
-    // ── PLUGIN LANE ───────────────────────────────────────────────────────────
     if !plugin_targets.is_empty() {
         let plugin_failed = run_plugin_lane(
             args,
             root,
-            &nu_paths,
+            nu_paths,
             &mut lockfile,
             &plugin_targets,
             registrar,
@@ -213,9 +290,8 @@ fn execute_with_registrar_and_runner(
         }
     }
 
-    // ── MODULE LANE ───────────────────────────────────────────────────────────
     if !module_targets.is_empty() {
-        let managed_file_path = managed_file_path.unwrap();
+        let managed_file_path = managed_file_path.expect("module targets require managed file");
         let real_runner;
         let runner_ref: &dyn CandidateRunner = if let Some(r) = runner {
             r
@@ -226,7 +302,7 @@ fn execute_with_registrar_and_runner(
 
         let module_failed = run_module_lane(
             root,
-            &nu_paths,
+            nu_paths,
             &mut lockfile,
             &module_targets,
             &managed_file_path,
@@ -238,6 +314,9 @@ fn execute_with_registrar_and_runner(
         }
     }
 
+    let lockfile = Lockfile::load(root)?;
+    sync_user_activate_profile(root, nu_paths, args, &lockfile)?;
+
     if any_failed {
         bail!(
             "One or more packages failed to activate. Successful activations have been persisted."
@@ -245,6 +324,85 @@ fn execute_with_registrar_and_runner(
     }
 
     Ok(())
+}
+
+fn sync_user_activate_profile(
+    root: &Path,
+    nu_paths: &NuPaths,
+    args: &ActivateArgs,
+    lockfile: &Lockfile,
+) -> Result<()> {
+    let ids = collect_activate_profile_ids(args, lockfile, nu_paths);
+    crate::cmd::activation_switch::sync_profile_after_user_activate(
+        root,
+        &nu_paths.nu_version,
+        &ids,
+        lockfile,
+    )
+}
+
+/// Snapshot when a profile-only activate path would mutate desired state.
+fn snapshot_before_activate_profile_sync(
+    root: &Path,
+    nu_paths: &NuPaths,
+    args: &ActivateArgs,
+    lockfile: &Lockfile,
+) -> Result<()> {
+    let ids = collect_activate_profile_ids(args, lockfile, nu_paths);
+    let mutate_items: Vec<(crate::state::activation_profile::ProfileKind, &str)> = ids
+        .iter()
+        .filter_map(|id| {
+            let entry = lockfile.packages.get(id)?;
+            let kind = match entry.package_type.as_str() {
+                "plugin" => crate::state::activation_profile::ProfileKind::Plugin,
+                "module" => crate::state::activation_profile::ProfileKind::Module,
+                _ => return None,
+            };
+            Some((kind, id.as_str()))
+        })
+        .collect();
+    if crate::state::activation_profile::would_ensure_contains_any(
+        root,
+        &nu_paths.nu_version,
+        mutate_items,
+    )? {
+        create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Activate,
+            None,
+            None,
+        )?;
+    }
+    Ok(())
+}
+
+fn collect_activate_profile_ids(
+    args: &ActivateArgs,
+    lockfile: &Lockfile,
+    nu_paths: &NuPaths,
+) -> Vec<String> {
+    if args.packages.is_empty() {
+        let active = crate::cmd::activation_switch::collect_currently_active(lockfile, nu_paths);
+        let mut all = active.plugins;
+        all.extend(active.modules);
+        all
+    } else {
+        // Only record packages that are actually active now. A failed lane
+        // must not become desired state for `numan use` restore.
+        let active = crate::cmd::activation_switch::collect_currently_active(lockfile, nu_paths);
+        let active_set: std::collections::HashSet<&str> = active
+            .plugins
+            .iter()
+            .map(|s| s.as_str())
+            .chain(active.modules.iter().map(|s| s.as_str()))
+            .collect();
+        args.packages
+            .iter()
+            .filter(|id| active_set.contains(id.as_str()))
+            .cloned()
+            .collect()
+    }
 }
 
 // ── Plugin lane ────────────────────────────────────────────────────────────────
@@ -554,6 +712,13 @@ fn run_module_lane(
     }
 
     // Step 12: Clear the journal
+    if root
+        .join("state")
+        .join(".numan-test-fail-autoload-delete")
+        .exists()
+    {
+        bail!("injected journal-cleanup failure");
+    }
     PendingAutoload::delete(root)?;
 
     // Step 13: (Lock release happens via RAII when _lock is dropped in caller)
@@ -567,6 +732,46 @@ fn run_module_lane(
     }
 
     Ok(false) // lane succeeded
+}
+
+/// Activate named modules without acquiring the mutation lock, snapshotting, or
+/// syncing the activation profile. Caller must hold the root mutation lock.
+///
+/// Returns `true` if the module lane reported failure.
+pub(crate) fn activate_modules_unlocked(
+    root: &Path,
+    package_ids: &[String],
+    runner: &dyn CandidateRunner,
+    pre_mutation_snapshot_id: Option<String>,
+) -> Result<bool> {
+    if package_ids.is_empty() {
+        return Ok(false);
+    }
+
+    let nu_paths = NuPaths::load(root)?;
+    nu_paths.validate_drift()?;
+    let mut lockfile = Lockfile::load(root)?;
+
+    let args = ActivateArgs {
+        packages: package_ids.to_vec(),
+        verbose: false,
+        list: false,
+        check: false,
+    };
+    let module_targets = resolve_module_targets(&args, &lockfile, &nu_paths)?;
+    if module_targets.is_empty() {
+        return Ok(false);
+    }
+    let managed_file_path = resolve_managed_file_path(&nu_paths)?;
+    run_module_lane(
+        root,
+        &nu_paths,
+        &mut lockfile,
+        &module_targets,
+        &managed_file_path,
+        runner,
+        pre_mutation_snapshot_id,
+    )
 }
 
 // ── --list subcommand ──────────────────────────────────────────────────────────

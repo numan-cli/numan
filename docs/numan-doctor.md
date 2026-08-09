@@ -76,7 +76,7 @@ A PreMutation snapshot (`SnapshotTrigger::Doctor`) is taken after the lock is
 acquired and before layout/config writes. If snapshot creation fails (for
 example a malformed lockfile or missing payload revision), doctor records
 `snapshot.pre_mutation` as failed, continues with independent `layout.*`,
-`nu.active_version.malformed` cleanup, and `registry.none` repairs, and skips
+`nu.active_version.invalid` cleanup, and `registry.none` repairs, and skips
 nested mutations that need a PreMutation baseline (`nu_paths.missing` → `init`,
 plus `setup` / `registry sync` / `activate` / `deactivate`) with reason
 `snapshot_unavailable`.
@@ -85,7 +85,8 @@ Repair steps run in this **order** (each step re-validates only what it changed)
 
 | Tier | Prompt? | Finding IDs | Action |
 |------|---------|-------------|--------|
-| **auto** | Never | `layout.*` (missing dirs), `nu.active_version.malformed` | Independent of PreMutation success: `create_dir_all` for layout; clear invalid `nu_state/active-version.json` via `clear_active_version` |
+| **auto** | Never | `layout.*` (missing dirs), `nu.active_version.invalid` | Independent of PreMutation success: `create_dir_all` for layout; preserve raw `active-version.json` bytes to `active-version.json.corrupt`, then clear via `clear_active_version` |
+| **auto** | Never | `journal.migration_pending` | `migration_journal::reconcile` under the mutation lock after a PreMutation Doctor snapshot (skipped/Failed without aborting later repairs) |
 | **auto** | Never | `nu_paths.missing` | `numan init` (skipped with `snapshot_unavailable` when PreMutation fails) |
 | **auto** | Never | `registry.index_missing` | `numan registry sync` (skipped with `snapshot_unavailable` when PreMutation fails) |
 | **auto** | Never | `registry.none` (production trust root only) | Add official registry via same path as `numan init` (continues even when PreMutation fails) |
@@ -95,7 +96,7 @@ Repair steps run in this **order** (each step re-validates only what it changed)
 | **confirm** | Never (applied in default mode) | `journal.plugin_pending`, `journal.autoload_pending`, `journal.plugin_stale`, `journal.autoload_stale`, `activation.plugin_stale`, `activation.module_stale`, `autoload.projection`, `autoload.managed_missing` | `numan activate` (empty package list — reconciles journals and re-activates stale entries; same entry point as normal activate recovery) |
 | **confirm** | Never (applied in default mode) | `journal.plugin_deactivate_pending` | `numan deactivate <journal package ids>` (reconciles pending-plugin-deactivate journal only; not a full-root deactivate) |
 | **confirm** | Never (applied in default mode) | `journal.plugin_deactivate_stale` | `numan init --refresh` then `numan deactivate` |
-| **manual** | Never auto | `autoload.managed_foreign`, `payload.missing`, `journal.lifecycle_pending`, `journal.lifecycle_stale`, `registry.none` (placeholder trust root), `nu_paths.vendor_missing`, `nupm.*` | Print fix hint only |
+| **manual** | Never auto | `autoload.managed_foreign`, `payload.missing`, `journal.lifecycle_pending`, `journal.lifecycle_stale`, `journal.migration_invalid`, `registry.none` (placeholder trust root), `nu_paths.vendor_missing`, `nupm.*` | Print fix hint only |
 | **none** | Never | `activation.plugin_mutation_gated` (`info`) | Informational only; see [docs/active-plugin-gate.md](active-plugin-gate.md) |
 
 **Invariants during repair:**
@@ -130,7 +131,7 @@ Checks run in order below. Implementation should call existing validators (`NuPa
 | `nu.binary.found_off_path` | `warn` | Nu exists in a known install root (e.g. `~/.cargo/bin`, `%LOCALAPPDATA%\Programs\nushell`) but not on PATH → fix: `numan setup nu use <path>` |
 | `nu.path.version` | `info` | PATH-only Nu version (`PATH Nu: 0.114.1`), `PATH Nu: not found`, or `PATH Nu: found at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Does not treat managed Nu as PATH. Report-only (no automatic repair). |
 | `nu.managed.version` | `info` | Managed binary under `$NUMAN_ROOT/tools/nushell/` with version, `Managed Nu: not installed`, or `Managed Nu: present at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Report-only (no automatic repair). |
-| `nu.active_version.malformed` | `error` | `nu_state/active-version.json` is present but unreadable/invalid JSON. Lookup would otherwise soft-miss the marker and fall back to PATH. **auto:** clear the marker via `clear_active_version` so resolution recovers cleanly. |
+| `nu.active_version.invalid` | `error` | `nu_state/active-version.json` is present but unreadable/invalid JSON. Lookup would otherwise soft-miss the marker and fall back to PATH. **auto:** copy raw bytes to `active-version.json.corrupt` (best-effort, recoverable `binary_path`), then clear via `clear_active_version` so resolution recovers cleanly. |
 | `nu_paths.missing` | `error` | `paths.json` absent → fix: `numan init` |
 | `nu_paths.drift` | `error` | `NuPaths::validate_drift()` fails → fix: `numan init --refresh` |
 | `nu_paths.vendor_drift` | `error` | `validate_vendor_drift()` fails when `data_dir` cached → fix: `numan init --refresh` |
@@ -148,6 +149,8 @@ Checks run in order below. Implementation should call existing validators (`NuPa
 | `journal.autoload_stale` | `error` | Journal identity mismatch | **confirm:** `init --refresh` then `activate` |
 | `journal.lifecycle_pending` | `warn` | `state/pending-lifecycle.json` exists | **manual:** re-run or clear per op |
 | `journal.lifecycle_stale` | `error` | Stale lifecycle journal | **manual** |
+| `journal.migration_pending` | `warn` | `state/migration-journal.json` exists, parses, and [`validate_reconcile`](../src/state/migration_journal.rs) accepts it (normalized version, non-symlink managed tree, Renamed binary present or Prepared orphan empty/absent) | **auto:** `migration_journal::reconcile` under the mutation lock, after a PreMutation snapshot; hint `numan use <version>` when the versioned binary is present, else `numan doctor --fix` (or `numan setup nu <version>` to install) |
+| `journal.migration_invalid` | `error` | journal unreadable/unparseable/unsupported `schema_version`, or `validate_reconcile` refuses (unsafe/non-normalizable version, symlink managed tree, Renamed missing binary, non-empty Prepared orphan) | **manual:** `numan setup nu <version>` when the binary is missing, or delete the stale journal; auto-reconcile refuses these states |
 
 ### 4. Lockfile and activation identity
 
