@@ -139,6 +139,20 @@ fi
 
 log "contract bump: $OLD_TAG  --[$REASON]-->  $NEW_TAG"
 
+# Verify effective repository permissions before any local or remote mutation.
+gh auth status >/dev/null 2>&1 || { err "gh not authenticated"; exit 5; }
+check_maintainer_access() {
+    local repo="$1" permission
+    permission="$(gh api "repos/$repo" --jq '.permissions | if .admin then "admin" elif .maintain then "maintain" elif .push then "push" else "none" end')"
+    case "$permission" in
+        admin|maintain) ;;
+        *) err "maintainer access required on $repo (effective permission: $permission)"; exit 5 ;;
+    esac
+}
+check_maintainer_access "$REPO_NUMAN"
+check_maintainer_access "$REPO_PLUGINS"
+check_maintainer_access "$REPO_REGISTRY"
+
 # --- 1. Drift pass on the local copy of the consolidated roadmap ---------
 if [ ! -f "$DRIFT_SCRIPT" ]; then
     err "drift script not found at $DRIFT_SCRIPT; refusing to bump without sentinel validation"
