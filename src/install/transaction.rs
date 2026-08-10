@@ -408,6 +408,14 @@ pub fn install_package(
         install_dir.display()
     );
 
+    if resolved.is_provisional() {
+        let reason = resolved.deferral_reason_display();
+        println!(
+            "{} This package has not been lifecycle-tested. It passed integrity checks. ({reason})",
+            console::style("!").yellow()
+        );
+    }
+
     Ok(InstallResult {
         installed: true,
         package: lock_key,

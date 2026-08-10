@@ -1,5 +1,5 @@
 use crate::core::nu_version::NuVersion;
-use crate::core::package::PackageType;
+use crate::core::package::{PackageType, VersionEntry};
 use crate::core::platform::Platform;
 use crate::core::registry::RegistryManager;
 use crate::core::resolve::{Incompatibility, Resolver};
@@ -101,10 +101,18 @@ pub fn execute(args: &SearchArgs, root: &Path) -> Result<()> {
             }
         };
 
+        let provisional_marker = provisional_marker(display_entry);
+
         println!(
-            "  {}/{}  v{}  [{}]{}
+            "  {}/{}  v{}  [{}]{}{}
     {}",
-            pkg.id.owner, pkg.id.name, version_label, pkg.package_type, status, pkg.description
+            pkg.id.owner,
+            pkg.id.name,
+            version_label,
+            pkg.package_type,
+            status,
+            provisional_marker,
+            pkg.description
         );
     }
 
@@ -137,6 +145,14 @@ fn format_search_header(nu: Option<&NuVersion>, triple: &str) -> String {
     match nu {
         Some(n) => format!("checked against: Nu {} ({triple})", n.version),
         None => format!("checked against: Nu unknown ({triple})"),
+    }
+}
+
+fn provisional_marker(entry: Option<&VersionEntry>) -> &'static str {
+    if entry.map(|v| v.is_provisional()).unwrap_or(false) {
+        " [provisional]"
+    } else {
+        ""
     }
 }
 
@@ -252,6 +268,8 @@ mod tests {
                 dependencies: BTreeMap::new(),
                 activation: None,
                 provenance: None,
+                evidence_tier: None,
+                deferral_reason: None,
             }],
         }
     }
@@ -335,6 +353,24 @@ mod tests {
     fn plugin_compatible_default_listing_omits_status() {
         let status = format_row_status(&PackageType::Plugin, true, false, None, &[]);
         assert!(status.is_empty());
+    }
+
+    #[test]
+    fn provisional_marker_shown_for_provisional_entry() {
+        let mut pkg = sample_pkg_typed(PackageType::Plugin, "*", vec![]);
+        pkg.versions[0].evidence_tier = Some(crate::core::package::EvidenceTier::Provisional);
+        assert_eq!(provisional_marker(Some(&pkg.versions[0])), " [provisional]");
+    }
+
+    #[test]
+    fn provisional_marker_empty_for_proven_entry() {
+        let pkg = sample_pkg_typed(PackageType::Plugin, "*", vec![]);
+        assert_eq!(provisional_marker(Some(&pkg.versions[0])), "");
+    }
+
+    #[test]
+    fn provisional_marker_empty_for_none() {
+        assert_eq!(provisional_marker(None), "");
     }
 
     #[test]
