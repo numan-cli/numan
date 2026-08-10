@@ -22,7 +22,9 @@ potential.
 
 ### The intake pipeline today
 
-```
+The primary (and currently only automated) path is the CI-built plugin lane:
+
+```text
 Upstream repo (must have a tagged release)
     │
     ▼
@@ -41,10 +43,17 @@ lifecycle-prove.py (full install→activate→doctor→deactivate→remove)
 Production signing + publication
 ```
 
-Each stage has legitimate safety rationale. But the cumulative effect is a
-pipeline that can only accept: **Rust plugins, with tagged releases, targeting
-one Nu minor, building on all 5 platforms, passing full lifecycle proof**.
-This excludes the majority of the ecosystem by design.
+A secondary **manual path** exists for modules, scripts, and completions:
+hand-crafted spec JSON → `add-package.py` → (lifecycle-prove for activatable
+packages, SHA-256-only for install-only packages) → signing. Wave 3A/3B used
+this path. Partial-platform entries also exist today via per-entry
+`exclude_targets` in the manifest.
+
+Each stage has legitimate safety rationale. But the automated pipeline's
+cumulative effect is that it can only accept: **Rust plugins, with tagged
+releases, targeting one Nu minor, building on all 5 platforms, passing full
+lifecycle proof**. The manual path exists but is high-friction and
+undocumented. P2 and P3 below propose automating these secondary paths.
 
 ---
 
@@ -130,9 +139,15 @@ undocumented as a repeatable workflow.
 - Create `numan-registry/scripts/intake-archive.py`:
   - Input: Git URL + ref + entry path + package metadata (name, owner, type,
     description, tags, nu_version, activation config).
-  - Behavior: clone at ref, archive the relevant subtree as `.tar.gz`, upload
-    to a GitHub Release on `numan-registry` (or a dedicated assets repo),
-    compute SHA-256, emit a spec compatible with `add-package.py --write`.
+  - Behavior: resolve the supplied ref to its full 40-character commit SHA via
+    `git ls-remote` (or `git rev-parse` after clone), checkout that exact SHA,
+    archive the relevant subtree as `.tar.gz`, upload to a GitHub Release on
+    `numan-registry` (or a dedicated assets repo), compute SHA-256, emit a spec
+    compatible with `add-package.py --write`.
+  - Provenance: the resolved commit SHA is recorded in the generated spec as
+    `source.rev` and in the non-binary manifest. The original human-readable
+    ref (branch name, tag) is stored as optional `source.ref_hint` metadata
+    only. Repeatable re-intake relies exclusively on the pinned commit SHA.
   - Validation: entry file must exist in archive, schema validation passes,
     activation config is coherent (the mod.nu / import mode check).
 - Add a `non-binary` section to the manifest (or a separate
@@ -140,6 +155,19 @@ undocumented as a repeatable workflow.
   for repeatable re-intake on version bumps.
 - Lifecycle-prove still runs for activatable packages (modules with activation
   config). Scripts and completions that are install-only can skip it.
+
+**Install-only package contract:** Packages without an `activation` block
+(scripts, completions, some modules) are "install-only." For these:
+- The install operation guarantees: artifact downloaded, SHA-256 verified,
+  archive extracted without error, entry file exists at the declared path.
+- Activation is unavailable — `numan activate` does not apply. The user
+  sources/uses the files manually.
+- Evidence required: structural validation (download + hash + extract) only.
+  Lifecycle-prove is not applicable because there is no activate/deactivate
+  cycle to test.
+- This is distinct from a *provisional* activatable package (which has
+  activation semantics but lacks lifecycle evidence). Install-only packages
+  are not "skipping" lifecycle-prove — they have no activation contract.
 
 **Tradeoffs:**
 
@@ -210,7 +238,13 @@ for similar reasons.
 
 Formalize the fork decision framework:
 
-1. **Eligibility criteria** (all must be true):
+1. **Eligibility criteria** (all must be true — these supplement, not replace,
+   the full fork-governance requirements in
+   [`docs/adr/0001-ecosystem-trust-upstream-contribution-fork-stewardship.md`](../adr/0001-ecosystem-trust-upstream-contribution-fork-stewardship.md).
+   ADR 0001's Lane 3 requirements remain mandatory: license confirmation,
+   bounded maintenance scope, build/test/release capability, ownership of
+   future Nu/API/CVE/CI work, stewardship records, upstream contribution as
+   the default, and a defined exit condition):
    - Plugin has >5K crates.io downloads (demonstrated demand).
    - Upstream is >3 Nu minors behind current target.
    - Outreach issue has been open >30 days with no response, OR upstream is
@@ -227,14 +261,20 @@ Formalize the fork decision framework:
    - If/when upstream catches up, retire the fork and switch back.
 
 3. **Intake treatment:**
-   - Manifest entry uses the fork repo with `owner` set to `"numan-maintained"`
-     (a numan-owned distribution identity), not the original upstream author.
-     This avoids conflating `numan install upstream-author/pkg` with a
-     numan-maintained fork, consistent with the stewardship policy in
-     `docs/adr/0001-ecosystem-trust-upstream-contribution-fork-stewardship.md`.
+   - Manifest entry uses the fork repo. Three identities are kept explicitly
+     separate per ADR 0001's fork identity requirements:
+     - **Upstream identity:** `source.upstream` records the original repo URL
+       and original author. `numan install original-author/pkg` must never
+       silently resolve to the fork.
+     - **Fork maintainer:** `owner` is set to `"numan-maintained"` (a
+       numan-owned distribution scope). This is the entity responsible for
+       build/sign/release.
+     - **Distribution source:** `source.git` points to the fork repo.
+       `source.rev` pins the exact fork commit.
    - Registry `description` appends "(numan-maintained fork for Nu 0.114 compat)".
-   - `source.git` points to the fork; a `source.upstream` field preserves
-     the original repo URL for attribution and retirement tracking.
+   - `numan info` and `numan search` display the fork maintainer and upstream
+     attribution distinctly. Installing `numan-maintained/pkg` is explicit —
+     never a silent substitute for `original-author/pkg`.
    - If/when upstream catches up, the fork entry is retired and replaced by
      an entry under the original author's identity.
 
@@ -266,15 +306,25 @@ doesn't scale.
 
 - **Nightly/weekly CI job** in `numan-plugins` (or a new `numan-compat-ci` repo):
   - Downloads latest stable Nu release.
-  - For each active manifest entry, runs lifecycle-prove against the new Nu.
-  - Outputs a compatibility matrix: `{plugin, current_nu_version, tested_nu, result}`.
+  - For each active manifest entry, runs lifecycle-prove against the new Nu
+    **on each platform with an existing artifact** (Linux x86_64, Linux aarch64,
+    macOS arm64, Windows x86_64 — matching the entry's target coverage).
+  - Outputs a compatibility matrix: `{plugin, current_nu_version, tested_nu,
+    platform, artifact_sha256, source_rev, result}`.
   - On success: auto-opens a PR widening the `nu_version` constraint and adding
-    the new version to `verified_with`.
-  - On failure: opens an issue with the error log for manual triage.
+    the new version to `verified_with` **only for the specific platforms that
+    passed**. A plugin verified only on Linux does not get its constraint
+    widened for Windows.
+  - On failure: opens an issue with the error log, platform, artifact identity,
+    and source revision for manual triage.
 
 - **Constraint relaxation policy:**
-  - If a plugin passes lifecycle-prove on Nu 0.115 without rebuild, widen to
-    `>=0.114.0 <0.116.0` (no new binary needed, just constraint + evidence).
+  - If a plugin passes lifecycle-prove on Nu 0.115 **on all its existing
+    platforms** without rebuild, widen to `>=0.114.0 <0.116.0` (no new binary
+    needed, just constraint + evidence).
+  - If it passes on some platforms but not others, widen only per-platform
+    (requires a schema extension to `verified_with` or a per-target evidence
+    structure — see Open Questions).
   - If it requires a rebuild (API change), trigger a new build wave.
 
 - **Registry-side:** `add-package.py` already supports updating `verified_with`
@@ -315,14 +365,30 @@ is acceptable.
     Reason for deferral is recorded in the entry.
 
 - **Schema extension:** Add optional `"evidence_tier": "proven" | "provisional"`
-  to version entries. Absence = `"proven"` (backward compatible).
+  to version entries. Absence = `"proven"` (backward compatible — all existing
+  entries that passed lifecycle-prove before this field existed are genuinely
+  proven). When `evidence_tier` is `"provisional"`, a `"deferral_reason"` field
+  (type: string, required) must explain why lifecycle-prove was skipped (e.g.,
+  `"requires Google Cloud credentials"`, `"needs desktop environment for
+  notifications"`). Client behavior:
+  - Missing `evidence_tier` → treat as `"proven"` (legacy entries).
+  - `evidence_tier: "provisional"` with missing or empty `deferral_reason` →
+    treat as provisional but display "reason not recorded" in `numan info`.
+  - Entries created via the prior `--provisional` flag (which omit
+    `verified_with` but have no `evidence_tier` field) are distinguishable:
+    they lack `verified_with`. During migration, a one-time script will
+    backfill `"evidence_tier": "provisional"` and a `"deferral_reason":
+    "pre-reform provisional intake"` on any activatable entry missing
+    `verified_with`, ensuring the "absence = proven" invariant holds only
+    for entries that genuinely passed lifecycle-prove.
 
 - **CLI UX:**
   - `numan search` shows a marker for provisional packages (e.g., `[p]` or
     `(provisional)`).
   - `numan install` of a provisional package shows a one-time notice: "This
     package has not been lifecycle-tested. It passed integrity checks."
-  - `numan info` shows the deferral reason.
+  - `numan info` shows the `deferral_reason` explaining why lifecycle-prove
+    was skipped.
 
 - **Graduation policy:** Provisional packages are re-tested periodically
   (ties into P5 auto-bump CI). On passing lifecycle-prove, they graduate to
@@ -363,10 +429,32 @@ compile fine but lack prebuilts for all platforms, this is a permanent blocker.
 - No cross-compilation; builds only for the user's current platform.
 - Requires user to have Rust toolchain installed (detected via `rustc --version`).
 
+**Trust boundary and isolation requirements:**
+
+- Source builds are always explicit — never triggered by `numan install` alone.
+  The `--from-source` flag is mandatory; there is no silent fallback from a
+  missing binary artifact to a source build.
+- CLI displays a clear warning: "Building from source executes build.rs and
+  procedural macros from the pinned revision. This is NOT equivalent to
+  installing a signed binary artifact."
+- Inputs verified before build:
+  - Repository URL must match the registry's `source.git` exactly.
+  - Checkout revision must match `source.rev` (full 40-char SHA).
+  - If `cargo_lock_sha256` is present, the fetched `Cargo.lock` must match.
+- Isolation: build runs in a fresh temporary directory with `--frozen` or
+  `--locked` (no network fetches after initial dependency download). Future
+  work may add sandboxing (e.g., `bubblewrap` on Linux) to limit filesystem
+  and network access from `build.rs` and proc-macros.
+- Resource limits: build timeout (configurable, default 10 minutes), disk
+  quota on the temp directory (default 1 GiB).
+- Locally-built binaries are NOT signed artifacts. They do not carry registry
+  SHA-256 verification. `numan doctor` and `numan info` must clearly
+  distinguish source-built packages from signed prebuilt ones.
+
 **Why defer:** This is a significant client feature (build orchestration, error
-handling, toolchain detection, build caching). The other 6 proposals unlock
-more packages with less effort. But this is the endgame for full ecosystem
-coverage.
+handling, toolchain detection, build caching, isolation). The other 6 proposals
+unlock more packages with less effort. But this is the endgame for full
+ecosystem coverage.
 
 **Affected repos:** `numan` (new install path), `numan-registry` (allow
 `kind: "source"` entries in add-package.py).
@@ -432,12 +520,16 @@ has highest value once the catalog is larger. Phase E is explicitly deferred.
    auto-bump snapshots or wait for demand signal?
 5. **Community attestation:** Could users submit lifecycle evidence for
    provisional packages to help them graduate? (Crowdsourced trust.)
+6. **Per-platform verified_with:** P5's platform-scoped verification may require
+   extending `verified_with` from a flat array to a per-target structure (e.g.,
+   `{"x86_64-unknown-linux-gnu": ["0.115.0"], ...}`). Evaluate schema
+   complexity vs. simply requiring all-platform pass for constraint widening.
 
 ---
 
 ## References
 
-- [Gap Analysis — August 2026](# "Internal research document; 7-cycle campaign not committed to repo") (research campaign, 7 cycles)
+- Gap Analysis — August 2026 (internal research campaign, 7 cycles; not committed to repo)
 - [`numan/docs/plans/consolidated-multi-repo-roadmap.md`](consolidated-multi-repo-roadmap.md)
 - [`numan-registry/docs/roadmap.md`](https://github.com/tonythethompson/numan-registry/blob/main/docs/roadmap.md)
 - [`numan-plugins/docs/backlog.json`](https://github.com/tonythethompson/numan-plugins/blob/main/docs/backlog.json)
