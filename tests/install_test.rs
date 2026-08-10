@@ -686,7 +686,7 @@ fn integration_install_provisional_warns_only_on_new_install() {
 }
 
 #[test]
-fn integration_install_rejects_corrupted_cached_artifact() {
+fn integration_install_self_heals_corrupted_cached_artifact() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
     let signing_key = setup_trusted_key(&root, "test");
@@ -748,11 +748,8 @@ fn integration_install_rejects_corrupted_cached_artifact() {
     // Plant a corrupted cache hit under the expected content-addressed key.
     let cache_dir = root.join("cache/downloads");
     std::fs::create_dir_all(&cache_dir).unwrap();
-    std::fs::write(
-        cache_dir.join(format!("{zip_sha}.bin")),
-        b"not the real artifact",
-    )
-    .unwrap();
+    let cache_file = cache_dir.join(format!("{zip_sha}.bin"));
+    std::fs::write(&cache_file, b"not the real artifact").unwrap();
 
     let platform = Platform {
         os: Os::Windows,
@@ -771,18 +768,15 @@ fn integration_install_rejects_corrupted_cached_artifact() {
         snapshot_trigger: SnapshotTrigger::Install,
     };
 
-    let err = transaction::install_package("test/cache", None, &options)
-        .expect_err("corrupted cache must fail integrity before extract");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("Integrity check failed"),
-        "expected integrity failure, got: {msg}"
-    );
-    assert!(
-        !root.join("packages").exists()
-            || std::fs::read_dir(root.join("packages"))
-                .map(|mut d| d.next().is_none())
-                .unwrap_or(true),
-        "corrupted cache must not produce an extracted package payload"
+    let result = transaction::install_package("test/cache", None, &options)
+        .expect("corrupted cache should self-heal via one re-download");
+    assert!(result.installed);
+    assert!(root.join(&result.path).join("nu_plugin_cache.exe").exists());
+
+    let repaired = std::fs::read(&cache_file).unwrap();
+    assert_eq!(
+        numan_cli::core::integrity::compute_sha256(&repaired),
+        zip_sha,
+        "cache entry must be replaced with the verified artifact"
     );
 }
