@@ -51,6 +51,7 @@ pub fn execute(args: &CompletionsArgs) -> Result<()> {
         shell_label(args.shell),
         path.display()
     );
+    println!("Re-run after upgrading numan to refresh tab completion.");
     if matches!(args.shell, CompletionShell::PowerShell) {
         println!(
             "Add to $PROFILE (once): . {}",
@@ -186,12 +187,26 @@ numan completions powershell --print | Add-Content -Encoding utf8 $PROFILE
         .to_string(),
         CompletionShell::Nushell => "\
 # Prefer: numan completions nushell
-# Or manually:
-mkdir --all ($nu.data-dir | path join vendor/autoload)
+# Or manually (mkdir creates parent dirs by default):
+mkdir ($nu.data-dir | path join vendor/autoload)
 numan completions nushell --print | save -f ($nu.data-dir | path join vendor/autoload/numan-completions.nu)
 "
         .to_string(),
     }
+}
+
+/// Build the clap command tree used only for shell completion generation.
+///
+/// Help subcommands are disabled recursively. `clap_complete` would otherwise
+/// emit duplicate `numan help <cmd>` entries (often empty) that roughly double
+/// script size without improving tab completion.
+fn command_for_completions() -> clap::Command {
+    disable_help_subcommands_recursively(Cli::command())
+}
+
+fn disable_help_subcommands_recursively(cmd: clap::Command) -> clap::Command {
+    cmd.disable_help_subcommand(true)
+        .mut_subcommands(disable_help_subcommands_recursively)
 }
 
 /// Generate a completion script for `shell`.
@@ -200,7 +215,7 @@ numan completions nushell --print | save -f ($nu.data-dir | path join vendor/aut
 /// `$PROFILE` that already contains statements (see
 /// [`make_powershell_profile_safe`]).
 pub fn generate_script(shell: CompletionShell) -> Result<String> {
-    let mut cmd = Cli::command();
+    let mut cmd = command_for_completions();
     let mut buf = Vec::new();
     match shell {
         CompletionShell::Bash => generate(Shell::Bash, &mut cmd, "numan", &mut buf),
@@ -301,10 +316,14 @@ mod tests {
         assert!(print_hint(CompletionShell::Zsh).contains("mkdir -p ~/.zfunc"));
         assert!(print_hint(CompletionShell::Fish)
             .contains("mkdir -p \"${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions\""));
+        let nu_hint = print_hint(CompletionShell::Nushell);
+        assert!(nu_hint.contains("vendor/autoload/numan-completions.nu"));
+        assert!(nu_hint.contains("numan completions nushell --print"));
         assert!(
-            print_hint(CompletionShell::Nushell).contains("vendor/autoload/numan-completions.nu")
+            !nu_hint.contains("mkdir --all"),
+            "Nushell mkdir has no --all flag; it creates parents by default"
         );
-        assert!(print_hint(CompletionShell::Nushell).contains("numan completions nushell --print"));
+        assert!(nu_hint.contains("mkdir ($nu.data-dir | path join vendor/autoload)"));
     }
 
     #[test]
@@ -419,6 +438,27 @@ mod tests {
             !script.contains("vendor/autoload"),
             "hint must not be in script"
         );
+        assert!(
+            !script.contains("numan help"),
+            "help subcommands must not bloat nushell completions"
+        );
+    }
+
+    #[test]
+    fn completions_omit_help_subcommands() {
+        for shell in [
+            CompletionShell::Bash,
+            CompletionShell::Fish,
+            CompletionShell::Zsh,
+            CompletionShell::PowerShell,
+            CompletionShell::Nushell,
+        ] {
+            let script = generate_script(shell).expect("generate");
+            assert!(
+                !script.contains("numan help"),
+                "{shell:?} completions must not include help subcommands"
+            );
+        }
     }
 
     #[test]
