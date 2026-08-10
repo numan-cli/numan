@@ -112,6 +112,22 @@ pub struct VersionEntry {
     /// `None` for plugins, scripts, and completions.
     #[serde(default)]
     pub activation: Option<RegistryActivationSpec>,
+    /// Evidence tier for this version. `None` means "proven" (legacy
+    /// entries and any entry with full lifecycle evidence).
+    #[serde(default)]
+    pub evidence_tier: Option<String>,
+    /// Required alongside `evidence_tier: "provisional"`: why
+    /// lifecycle-prove was deferred for this version.
+    #[serde(default)]
+    pub deferral_reason: Option<String>,
+}
+
+impl VersionEntry {
+    /// Whether this version is provisional (structural validation only, no
+    /// full lifecycle evidence). Absent `evidence_tier` means proven.
+    pub fn is_provisional(&self) -> bool {
+        self.evidence_tier.as_deref() == Some("provisional")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -267,6 +283,46 @@ mod tests {
             .targets
             .contains_key("x86_64-pc-windows-msvc"));
         assert!(entry.source.is_none());
+    }
+
+    #[test]
+    fn version_entry_absent_evidence_tier_is_not_provisional() {
+        let json = r#"{
+            "version": "0.25.2",
+            "nu_version": ">=0.113.0 <0.114.0",
+            "artifact": { "kind": "binary", "targets": {} }
+        }"#;
+        let entry: VersionEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_provisional());
+    }
+
+    #[test]
+    fn version_entry_provisional_evidence_tier() {
+        let json = r#"{
+            "version": "0.25.2",
+            "nu_version": ">=0.113.0 <0.114.0",
+            "evidence_tier": "provisional",
+            "deferral_reason": "requires cloud credentials",
+            "artifact": { "kind": "binary", "targets": {} }
+        }"#;
+        let entry: VersionEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_provisional());
+        assert_eq!(
+            entry.deferral_reason.as_deref(),
+            Some("requires cloud credentials")
+        );
+    }
+
+    #[test]
+    fn version_entry_proven_evidence_tier_is_not_provisional() {
+        let json = r#"{
+            "version": "0.25.2",
+            "nu_version": ">=0.113.0 <0.114.0",
+            "evidence_tier": "proven",
+            "artifact": { "kind": "binary", "targets": {} }
+        }"#;
+        let entry: VersionEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_provisional());
     }
 
     #[test]

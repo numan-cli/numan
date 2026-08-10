@@ -79,6 +79,14 @@ pub fn format_info(pkg: &Package, platform: &Platform, nu: Option<&NuVersion>) -
             ));
         }
 
+        if ver.is_provisional() {
+            let reason = ver
+                .deferral_reason
+                .as_deref()
+                .unwrap_or("reason not recorded");
+            out.push_str(&format!("    evidence:    provisional — {reason}\n"));
+        }
+
         if let Some(ref source) = ver.source {
             out.push_str(&format!("    source git:  {}\n", source.git));
             out.push_str(&format!("    source rev:  {}\n", source.rev));
@@ -161,6 +169,8 @@ mod tests {
                 }),
                 dependencies: BTreeMap::new(),
                 activation: None,
+                evidence_tier: None,
+                deferral_reason: None,
             }],
         }
     }
@@ -193,6 +203,33 @@ mod tests {
         );
         assert!(out.contains("source rev:  v1.4.15+0.113.1"), "{out}");
         assert!(out.contains("cargo_name:  nu_plugin_highlight"), "{out}");
+    }
+
+    #[test]
+    fn format_info_notes_provisional_with_reason() {
+        let mut pkg = sample_plugin(false);
+        pkg.versions[0].evidence_tier = Some("provisional".to_string());
+        pkg.versions[0].deferral_reason = Some("requires cloud credentials".to_string());
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(
+            out.contains("evidence:    provisional — requires cloud credentials"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn format_info_notes_provisional_without_reason() {
+        let mut pkg = sample_plugin(false);
+        pkg.versions[0].evidence_tier = Some("provisional".to_string());
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(out.contains("reason not recorded"), "{out}");
+    }
+
+    #[test]
+    fn format_info_omits_evidence_line_when_proven() {
+        let pkg = sample_plugin(false);
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(!out.contains("evidence:"), "{out}");
     }
 
     #[test]

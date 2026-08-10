@@ -726,6 +726,8 @@ mod tests {
                     source: None,
                     dependencies: BTreeMap::new(),
                     activation: None,
+                    evidence_tier: None,
+                    deferral_reason: None,
                 },
                 VersionEntry {
                     version: semver::Version::new(1, 0, 0),
@@ -743,6 +745,8 @@ mod tests {
                     source: None,
                     dependencies: BTreeMap::new(),
                     activation: None,
+                    evidence_tier: None,
+                    deferral_reason: None,
                 },
             ],
         }
@@ -1055,6 +1059,8 @@ mod tests {
                 source: None,
                 dependencies: BTreeMap::new(),
                 activation: None,
+                evidence_tier: None,
+                deferral_reason: None,
             }],
         }
     }
