@@ -88,6 +88,10 @@ pub fn format_info(pkg: &Package, platform: &Platform, nu: Option<&NuVersion>) -
             ));
         }
 
+        if ver.provenance.as_deref() == Some("commit-snapshot") {
+            out.push_str("    note: built from a commit snapshot, not a tagged release\n");
+        }
+
         if let Some(ref source) = ver.source {
             out.push_str(&format!("    source git:  {}\n", source.git));
             out.push_str(&format!("    source rev:  {}\n", source.rev));
@@ -185,6 +189,7 @@ mod tests {
                 }),
                 dependencies: BTreeMap::new(),
                 activation: None,
+                provenance: None,
             }],
         }
     }
@@ -265,6 +270,32 @@ mod tests {
         let pkg = sample_plugin(true);
         let out = format_info(&pkg, &linux_platform(), None);
         assert!(!out.contains("upstream:"), "{out}");
+    }
+
+    #[test]
+    fn format_info_notes_commit_snapshot_provenance() {
+        let mut pkg = sample_plugin(false);
+        pkg.versions[0].provenance = Some("commit-snapshot".to_string());
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(
+            out.contains("built from a commit snapshot, not a tagged release"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn format_info_omits_provenance_note_when_absent() {
+        let pkg = sample_plugin(false);
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(!out.contains("commit snapshot"), "{out}");
+    }
+
+    #[test]
+    fn format_info_omits_provenance_note_for_other_values() {
+        let mut pkg = sample_plugin(false);
+        pkg.versions[0].provenance = Some("tagged-release".to_string());
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(!out.contains("commit snapshot"), "{out}");
     }
 
     #[test]

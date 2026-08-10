@@ -115,6 +115,10 @@ pub struct VersionEntry {
     /// `None` for plugins, scripts, and completions.
     #[serde(default)]
     pub activation: Option<RegistryActivationSpec>,
+    /// Optional provenance marker, e.g. `"commit-snapshot"` for versions
+    /// built from a pinned commit with no upstream tag.
+    #[serde(default)]
+    pub provenance: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -274,6 +278,29 @@ mod tests {
             .targets
             .contains_key("x86_64-pc-windows-msvc"));
         assert!(entry.source.is_none());
+    }
+
+    #[test]
+    fn parse_version_entry_defaults_provenance_to_none() {
+        let json = r#"{
+            "version": "0.25.2",
+            "nu_version": ">=0.113.0 <0.114.0",
+            "artifact": { "kind": "binary", "targets": {} }
+        }"#;
+        let entry: VersionEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.provenance.is_none());
+    }
+
+    #[test]
+    fn parse_version_entry_with_commit_snapshot_provenance() {
+        let json = r#"{
+            "version": "0.0.0-snapshot.20260809.5a1ca2a",
+            "nu_version": ">=0.114.0 <0.115.0",
+            "provenance": "commit-snapshot",
+            "artifact": { "kind": "binary", "targets": {} }
+        }"#;
+        let entry: VersionEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.provenance.as_deref(), Some("commit-snapshot"));
     }
 
     #[test]

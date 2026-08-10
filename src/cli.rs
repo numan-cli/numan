@@ -61,6 +61,6 @@ pub enum Commands {
     Setup(cmd::setup::SetupCommands),
     /// Try a package against your current Nu and platform, with compatibility guidance
     Try(cmd::try_cmd::TryArgs),
-    /// Switch the active managed Nu version (reserved, post-1.0)
+    /// Switch the active managed Nu version (`latest`, `list`, or a specific version)
     Use(cmd::use_cmd::UseArgs),
 }

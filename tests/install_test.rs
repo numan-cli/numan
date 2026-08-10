@@ -137,6 +137,7 @@ fn integration_full_install_from_signed_registry() {
             source: None,
             dependencies: BTreeMap::new(),
             activation: None,
+            provenance: None,
         }],
     };
 
@@ -381,6 +382,7 @@ fn integration_resolve_exact_rejects_incompatible() {
             source: None,
             dependencies: BTreeMap::new(),
             activation: None,
+            provenance: None,
         }],
     };
 
@@ -463,6 +465,7 @@ fn integration_snapshot_before_install() {
             source: None,
             dependencies: BTreeMap::new(),
             activation: None,
+            provenance: None,
         }],
     };
 
@@ -533,6 +536,7 @@ fn integration_snapshot_before_install() {
             source: None,
             dependencies: BTreeMap::new(),
             activation: None,
+            provenance: None,
         }],
     };
 
