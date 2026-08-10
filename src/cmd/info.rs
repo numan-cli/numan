@@ -219,6 +219,14 @@ mod tests {
     }
 
     #[test]
+    fn format_info_omits_provenance_note_for_other_values() {
+        let mut pkg = sample_plugin(false);
+        pkg.versions[0].provenance = Some("tagged-release".to_string());
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(!out.contains("commit snapshot"), "{out}");
+    }
+
+    #[test]
     fn format_info_omits_source_lines_when_absent() {
         let pkg = sample_plugin(false);
         let out = format_info(&pkg, &linux_platform(), None);
