@@ -101,10 +101,18 @@ pub fn execute(args: &SearchArgs, root: &Path) -> Result<()> {
             }
         };
 
+        let fork_marker = fork_marker(&pkg.id.owner);
+
         println!(
-            "  {}/{}  v{}  [{}]{}
+            "  {}/{}  v{}  [{}]{}{}
     {}",
-            pkg.id.owner, pkg.id.name, version_label, pkg.package_type, status, pkg.description
+            pkg.id.owner,
+            pkg.id.name,
+            version_label,
+            pkg.package_type,
+            status,
+            fork_marker,
+            pkg.description
         );
     }
 
@@ -137,6 +145,15 @@ fn format_search_header(nu: Option<&NuVersion>, triple: &str) -> String {
     match nu {
         Some(n) => format!("checked against: Nu {} ({triple})", n.version),
         None => format!("checked against: Nu unknown ({triple})"),
+    }
+}
+
+/// Row suffix distinguishing a numan-maintained fork from its original owner.
+fn fork_marker(owner: &str) -> &'static str {
+    if owner == "numan-maintained" {
+        " [fork]"
+    } else {
+        ""
     }
 }
 
@@ -334,6 +351,16 @@ mod tests {
     fn plugin_compatible_default_listing_omits_status() {
         let status = format_row_status(&PackageType::Plugin, true, false, None, &[]);
         assert!(status.is_empty());
+    }
+
+    #[test]
+    fn fork_marker_shown_for_numan_maintained_owner() {
+        assert_eq!(fork_marker("numan-maintained"), " [fork]");
+    }
+
+    #[test]
+    fn fork_marker_empty_for_normal_owner() {
+        assert_eq!(fork_marker("cptpiepmatz"), "");
     }
 
     #[test]
