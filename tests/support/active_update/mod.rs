@@ -507,6 +507,8 @@ fn write_dual_version_registry(
             dependencies: BTreeMap::new(),
             activation: None,
             provenance: None,
+            evidence_tier: None,
+            deferral_reason: None,
         }
     };
 

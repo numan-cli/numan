@@ -119,6 +119,50 @@ pub struct VersionEntry {
     /// built from a pinned commit with no upstream tag.
     #[serde(default)]
     pub provenance: Option<String>,
+    /// Evidence tier for this version. `None` means "proven" (legacy
+    /// entries and any entry with full lifecycle evidence).
+    #[serde(default)]
+    pub evidence_tier: Option<EvidenceTier>,
+    /// Required alongside `evidence_tier: "provisional"`: why
+    /// lifecycle-prove was deferred for this version.
+    #[serde(default)]
+    pub deferral_reason: Option<String>,
+}
+
+/// Closed set of evidence tiers; unrecognized values fail deserialization
+/// instead of silently being treated as proven.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EvidenceTier {
+    Proven,
+    Provisional,
+}
+
+impl VersionEntry {
+    /// Whether this version is provisional (structural validation only, no
+    /// full lifecycle evidence). Absent `evidence_tier` means proven.
+    pub fn is_provisional(&self) -> bool {
+        self.evidence_tier == Some(EvidenceTier::Provisional)
+    }
+
+    /// Sanitized, non-empty deferral reason for display, or the fallback
+    /// text when the reason is missing, blank, or contains control
+    /// characters that would corrupt terminal output.
+    pub fn deferral_reason_display(&self) -> String {
+        let cleaned: String = self
+            .deferral_reason
+            .as_deref()
+            .unwrap_or("")
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
+        let trimmed = cleaned.trim();
+        if trimmed.is_empty() {
+            "reason not recorded".to_string()
+        } else {
+            trimmed.to_string()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,6 +325,17 @@ mod tests {
     }
 
     #[test]
+    fn version_entry_absent_evidence_tier_is_not_provisional() {
+        let json = r#"{
+            "version": "0.25.2",
+            "nu_version": ">=0.113.0 <0.114.0",
+            "artifact": { "kind": "binary", "targets": {} }
+        }"#;
+        let entry: VersionEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_provisional());
+    }
+
+    #[test]
     fn parse_version_entry_defaults_provenance_to_none() {
         let json = r#"{
             "version": "0.25.2",
@@ -289,6 +344,77 @@ mod tests {
         }"#;
         let entry: VersionEntry = serde_json::from_str(json).unwrap();
         assert!(entry.provenance.is_none());
+    }
+
+    #[test]
+    fn version_entry_provisional_evidence_tier() {
+        let json = r#"{
+            "version": "0.25.2",
+            "nu_version": ">=0.113.0 <0.114.0",
+            "evidence_tier": "provisional",
+            "deferral_reason": "requires cloud credentials",
+            "artifact": { "kind": "binary", "targets": {} }
+        }"#;
+        let entry: VersionEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_provisional());
+        assert_eq!(
+            entry.deferral_reason.as_deref(),
+            Some("requires cloud credentials")
+        );
+    }
+
+    #[test]
+    fn deferral_reason_display_falls_back_when_missing() {
+        let json = r#"{
+            "version": "0.25.2",
+            "nu_version": ">=0.113.0 <0.114.0",
+            "evidence_tier": "provisional",
+            "artifact": { "kind": "binary", "targets": {} }
+        }"#;
+        let entry: VersionEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.deferral_reason_display(), "reason not recorded");
+    }
+
+    #[test]
+    fn deferral_reason_display_falls_back_when_blank() {
+        let mut entry: VersionEntry =
+            serde_json::from_str(r#"{"version":"0.25.2","nu_version":">=0.113.0 <0.114.0","artifact":{"kind":"binary","targets":{}}}"#).unwrap();
+        entry.deferral_reason = Some("   ".to_string());
+        assert_eq!(entry.deferral_reason_display(), "reason not recorded");
+    }
+
+    #[test]
+    fn deferral_reason_display_strips_control_characters() {
+        let mut entry: VersionEntry =
+            serde_json::from_str(r#"{"version":"0.25.2","nu_version":">=0.113.0 <0.114.0","artifact":{"kind":"binary","targets":{}}}"#).unwrap();
+        entry.deferral_reason = Some("line one\nfake success line".to_string());
+        assert_eq!(
+            entry.deferral_reason_display(),
+            "line one fake success line"
+        );
+    }
+
+    #[test]
+    fn version_entry_proven_evidence_tier_is_not_provisional() {
+        let json = r#"{
+            "version": "0.25.2",
+            "nu_version": ">=0.113.0 <0.114.0",
+            "evidence_tier": "proven",
+            "artifact": { "kind": "binary", "targets": {} }
+        }"#;
+        let entry: VersionEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_provisional());
+    }
+
+    #[test]
+    fn version_entry_rejects_unknown_evidence_tier() {
+        let json = r#"{
+            "version": "0.25.2",
+            "nu_version": ">=0.113.0 <0.114.0",
+            "evidence_tier": "provisonal",
+            "artifact": { "kind": "binary", "targets": {} }
+        }"#;
+        assert!(serde_json::from_str::<VersionEntry>(json).is_err());
     }
 
     #[test]

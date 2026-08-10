@@ -407,6 +407,8 @@ mod tests {
                     dependencies: BTreeMap::new(),
                     activation: None,
                     provenance: None,
+                    evidence_tier: None,
+                    deferral_reason: None,
                 }],
             }],
         }
