@@ -2,7 +2,8 @@ use ed25519_dalek::{Signer, SigningKey};
 use numan_cli::core::nu_version::NuVersion;
 use numan_cli::core::official_registry::RegistrySignature;
 use numan_cli::core::package::{
-    Artifact, Package, PackageType, RegistryIndex, ScopedId, TargetArtifact, VersionEntry,
+    Artifact, EvidenceTier, Package, PackageType, RegistryIndex, ScopedId, TargetArtifact,
+    VersionEntry,
 };
 use numan_cli::core::platform::{Arch, Env, Os, Platform};
 use numan_cli::install::transaction::{self, InstallOptions};
@@ -137,6 +138,9 @@ fn integration_full_install_from_signed_registry() {
             source: None,
             dependencies: BTreeMap::new(),
             activation: None,
+            provenance: None,
+            evidence_tier: None,
+            deferral_reason: None,
         }],
     };
 
@@ -381,6 +385,9 @@ fn integration_resolve_exact_rejects_incompatible() {
             source: None,
             dependencies: BTreeMap::new(),
             activation: None,
+            provenance: None,
+            evidence_tier: None,
+            deferral_reason: None,
         }],
     };
 
@@ -463,6 +470,9 @@ fn integration_snapshot_before_install() {
             source: None,
             dependencies: BTreeMap::new(),
             activation: None,
+            provenance: None,
+            evidence_tier: None,
+            deferral_reason: None,
         }],
     };
 
@@ -533,6 +543,9 @@ fn integration_snapshot_before_install() {
             source: None,
             dependencies: BTreeMap::new(),
             activation: None,
+            provenance: None,
+            evidence_tier: None,
+            deferral_reason: None,
         }],
     };
 
@@ -547,4 +560,223 @@ fn integration_snapshot_before_install() {
     );
     let snapshots = list_snapshots(&root).unwrap();
     assert_eq!(snapshots.len(), 1, "Should have exactly one snapshot");
+}
+
+#[test]
+fn integration_install_provisional_warns_only_on_new_install() {
+    const CHILD_MARKER: &str = "NUMAN_PROVISIONAL_INSTALL_TEST_CHILD";
+
+    if std::env::var_os(CHILD_MARKER).is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .arg("integration_install_provisional_warns_only_on_new_install")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env(CHILD_MARKER, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "Provisional-install child test failed.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let parts: Vec<&str> = stdout.split("===SECOND_INSTALL===").collect();
+        assert_eq!(
+            parts.len(),
+            2,
+            "expected delimiter between installs\nstdout:\n{stdout}"
+        );
+        assert!(
+            parts[0].contains(
+                "This package has not been lifecycle-tested. It passed integrity checks. (reason not recorded)"
+            ),
+            "new provisional install must warn with fallback reason\nfirst half:\n{}",
+            parts[0]
+        );
+        assert!(
+            !parts[1].contains("lifecycle-tested"),
+            "already-installed no-op must not emit provisional warning\nsecond half:\n{}",
+            parts[1]
+        );
+        return;
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let signing_key = setup_trusted_key(&root, "test");
+
+    let artifacts_dir = root.join("artifacts");
+    std::fs::create_dir_all(&artifacts_dir).unwrap();
+    let (zip_url, zip_sha) =
+        create_plugin_zip(&artifacts_dir, "nu_plugin_prov.exe", b"provisional plugin");
+
+    let package = Package {
+        id: ScopedId::new("test", "prov"),
+        description: "Provisional plugin".to_string(),
+        repo: "https://github.com/test/prov".to_string(),
+        package_type: PackageType::Plugin,
+        tags: vec![],
+        versions: vec![VersionEntry {
+            version: semver::Version::new(1, 0, 0),
+            nu_version: "*".to_string(),
+            verified_with: vec![],
+            artifact: Artifact {
+                kind: "binary".to_string(),
+                url: None,
+                sha256: None,
+                targets: {
+                    let mut m = HashMap::new();
+                    m.insert(
+                        "x86_64-pc-windows-msvc".to_string(),
+                        TargetArtifact {
+                            url: zip_url,
+                            sha256: zip_sha,
+                            executable_path: "nu_plugin_prov.exe".to_string(),
+                        },
+                    );
+                    m
+                },
+                archive_root: None,
+                include: None,
+                entry: None,
+            },
+            source: None,
+            dependencies: BTreeMap::new(),
+            activation: None,
+            provenance: None,
+            evidence_tier: Some(EvidenceTier::Provisional),
+            deferral_reason: None,
+        }],
+    };
+
+    create_signed_registry(&root, "test", vec![package], &signing_key);
+    std::fs::write(
+        root.join("config.toml"),
+        "[general]\ndefault_registry = \"test\"\n",
+    )
+    .unwrap();
+
+    let platform = Platform {
+        os: Os::Windows,
+        arch: Arch::X86_64,
+        env: Env::Msvc,
+        triple: "x86_64-pc-windows-msvc".to_string(),
+    };
+    let nu_version = NuVersion::parse("0.113.1").unwrap();
+    let options = InstallOptions {
+        root: &root,
+        platform: &platform,
+        nu_version: &nu_version,
+        force: false,
+        verbose: false,
+        registry_name: None,
+        snapshot_trigger: SnapshotTrigger::Install,
+    };
+
+    let first = transaction::install_package("test/prov", None, &options).unwrap();
+    assert!(first.installed);
+    assert!(!first.already_existed);
+
+    println!("===SECOND_INSTALL===");
+
+    let second = transaction::install_package("test/prov", None, &options).unwrap();
+    assert!(!second.installed);
+    assert!(second.already_existed);
+}
+
+#[test]
+fn integration_install_self_heals_corrupted_cached_artifact() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let signing_key = setup_trusted_key(&root, "test");
+
+    let artifacts_dir = root.join("artifacts");
+    std::fs::create_dir_all(&artifacts_dir).unwrap();
+    let (zip_url, zip_sha) = create_plugin_zip(
+        &artifacts_dir,
+        "nu_plugin_cache.exe",
+        b"cache integrity plugin",
+    );
+
+    let package = Package {
+        id: ScopedId::new("test", "cache"),
+        description: "Cache integrity plugin".to_string(),
+        repo: "https://github.com/test/cache".to_string(),
+        package_type: PackageType::Plugin,
+        tags: vec![],
+        versions: vec![VersionEntry {
+            version: semver::Version::new(1, 0, 0),
+            nu_version: "*".to_string(),
+            verified_with: vec![],
+            artifact: Artifact {
+                kind: "binary".to_string(),
+                url: None,
+                sha256: None,
+                targets: {
+                    let mut m = HashMap::new();
+                    m.insert(
+                        "x86_64-pc-windows-msvc".to_string(),
+                        TargetArtifact {
+                            url: zip_url,
+                            sha256: zip_sha.clone(),
+                            executable_path: "nu_plugin_cache.exe".to_string(),
+                        },
+                    );
+                    m
+                },
+                archive_root: None,
+                include: None,
+                entry: None,
+            },
+            source: None,
+            dependencies: BTreeMap::new(),
+            activation: None,
+            provenance: None,
+            evidence_tier: None,
+            deferral_reason: None,
+        }],
+    };
+
+    create_signed_registry(&root, "test", vec![package], &signing_key);
+    std::fs::write(
+        root.join("config.toml"),
+        "[general]\ndefault_registry = \"test\"\n",
+    )
+    .unwrap();
+
+    // Plant a corrupted cache hit under the expected content-addressed key.
+    let cache_dir = root.join("cache/downloads");
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    let cache_file = cache_dir.join(format!("{zip_sha}.bin"));
+    std::fs::write(&cache_file, b"not the real artifact").unwrap();
+
+    let platform = Platform {
+        os: Os::Windows,
+        arch: Arch::X86_64,
+        env: Env::Msvc,
+        triple: "x86_64-pc-windows-msvc".to_string(),
+    };
+    let nu_version = NuVersion::parse("0.113.1").unwrap();
+    let options = InstallOptions {
+        root: &root,
+        platform: &platform,
+        nu_version: &nu_version,
+        force: false,
+        verbose: false,
+        registry_name: None,
+        snapshot_trigger: SnapshotTrigger::Install,
+    };
+
+    let result = transaction::install_package("test/cache", None, &options)
+        .expect("corrupted cache should self-heal via one re-download");
+    assert!(result.installed);
+    assert!(root.join(&result.path).join("nu_plugin_cache.exe").exists());
+
+    let repaired = std::fs::read(&cache_file).unwrap();
+    assert_eq!(
+        numan_cli::core::integrity::compute_sha256(&repaired),
+        zip_sha,
+        "cache entry must be replaced with the verified artifact"
+    );
 }

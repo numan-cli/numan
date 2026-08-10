@@ -203,7 +203,41 @@ pub fn install_package(
     let cache_file = cache_dir.join(format!("{cache_key}.bin"));
     let cache_part = cache_dir.join(format!("{cache_key}.part"));
 
-    if !cache_file.exists() || options.force {
+    // Observed archive digest after integrity verification (or a fallback hash
+    // when the registry entry has no expected SHA).
+    let mut payload_sha256: Option<String> = None;
+    let mut need_download = !cache_file.exists() || options.force;
+
+    if !need_download {
+        if let Some(ref expected_sha) = artifact_sha256 {
+            match integrity::verify_and_report(&cache_file, expected_sha, &lock_key) {
+                Ok(digest) => {
+                    if options.verbose {
+                        println!("{} Using cached download", console::style("✓").green());
+                    }
+                    payload_sha256 = Some(digest);
+                }
+                Err(_) => {
+                    // One-shot self-heal: drop the bad cache entry and re-download.
+                    if options.verbose {
+                        println!(
+                            "{} Cached download failed integrity; re-downloading",
+                            console::style("!").yellow()
+                        );
+                    }
+                    let _ = std::fs::remove_file(&cache_file);
+                    if cache_part.exists() {
+                        let _ = std::fs::remove_file(&cache_part);
+                    }
+                    need_download = true;
+                }
+            }
+        } else if options.verbose {
+            println!("{} Using cached download", console::style("✓").green());
+        }
+    }
+
+    if need_download {
         if options.verbose {
             println!(
                 "{} Downloading {}@{}...",
@@ -213,27 +247,27 @@ pub fn install_package(
             );
         }
         download::download_file(&artifact_url, &cache_part)?;
-        // Verify before promoting from .part to final
+        // Verify before promoting from .part to final; reuse digest as payload hash.
         if let Some(ref expected_sha) = artifact_sha256 {
-            integrity::verify_and_report(&cache_part, expected_sha, &lock_key)?;
+            payload_sha256 = Some(integrity::verify_and_report(
+                &cache_part,
+                expected_sha,
+                &lock_key,
+            )?);
         }
         // Atomic promote
         if cache_file.exists() {
             std::fs::remove_file(&cache_file)?;
         }
         std::fs::rename(&cache_part, &cache_file)?;
-    } else if options.verbose {
-        println!("{} Using cached download", console::style("✓").green());
     }
 
-    // Observed SHA-256 of the downloaded archive — distinct from the
-    // registry-declared `artifact_sha256` used for integrity verification.
-    let payload_sha256 = {
+    if payload_sha256.is_none() {
         let bytes = std::fs::read(&cache_file).with_context(|| {
             format!("Failed to read cached payload at {}", cache_file.display())
         })?;
-        Some(integrity::compute_sha256(&bytes))
-    };
+        payload_sha256 = Some(integrity::compute_sha256(&bytes));
+    }
 
     // 8. Extract to staging dir on same volume as install target
     let parent_dir = install_dir.parent().unwrap_or(options.root);
@@ -407,6 +441,14 @@ pub fn install_package(
         version_str,
         install_dir.display()
     );
+
+    if resolved.is_provisional() {
+        let reason = resolved.deferral_reason_display();
+        println!(
+            "{} This package has not been lifecycle-tested. It passed integrity checks. ({reason})",
+            console::style("!").yellow()
+        );
+    }
 
     Ok(InstallResult {
         installed: true,

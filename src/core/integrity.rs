@@ -40,7 +40,9 @@ pub fn verify_bytes(data: &[u8], expected_sha256: &str) -> Result<bool> {
     Ok(hash == expected_sha256)
 }
 
-pub fn verify_and_report(path: &Path, expected_sha256: &str, pkg_name: &str) -> Result<()> {
+/// Verify `path` against `expected_sha256`, returning the observed digest on
+/// success so callers can reuse it without hashing the file again.
+pub fn verify_and_report(path: &Path, expected_sha256: &str, pkg_name: &str) -> Result<String> {
     let actual = hash_file(path)?;
     if actual != expected_sha256 {
         bail!(
@@ -50,7 +52,7 @@ pub fn verify_and_report(path: &Path, expected_sha256: &str, pkg_name: &str) -> 
        This may indicate a corrupted download or tampered artifact."
         );
     }
-    Ok(())
+    Ok(actual)
 }
 
 #[cfg(test)]
@@ -88,5 +90,27 @@ mod tests {
     #[test]
     fn verify_bytes_matches() {
         assert!(verify_bytes(b"test", &compute_sha256(b"test")).unwrap());
+    }
+
+    #[test]
+    fn verify_and_report_returns_digest_on_success() {
+        let file = NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), b"report me").unwrap();
+        let expected = compute_sha256(b"report me");
+        let actual = verify_and_report(file.path(), &expected, "pkg").unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn verify_and_report_rejects_mismatch() {
+        let file = NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), b"report me").unwrap();
+        let err = verify_and_report(
+            file.path(),
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "pkg",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Integrity check failed"));
     }
 }
