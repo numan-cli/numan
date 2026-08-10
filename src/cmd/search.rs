@@ -414,4 +414,64 @@ mod tests {
         assert_eq!(pkg.package_type, PackageType::Module);
         assert_eq!(pkg.versions[0].verified_with, vec!["0.113.1"]);
     }
+
+    fn setup_root_with_index(index: &crate::core::package::RegistryIndex) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("registry/official")).unwrap();
+        std::fs::write(
+            root.join("registry/official/index.json"),
+            serde_json::to_string_pretty(index).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("config.toml"),
+            "[general]\ndefault_registry = \"official\"\n",
+        )
+        .unwrap();
+        tmp
+    }
+
+    fn index_with_packages(packages: Vec<Package>) -> crate::core::package::RegistryIndex {
+        crate::core::package::RegistryIndex {
+            schema_version: 1,
+            updated_at: "2026-06-27T00:00:00Z".to_string(),
+            registry_revision: None,
+            trust: None,
+            packages,
+        }
+    }
+
+    #[test]
+    fn execute_reports_no_matches() {
+        let index = index_with_packages(vec![sample_pkg("*")]);
+        let tmp = setup_root_with_index(&index);
+        let args = SearchArgs {
+            query: "nothing-matches-this".to_string(),
+            all: false,
+        };
+        execute(&args, tmp.path()).unwrap();
+    }
+
+    #[test]
+    fn execute_finds_matching_package() {
+        let index = index_with_packages(vec![sample_pkg("*")]);
+        let tmp = setup_root_with_index(&index);
+        let args = SearchArgs {
+            query: "pkg".to_string(),
+            all: false,
+        };
+        execute(&args, tmp.path()).unwrap();
+    }
+
+    #[test]
+    fn execute_with_all_flag_shows_incompatible() {
+        let index = index_with_packages(vec![sample_pkg(">=99.0.0")]);
+        let tmp = setup_root_with_index(&index);
+        let args = SearchArgs {
+            query: "pkg".to_string(),
+            all: true,
+        };
+        execute(&args, tmp.path()).unwrap();
+    }
 }
