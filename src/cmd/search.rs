@@ -1,5 +1,5 @@
 use crate::core::nu_version::NuVersion;
-use crate::core::package::PackageType;
+use crate::core::package::{PackageType, NUAN_MAINTAINED_OWNER};
 use crate::core::platform::Platform;
 use crate::core::registry::RegistryManager;
 use crate::core::resolve::{Incompatibility, Resolver};
@@ -148,9 +148,8 @@ fn format_search_header(nu: Option<&NuVersion>, triple: &str) -> String {
     }
 }
 
-/// Row suffix distinguishing a numan-maintained fork from its original owner.
 fn fork_marker(owner: &str) -> &'static str {
-    if owner == "numan-maintained" {
+    if owner == NUAN_MAINTAINED_OWNER {
         " [fork]"
     } else {
         ""
@@ -355,7 +354,7 @@ mod tests {
 
     #[test]
     fn fork_marker_shown_for_numan_maintained_owner() {
-        assert_eq!(fork_marker("numan-maintained"), " [fork]");
+        assert_eq!(fork_marker(NUAN_MAINTAINED_OWNER), " [fork]");
     }
 
     #[test]

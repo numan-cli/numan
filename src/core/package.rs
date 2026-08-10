@@ -5,6 +5,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
+/// Registry owner slug for numan-maintained forks (ADR 0001).
+pub const NUAN_MAINTAINED_OWNER: &str = "numan-maintained";
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ScopedId {
     pub owner: String,
