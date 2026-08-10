@@ -35,7 +35,11 @@ pub fn format_info(pkg: &Package, platform: &Platform, nu: Option<&NuVersion>) -
         }
         _ => {}
     }
-    out.push_str("Status:     verified upstream artifact\n");
+    if pkg.id.owner == "numan-maintained" {
+        out.push_str("Status:     numan-maintained fork (not a verified upstream artifact)\n");
+    } else {
+        out.push_str("Status:     verified upstream artifact\n");
+    }
     out.push_str(&format!("Description: {}\n", pkg.description));
     out.push_str(&format!("Repository: {}\n", pkg.repo));
     if !pkg.tags.is_empty() {
