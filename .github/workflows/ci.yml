@@ -57,6 +57,31 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          save-if: ${{ github.event_name == 'push' }}
+      - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026 # v2.85.11
+        with:
+          tool: cargo-llvm-cov
+      # Informational only: no --fail-under-lines, so coverage can never fail the build.
+      - name: Run coverage
+        run: |
+          {
+            echo "### Coverage summary"
+            echo '```'
+            cargo llvm-cov --workspace --summary-only
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   roadmap-drift:
     name: Roadmap drift
     runs-on: ubuntu-latest

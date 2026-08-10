@@ -287,8 +287,104 @@ fn short_hash(h: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::lockfile::LockfileEntry;
+    use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 
     const ID: &str = "00000000-0000-0000-0000-000000000000";
+
+    fn payload_lockfile_entry() -> LockfileEntry {
+        LockfileEntry {
+            version: "1.0.0".to_string(),
+            package_type: "module".to_string(),
+            source: "archive".to_string(),
+            target: None,
+            artifact_url: None,
+            artifact_sha256: None,
+            executable_path: None,
+            archive_root: None,
+            include: None,
+            entry: Some("mod.nu".to_string()),
+            installed_at: "0".to_string(),
+            nu_version_at_install: None,
+            activation: None,
+            registry_url: None,
+            registry_revision: None,
+            index_sha256: None,
+            signing_key_fingerprint: None,
+            git_url: None,
+            git_rev: None,
+            cargo_name: None,
+            cargo_lock_sha256: None,
+            built_sha256: None,
+            payload_path: "packages/modules/owner/pkg/1.0.0-abc12345".to_string(),
+            revision_id: None,
+            payload_sha256: None,
+            executable_sha256: None,
+            selection_reason: None,
+            origin: None,
+            module_activation: None,
+            module_import_mode: None,
+            locked_dependencies: Default::default(),
+        }
+    }
+
+    #[test]
+    fn short_hash_truncates_to_twelve_chars() {
+        assert_eq!(short_hash("abcdefghijklmnopqrstuvwxyz"), "abcdefghijkl");
+        assert_eq!(short_hash("short"), "short");
+    }
+
+    #[test]
+    fn list_prints_no_snapshots_when_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        list(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn list_prints_committed_snapshots() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+
+        create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Install,
+            None,
+            None,
+        )
+        .unwrap();
+
+        list(root).unwrap();
+    }
+
+    #[test]
+    fn inspect_prints_snapshot_details_with_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+
+        let payload = root.join("packages/modules/owner/pkg/1.0.0-abc12345");
+        std::fs::create_dir_all(&payload).unwrap();
+        std::fs::write(payload.join("mod.nu"), "# module").unwrap();
+
+        let mut lockfile = Lockfile::empty();
+        lockfile
+            .packages
+            .insert("owner/pkg".to_string(), payload_lockfile_entry());
+        lockfile.save(root).unwrap();
+
+        let manifest = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Install,
+            None,
+            None,
+        )
+        .unwrap();
+
+        inspect(root, &manifest.id).unwrap();
+    }
 
     #[test]
     fn delete_refuses_non_tty_without_yes() {

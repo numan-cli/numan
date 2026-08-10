@@ -78,3 +78,33 @@ pub fn download_file(url: &str, dest: &Path) -> Result<()> {
     pb.finish_with_message("downloaded");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn download_file_copies_local_plain_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src.txt");
+        std::fs::write(&src, b"hello").unwrap();
+        let dest = dir.path().join("nested/dest.txt");
+
+        download_file(src.to_str().unwrap(), &dest).unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn download_file_copies_file_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src.txt");
+        std::fs::write(&src, b"world").unwrap();
+        let dest = dir.path().join("dest.txt");
+        let url = format!("file://{}", src.display());
+
+        download_file(&url, &dest).unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"world");
+    }
+}

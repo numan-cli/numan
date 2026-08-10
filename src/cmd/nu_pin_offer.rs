@@ -106,3 +106,71 @@ pub fn is_nu_mismatch(diagnosis: &PackageIncompatibility) -> bool {
             | Incompatibility::NuUnsatisfied { .. }
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn diagnosis_with_pin(pin: &str) -> PackageIncompatibility {
+        PackageIncompatibility {
+            issue: Incompatibility::NuTooOld {
+                constraint: ">=0.113.0".to_string(),
+            },
+            suggested_pin: Some(pin.to_string()),
+            available_versions: vec![],
+        }
+    }
+
+    #[test]
+    fn accept_proceeds_to_install_and_fails_hermetically_on_bad_pin() {
+        // A malformed pin fails local version normalization before any
+        // network call, so this exercises the accept branch deterministically.
+        let dir = tempfile::tempdir().unwrap();
+        let diagnosis = diagnosis_with_pin("not-a-version");
+        let err =
+            offer_managed_nu_pin_with_interaction(dir.path(), "0.112.0", &diagnosis, true, || {
+                Ok("y\n".to_string())
+            })
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to install managed Nu"),
+            "expected install failure context, got: {err}"
+        );
+    }
+
+    #[test]
+    fn decline_returns_false_without_installing() {
+        let dir = tempfile::tempdir().unwrap();
+        let diagnosis = diagnosis_with_pin("0.113.1");
+        let result =
+            offer_managed_nu_pin_with_interaction(dir.path(), "0.112.0", &diagnosis, true, || {
+                Ok("n\n".to_string())
+            })
+            .unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn invalid_input_is_treated_as_decline() {
+        let dir = tempfile::tempdir().unwrap();
+        let diagnosis = diagnosis_with_pin("0.113.1");
+        let result =
+            offer_managed_nu_pin_with_interaction(dir.path(), "0.112.0", &diagnosis, true, || {
+                Ok("maybe\n".to_string())
+            })
+            .unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn non_interactive_short_circuits_without_reading_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let diagnosis = diagnosis_with_pin("0.113.1");
+        let result =
+            offer_managed_nu_pin_with_interaction(dir.path(), "0.112.0", &diagnosis, false, || {
+                panic!("read_line must not be called when non-interactive")
+            })
+            .unwrap();
+        assert!(!result);
+    }
+}

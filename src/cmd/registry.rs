@@ -258,6 +258,139 @@ fn wrap_words(text: &str, width: usize) -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn test_key_b64() -> String {
+        let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            signing_key.verifying_key().to_bytes(),
+        )
+    }
+
+    #[test]
+    fn list_registries_prints_none_when_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        list_registries(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn list_registries_prints_configured_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let mut config = crate::config::Config::default();
+        config.registries.insert(
+            "custom".to_string(),
+            crate::config::RegistryConfig {
+                url: "https://example.com/index.json".to_string(),
+                sync_interval: "24h".to_string(),
+                enabled: true,
+                trust_key: None,
+            },
+        );
+        config.save(root).unwrap();
+        list_registries(root).unwrap();
+    }
+
+    #[test]
+    fn add_registry_persists_config_and_trust_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let key_b64 = test_key_b64();
+        add_registry(root, "custom", "https://example.com/index.json", &key_b64).unwrap();
+
+        let config = crate::config::Config::load(root).unwrap();
+        assert!(config.registries.contains_key("custom"));
+        let trust = TrustStore::load(root).unwrap();
+        assert!(trust.keys.contains_key("custom"));
+    }
+
+    #[test]
+    fn add_registry_rejects_duplicate_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let key_b64 = test_key_b64();
+        add_registry(root, "custom", "https://example.com/index.json", &key_b64).unwrap();
+
+        let err =
+            add_registry(root, "custom", "https://example.com/other.json", &key_b64).unwrap_err();
+        assert!(err.to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn remove_registry_removes_config_and_cached_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let key_b64 = test_key_b64();
+        add_registry(root, "custom", "https://example.com/index.json", &key_b64).unwrap();
+        std::fs::create_dir_all(root.join("registry/custom")).unwrap();
+
+        remove_registry(root, "custom").unwrap();
+
+        let config = crate::config::Config::load(root).unwrap();
+        assert!(!config.registries.contains_key("custom"));
+        assert!(!root.join("registry/custom").exists());
+    }
+
+    #[test]
+    fn remove_registry_errors_when_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = remove_registry(dir.path(), "missing").unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn list_packages_prints_index_contents() {
+        use crate::core::package::{
+            Artifact, Package, PackageType, RegistryIndex, ScopedId, VersionEntry,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("registry/official")).unwrap();
+
+        let index = RegistryIndex {
+            schema_version: 1,
+            updated_at: "2026-06-27T00:00:00Z".to_string(),
+            registry_revision: Some("abc123".to_string()),
+            trust: None,
+            packages: vec![Package {
+                id: ScopedId::new("test", "pkg"),
+                description: "A test package for listing".to_string(),
+                repo: "https://github.com/test/pkg".to_string(),
+                package_type: PackageType::Plugin,
+                tags: vec!["test".to_string()],
+                versions: vec![VersionEntry {
+                    version: semver::Version::new(1, 0, 0),
+                    nu_version: ">=0.113.0 <0.114.0".to_string(),
+                    verified_with: vec![],
+                    artifact: Artifact {
+                        kind: "binary".to_string(),
+                        url: None,
+                        sha256: None,
+                        targets: std::collections::HashMap::new(),
+                        archive_root: None,
+                        include: None,
+                        entry: None,
+                    },
+                    source: None,
+                    dependencies: std::collections::BTreeMap::new(),
+                    activation: None,
+                    provenance: None,
+                    evidence_tier: None,
+                    deferral_reason: None,
+                }],
+            }],
+        };
+        let content = serde_json::to_string_pretty(&index).unwrap();
+        std::fs::write(root.join("registry/official/index.json"), content).unwrap();
+        std::fs::write(
+            root.join("config.toml"),
+            "[general]\ndefault_registry = \"official\"\n",
+        )
+        .unwrap();
+
+        list_packages(root).unwrap();
+    }
+
     #[test]
     fn wrap_words_keeps_short_text_on_one_line() {
         assert_eq!(
