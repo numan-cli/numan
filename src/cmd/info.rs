@@ -234,7 +234,10 @@ mod tests {
         let mut pkg = sample_plugin(true);
         pkg.id.owner = NUAN_MAINTAINED_OWNER.to_string();
         let out = format_info(&pkg, &linux_platform(), None);
-        assert!(!out.contains("Distribution: numan-maintained fork"), "{out}");
+        assert!(
+            !out.contains("Distribution: numan-maintained fork"),
+            "{out}"
+        );
         assert!(out.contains("Status:     numan-maintained fork"), "{out}");
     }
 
