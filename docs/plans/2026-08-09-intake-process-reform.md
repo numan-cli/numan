@@ -3,7 +3,7 @@
 **Date:** 2026-08-09
 **Status:** Proposed
 **Scope:** Cross-repo (`numan`, `numan-plugins`, `numan-registry`)
-**Motivation:** [Gap Analysis — August 2026 research campaign](../../) (7 cycles, strong evidence)
+**Motivation:** Gap Analysis — August 2026 research campaign (7 cycles, strong evidence; internal research document, not committed to repo)
 
 ---
 
@@ -81,8 +81,13 @@ cryptographic requirement.
 - When `intake_mode: "commit-snapshot"`:
   - `tag` becomes optional (may be omitted or `null`).
   - `source_commit` remains mandatory and is the sole provenance anchor.
-  - Version is derived: `0.0.0-snapshot.<short-sha>` (semver-prerelease, sorts
-    correctly, clearly communicates "not author-versioned").
+  - Version is derived: `0.0.0-snapshot.20260809.<short-sha>` (semver-prerelease
+    with ISO date prefix ensures monotonic sorting regardless of SHA ordering,
+    clearly communicates "not author-versioned").
+  - The date component (`YYYYMMDD`) guarantees that newer snapshots always
+    sort above older ones under SemVer prerelease rules, which the resolver
+    (`src/core/resolve.rs`) and update command (`src/cmd/update.rs`) depend on
+    for strict version ordering.
   - Registry entry carries `"provenance": "commit-snapshot"` metadata.
   - `numan info` displays a note: "This package is built from a commit snapshot,
     not a tagged release."
@@ -222,10 +227,16 @@ Formalize the fork decision framework:
    - If/when upstream catches up, retire the fork and switch back.
 
 3. **Intake treatment:**
-   - Manifest entry uses the fork repo but `owner` remains the original author.
-   - Registry `description` appends "(maintenance fork for Nu 0.114 compat)".
-   - `source.git` points to the fork; a new `source.upstream` field preserves
-     the original repo URL.
+   - Manifest entry uses the fork repo with `owner` set to `"numan-maintained"`
+     (a numan-owned distribution identity), not the original upstream author.
+     This avoids conflating `numan install upstream-author/pkg` with a
+     numan-maintained fork, consistent with the stewardship policy in
+     `docs/adr/0001-ecosystem-trust-upstream-contribution-fork-stewardship.md`.
+   - Registry `description` appends "(numan-maintained fork for Nu 0.114 compat)".
+   - `source.git` points to the fork; a `source.upstream` field preserves
+     the original repo URL for attribution and retirement tracking.
+   - If/when upstream catches up, the fork entry is retired and replaced by
+     an entry under the original author's identity.
 
 **Tradeoffs:**
 
@@ -426,7 +437,7 @@ has highest value once the catalog is larger. Phase E is explicitly deferred.
 
 ## References
 
-- [Gap Analysis — August 2026](../../) (research campaign, 7 cycles)
+- [Gap Analysis — August 2026](# "Internal research document; 7-cycle campaign not committed to repo") (research campaign, 7 cycles)
 - [`numan/docs/plans/consolidated-multi-repo-roadmap.md`](consolidated-multi-repo-roadmap.md)
 - [`numan-registry/docs/roadmap.md`](https://github.com/tonythethompson/numan-registry/blob/main/docs/roadmap.md)
 - [`numan-plugins/docs/backlog.json`](https://github.com/tonythethompson/numan-plugins/blob/main/docs/backlog.json)
