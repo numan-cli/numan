@@ -1,5 +1,5 @@
 use crate::core::nu_version::NuVersion;
-use crate::core::package::Package;
+use crate::core::package::{Package, NUAN_MAINTAINED_OWNER};
 use crate::core::platform::Platform;
 use crate::core::registry::RegistryManager;
 use crate::core::resolve::Resolver;
@@ -25,6 +25,11 @@ pub fn execute(id: &str, root: &Path) -> Result<()> {
 pub fn format_info(pkg: &Package, platform: &Platform, nu: Option<&NuVersion>) -> String {
     let mut out = String::new();
     out.push_str(&format!("Package:    {}/{}\n", pkg.id.owner, pkg.id.name));
+    if pkg.id.owner == NUAN_MAINTAINED_OWNER && package_has_upstream_attribution(pkg) {
+        out.push_str(
+            "Distribution: numan-maintained fork -- see 'upstream' under each version below\n",
+        );
+    }
     out.push_str(&format!("Type:       {}\n", pkg.package_type));
     match pkg.package_type {
         crate::core::package::PackageType::Script
@@ -35,7 +40,11 @@ pub fn format_info(pkg: &Package, platform: &Platform, nu: Option<&NuVersion>) -
         }
         _ => {}
     }
-    out.push_str("Status:     verified upstream artifact\n");
+    out.push_str(if pkg.id.owner == NUAN_MAINTAINED_OWNER {
+        "Status:     numan-maintained fork\n"
+    } else {
+        "Status:     verified upstream artifact\n"
+    });
     out.push_str(&format!("Description: {}\n", pkg.description));
     out.push_str(&format!("Repository: {}\n", pkg.repo));
     if !pkg.tags.is_empty() {
@@ -95,6 +104,9 @@ pub fn format_info(pkg: &Package, platform: &Platform, nu: Option<&NuVersion>) -
             if let Some(ref lock) = source.cargo_lock_sha256 {
                 out.push_str(&format!("    cargo_lock:  {lock}\n"));
             }
+            if let Some(ref upstream) = source.upstream {
+                out.push_str(&format!("    upstream:    {upstream}\n"));
+            }
         }
 
         for target in ver.artifact.targets.keys() {
@@ -109,6 +121,17 @@ pub fn format_info(pkg: &Package, platform: &Platform, nu: Option<&NuVersion>) -
 
 fn current_nu(root: &Path) -> Option<NuVersion> {
     NuVersion::from_paths_or_detect(root).ok()
+}
+
+fn package_has_upstream_attribution(pkg: &Package) -> bool {
+    pkg.versions.iter().any(|ver| {
+        ver.source.as_ref().is_some_and(|source| {
+            source
+                .upstream
+                .as_ref()
+                .is_some_and(|upstream| !upstream.trim().is_empty())
+        })
+    })
 }
 
 #[cfg(test)]
@@ -167,6 +190,7 @@ mod tests {
                     rev: "v1.4.15+0.113.1".into(),
                     cargo_name: "nu_plugin_highlight".into(),
                     cargo_lock_sha256: None,
+                    upstream: None,
                 }),
                 dependencies: BTreeMap::new(),
                 activation: None,
@@ -205,6 +229,54 @@ mod tests {
         );
         assert!(out.contains("source rev:  v1.4.15+0.113.1"), "{out}");
         assert!(out.contains("cargo_name:  nu_plugin_highlight"), "{out}");
+    }
+
+    #[test]
+    fn format_info_shows_fork_distribution_note_for_numan_maintained_owner() {
+        let mut pkg = sample_plugin(true);
+        pkg.id.owner = NUAN_MAINTAINED_OWNER.to_string();
+        pkg.versions[0].source.as_mut().unwrap().upstream =
+            Some("https://github.com/original-author/nu_plugin_x".to_string());
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(out.contains("numan-maintained fork"), "{out}");
+    }
+
+    #[test]
+    fn format_info_omits_fork_note_without_upstream_attribution() {
+        let mut pkg = sample_plugin(true);
+        pkg.id.owner = NUAN_MAINTAINED_OWNER.to_string();
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(
+            !out.contains("Distribution: numan-maintained fork"),
+            "{out}"
+        );
+        assert!(out.contains("Status:     numan-maintained fork"), "{out}");
+    }
+
+    #[test]
+    fn format_info_omits_fork_note_for_normal_owner() {
+        let pkg = sample_plugin(true);
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(!out.contains("numan-maintained fork"), "{out}");
+    }
+
+    #[test]
+    fn format_info_shows_upstream_when_present() {
+        let mut pkg = sample_plugin(true);
+        pkg.versions[0].source.as_mut().unwrap().upstream =
+            Some("https://github.com/original-author/nu_plugin_x".to_string());
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(
+            out.contains("upstream:    https://github.com/original-author/nu_plugin_x"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn format_info_omits_upstream_line_when_absent() {
+        let pkg = sample_plugin(true);
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(!out.contains("upstream:"), "{out}");
     }
 
     #[test]

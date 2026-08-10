@@ -5,6 +5,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
+/// Registry owner slug for numan-maintained forks (ADR 0001).
+pub const NUAN_MAINTAINED_OWNER: &str = "numan-maintained";
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ScopedId {
     pub owner: String,
@@ -193,6 +196,10 @@ pub struct SourceInfo {
     pub cargo_name: String,
     #[serde(default)]
     pub cargo_lock_sha256: Option<String>,
+    /// Original upstream repo URL. Set only when this version is a
+    /// numan-maintained fork (`git`/`rev` above point at the fork).
+    #[serde(default)]
+    pub upstream: Option<String>,
 }
 
 /// How a module's exported symbols are imported into the Nu namespace.

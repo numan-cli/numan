@@ -1,5 +1,5 @@
 use crate::core::nu_version::NuVersion;
-use crate::core::package::{PackageType, VersionEntry};
+use crate::core::package::{PackageType, VersionEntry, NUAN_MAINTAINED_OWNER};
 use crate::core::platform::Platform;
 use crate::core::registry::RegistryManager;
 use crate::core::resolve::{Incompatibility, Resolver};
@@ -101,16 +101,18 @@ pub fn execute(args: &SearchArgs, root: &Path) -> Result<()> {
             }
         };
 
+        let fork_marker = fork_marker(&pkg.id.owner);
         let provisional_marker = provisional_marker(display_entry);
 
         println!(
-            "  {}/{}  v{}  [{}]{}{}
+            "  {}/{}  v{}  [{}]{}{}{}
     {}",
             pkg.id.owner,
             pkg.id.name,
             version_label,
             pkg.package_type,
             status,
+            fork_marker,
             provisional_marker,
             pkg.description
         );
@@ -145,6 +147,14 @@ fn format_search_header(nu: Option<&NuVersion>, triple: &str) -> String {
     match nu {
         Some(n) => format!("checked against: Nu {} ({triple})", n.version),
         None => format!("checked against: Nu unknown ({triple})"),
+    }
+}
+
+fn fork_marker(owner: &str) -> &'static str {
+    if owner == NUAN_MAINTAINED_OWNER {
+        " [fork]"
+    } else {
+        ""
     }
 }
 
@@ -353,6 +363,16 @@ mod tests {
     fn plugin_compatible_default_listing_omits_status() {
         let status = format_row_status(&PackageType::Plugin, true, false, None, &[]);
         assert!(status.is_empty());
+    }
+
+    #[test]
+    fn fork_marker_shown_for_numan_maintained_owner() {
+        assert_eq!(fork_marker(NUAN_MAINTAINED_OWNER), " [fork]");
+    }
+
+    #[test]
+    fn fork_marker_empty_for_normal_owner() {
+        assert_eq!(fork_marker("cptpiepmatz"), "");
     }
 
     #[test]
