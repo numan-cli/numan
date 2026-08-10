@@ -155,3 +155,75 @@ impl Config {
         platform.default_root()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn load_missing_file_returns_default() {
+        let dir = tempdir().unwrap();
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.general.default_registry, "official");
+        assert_eq!(config.activation.method, "autoload");
+        assert!(config.install.prefer_binary);
+    }
+
+    #[test]
+    fn save_then_load_round_trips() {
+        let dir = tempdir().unwrap();
+        let mut config = Config::default();
+        config.general.default_registry = "custom".to_string();
+        config.registries.insert(
+            "custom".to_string(),
+            RegistryConfig {
+                url: "https://example.com/registry".to_string(),
+                sync_interval: "12h".to_string(),
+                enabled: true,
+                trust_key: Some("abc123".to_string()),
+            },
+        );
+        config.save(dir.path()).unwrap();
+
+        let loaded = Config::load(dir.path()).unwrap();
+        assert_eq!(loaded.general.default_registry, "custom");
+        let registry = loaded.registries.get("custom").unwrap();
+        assert_eq!(registry.url, "https://example.com/registry");
+        assert_eq!(registry.sync_interval, "12h");
+        assert_eq!(registry.trust_key.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn load_malformed_toml_errors() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "not = [valid toml").unwrap();
+        let result = Config::load(dir.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn registry_config_defaults_apply() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[registries.official]\nurl = \"https://example.com\"\n",
+        )
+        .unwrap();
+        let config = Config::load(dir.path()).unwrap();
+        let registry = config.registries.get("official").unwrap();
+        assert_eq!(registry.sync_interval, "24h");
+        assert!(registry.enabled);
+        assert!(registry.trust_key.is_none());
+    }
+
+    #[test]
+    fn resolve_root_prefers_numan_root_env_var() {
+        let dir = tempdir().unwrap();
+        std::env::set_var("NUMAN_ROOT", dir.path());
+        let platform = Platform::detect();
+        let resolved = Config::resolve_root(&platform);
+        std::env::remove_var("NUMAN_ROOT");
+        assert_eq!(resolved, dir.path());
+    }
+}

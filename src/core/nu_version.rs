@@ -213,4 +213,70 @@ mod tests {
             "unexpected error: {err}"
         );
     }
+
+    #[test]
+    fn parse_rejects_wrong_segment_count() {
+        assert!(NuVersion::parse("0.113").is_err());
+        assert!(NuVersion::parse("0.113.1.2").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_non_numeric_segments() {
+        assert!(NuVersion::parse("x.113.1").is_err());
+        assert!(NuVersion::parse("0.y.1").is_err());
+        assert!(NuVersion::parse("0.113.z").is_err());
+    }
+
+    #[test]
+    fn matches_greater_than() {
+        let v = NuVersion::parse("0.113.1").unwrap();
+        assert!(v.matches_constraint(">0.113.0"));
+        assert!(!v.matches_constraint(">0.113.1"));
+    }
+
+    #[test]
+    fn matches_less_than() {
+        let v = NuVersion::parse("0.113.1").unwrap();
+        assert!(v.matches_constraint("<0.114.0"));
+        assert!(!v.matches_constraint("<0.113.1"));
+    }
+
+    #[test]
+    fn matches_exact_full_version() {
+        let v = NuVersion::parse("1.2.3").unwrap();
+        assert!(v.matches_constraint("=1.2.3"));
+        assert!(!v.matches_constraint("=1.2.4"));
+    }
+
+    #[test]
+    fn matches_constraint_ignores_unparseable_bound() {
+        let v = NuVersion::parse("0.113.1").unwrap();
+        // Malformed bound is silently skipped rather than erroring.
+        assert!(v.matches_constraint(">=not-a-version"));
+    }
+
+    #[test]
+    fn from_paths_or_detect_uses_cached_version() {
+        use crate::nu::paths::NuPaths;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("nu_state")).unwrap();
+        let paths = NuPaths {
+            nu_executable: "/usr/bin/nu".to_string(),
+            nu_version: "0.113.1".to_string(),
+            plugin_registry_path: "/tmp/plugin.msgpackz".to_string(),
+            nu_executable_hash: "deadbeef".to_string(),
+            platform: "x86_64-unknown-linux-gnu".to_string(),
+            data_dir: None,
+            vendor_autoload_dirs: Vec::new(),
+            vendor_autoload_dir: None,
+        };
+        paths.save(dir.path()).unwrap();
+
+        let version = NuVersion::from_paths_or_detect(dir.path()).unwrap();
+        assert_eq!(version.major, 0);
+        assert_eq!(version.minor, 113);
+        assert_eq!(version.patch, 1);
+    }
 }
