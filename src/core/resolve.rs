@@ -292,6 +292,7 @@ impl<'a> Resolver<'a> {
                         &mut msg,
                         package,
                         suggest_managed_nu_pin(entry).as_deref(),
+                        NuMismatchRemediation::ExactVersion,
                     );
                     bail!("{msg}");
                 }
@@ -310,7 +311,20 @@ impl<'a> Resolver<'a> {
 }
 
 fn append_nu_pin_options(msg: &mut String, package: &Package, diagnosis: &PackageIncompatibility) {
-    append_nu_mismatch_remediation(msg, package, diagnosis.suggested_pin.as_deref());
+    append_nu_mismatch_remediation(
+        msg,
+        package,
+        diagnosis.suggested_pin.as_deref(),
+        NuMismatchRemediation::Resolve,
+    );
+}
+
+#[derive(Clone, Copy)]
+enum NuMismatchRemediation {
+    /// Latest-compatible resolution failed for the package as a whole.
+    Resolve,
+    /// A specific requested version exists but is incompatible.
+    ExactVersion,
 }
 
 /// Shared Nu-mismatch remediation for resolve / resolve_exact.
@@ -320,7 +334,12 @@ fn append_nu_pin_options(msg: &mut String, package: &Package, diagnosis: &Packag
 /// per-Nu (re-run `numan activate` after switching). Does NOT promise PATH is
 /// untouched: `setup nu` may update PATH unless the caller passes
 /// `--skip-path`. Never suggests `registry sync` as an ABI fix.
-fn append_nu_mismatch_remediation(msg: &mut String, package: &Package, pin: Option<&str>) {
+fn append_nu_mismatch_remediation(
+    msg: &mut String,
+    package: &Package,
+    pin: Option<&str>,
+    remediation: NuMismatchRemediation,
+) {
     if matches!(package.package_type, PackageType::Plugin) {
         msg.push_str(
             "\n       Plugins only work with the Nu minor they were built for; \
@@ -354,6 +373,20 @@ fn append_nu_mismatch_remediation(msg: &mut String, package: &Package, pin: Opti
     msg.push_str(
         "\n         - Or pick a different package that supports your current Nu (`numan search <query>`)",
     );
+    match remediation {
+        NuMismatchRemediation::Resolve => {
+            msg.push_str(&format!(
+                "\n         - To see why this package is incompatible: `numan search {} --all`",
+                package.id
+            ));
+        }
+        NuMismatchRemediation::ExactVersion => {
+            msg.push_str(&format!(
+                "\n         - To see version compatibility details: `numan info {}`",
+                package.id
+            ));
+        }
+    }
     msg.push_str("\n       Nothing was installed. No changes were made.");
 }
 
@@ -775,6 +808,10 @@ mod tests {
             "expected plugin ABI note: {err}"
         );
         assert!(
+            err.contains("numan search test/plugin --all"),
+            "expected incompatible-package search hint: {err}"
+        );
+        assert!(
             !err.contains("registry sync"),
             "must not pitch registry sync as ABI fix: {err}"
         );
@@ -798,6 +835,14 @@ mod tests {
         assert!(
             err.contains("numan search <query>"),
             "expected alternate-package guidance: {err}"
+        );
+        assert!(
+            err.contains("numan info test/plugin"),
+            "expected per-version info hint: {err}"
+        );
+        assert!(
+            !err.contains("numan search test/plugin --all"),
+            "exact-version failures should not suggest search --all: {err}"
         );
         assert!(
             err.contains("Nothing was installed. No changes were made."),
@@ -837,6 +882,14 @@ mod tests {
         assert!(
             err.contains("numan search <query>"),
             "expected alternate-package guidance: {err}"
+        );
+        assert!(
+            err.contains("numan info test/plugin"),
+            "expected per-version info hint: {err}"
+        );
+        assert!(
+            !err.contains("numan search test/plugin --all"),
+            "exact-version failures should not suggest search --all: {err}"
         );
         assert!(
             err.contains("Nothing was installed. No changes were made."),
