@@ -226,6 +226,11 @@ pub fn install_package(
         println!("{} Using cached download", console::style("✓").green());
     }
 
+    // Re-check the promoted cache file so cache hits cannot bypass integrity.
+    if let Some(ref expected_sha) = artifact_sha256 {
+        integrity::verify_and_report(&cache_file, expected_sha, &lock_key)?;
+    }
+
     // Observed SHA-256 of the downloaded archive — distinct from the
     // registry-declared `artifact_sha256` used for integrity verification.
     let payload_sha256 = {
