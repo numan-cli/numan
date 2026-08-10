@@ -79,11 +79,12 @@ pub fn format_info(pkg: &Package, platform: &Platform, nu: Option<&NuVersion>) -
             ));
         }
 
+        if ver.provenance.as_deref() == Some("commit-snapshot") {
+            out.push_str("    note: built from a commit snapshot, not a tagged release\n");
+        }
+
         if ver.is_provisional() {
-            let reason = ver
-                .deferral_reason
-                .as_deref()
-                .unwrap_or("reason not recorded");
+            let reason = ver.deferral_reason_display();
             out.push_str(&format!("    evidence:    provisional — {reason}\n"));
         }
 
@@ -169,6 +170,7 @@ mod tests {
                 }),
                 dependencies: BTreeMap::new(),
                 activation: None,
+                provenance: None,
                 evidence_tier: None,
                 deferral_reason: None,
             }],
@@ -206,9 +208,35 @@ mod tests {
     }
 
     #[test]
+    fn format_info_notes_commit_snapshot_provenance() {
+        let mut pkg = sample_plugin(false);
+        pkg.versions[0].provenance = Some("commit-snapshot".to_string());
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(
+            out.contains("built from a commit snapshot, not a tagged release"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn format_info_omits_provenance_note_when_absent() {
+        let pkg = sample_plugin(false);
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(!out.contains("commit snapshot"), "{out}");
+    }
+
+    #[test]
+    fn format_info_omits_provenance_note_for_other_values() {
+        let mut pkg = sample_plugin(false);
+        pkg.versions[0].provenance = Some("tagged-release".to_string());
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(!out.contains("commit snapshot"), "{out}");
+    }
+
+    #[test]
     fn format_info_notes_provisional_with_reason() {
         let mut pkg = sample_plugin(false);
-        pkg.versions[0].evidence_tier = Some("provisional".to_string());
+        pkg.versions[0].evidence_tier = Some(crate::core::package::EvidenceTier::Provisional);
         pkg.versions[0].deferral_reason = Some("requires cloud credentials".to_string());
         let out = format_info(&pkg, &linux_platform(), None);
         assert!(
@@ -220,7 +248,16 @@ mod tests {
     #[test]
     fn format_info_notes_provisional_without_reason() {
         let mut pkg = sample_plugin(false);
-        pkg.versions[0].evidence_tier = Some("provisional".to_string());
+        pkg.versions[0].evidence_tier = Some(crate::core::package::EvidenceTier::Provisional);
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(out.contains("reason not recorded"), "{out}");
+    }
+
+    #[test]
+    fn format_info_notes_provisional_with_empty_reason_falls_back() {
+        let mut pkg = sample_plugin(false);
+        pkg.versions[0].evidence_tier = Some(crate::core::package::EvidenceTier::Provisional);
+        pkg.versions[0].deferral_reason = Some("   ".to_string());
         let out = format_info(&pkg, &linux_platform(), None);
         assert!(out.contains("reason not recorded"), "{out}");
     }

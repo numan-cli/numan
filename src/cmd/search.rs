@@ -148,7 +148,6 @@ fn format_search_header(nu: Option<&NuVersion>, triple: &str) -> String {
     }
 }
 
-/// Row suffix marking a provisional (not lifecycle-tested) displayed version.
 fn provisional_marker(entry: Option<&VersionEntry>) -> &'static str {
     if entry.map(|v| v.is_provisional()).unwrap_or(false) {
         " [provisional]"
@@ -268,6 +267,7 @@ mod tests {
                 source: None,
                 dependencies: BTreeMap::new(),
                 activation: None,
+                provenance: None,
                 evidence_tier: None,
                 deferral_reason: None,
             }],
@@ -358,7 +358,7 @@ mod tests {
     #[test]
     fn provisional_marker_shown_for_provisional_entry() {
         let mut pkg = sample_pkg_typed(PackageType::Plugin, "*", vec![]);
-        pkg.versions[0].evidence_tier = Some("provisional".to_string());
+        pkg.versions[0].evidence_tier = Some(crate::core::package::EvidenceTier::Provisional);
         assert_eq!(provisional_marker(Some(&pkg.versions[0])), " [provisional]");
     }
 

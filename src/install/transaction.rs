@@ -409,10 +409,7 @@ pub fn install_package(
     );
 
     if resolved.is_provisional() {
-        let reason = resolved
-            .deferral_reason
-            .as_deref()
-            .unwrap_or("reason not recorded");
+        let reason = resolved.deferral_reason_display();
         println!(
             "{} This package has not been lifecycle-tested. It passed integrity checks. ({reason})",
             console::style("!").yellow()
