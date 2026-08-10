@@ -251,6 +251,7 @@ mod tests {
                 source: None,
                 dependencies: BTreeMap::new(),
                 activation: None,
+                provenance: None,
             }],
         }
     }
