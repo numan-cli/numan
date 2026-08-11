@@ -529,19 +529,19 @@ fn check_nu_environments(root: &Path, options: &DoctorOptions, findings: &mut Ve
         Err(e) => findings.push(managed_nu_resolve_finding(e)),
     }
 
-    // Warn if both exist but differ — plugins built for one won't load in the other.
     if let (Some(ref path_v), Some(ref managed_v)) = (&path_version, &managed_version) {
-        if path_v != managed_v {
+        if !versions_compatible(path_v, managed_v) {
             findings.push(finding(
                 "nu.version_mismatch",
                 Severity::Warn,
                 format!(
-                    "PATH Nu ({path_v}) differs from managed Nu ({managed_v}). \
-                     Plugins are ABI-locked to a specific Nu minor version — \
+                    "PATH Nu ({path_v}) is incompatible with managed Nu ({managed_v}). \
+                     Plugins are ABI-locked to a specific Nu major/minor version — \
                      packages installed under one will not load in the other."
                 ),
-                Some("Ensure you are running the Nu version that matches your installed packages. \
-                      Use `numan setup nu` to align, or `numan activate` under the correct shell."),
+                Some("Ensure you are running a Nu version compatible with your installed packages. \
+                      Use `numan setup nu` to install a specific Nu version, or `numan use` to \
+                      switch the active managed Nu version."),
                 RepairTier::None,
             ));
         }
@@ -620,6 +620,18 @@ fn probe_nu_version(path: &Path, options: &DoctorOptions) -> Result<String> {
         return probe(path);
     }
     Ok(NuVersion::from_binary(path)?.version)
+}
+
+/// Check if two Nu version strings are compatible (same major and minor versions).
+/// Patch-only differences do not break ABI compatibility.
+fn versions_compatible(v1: &str, v2: &str) -> bool {
+    let parsed1 = NuVersion::parse(v1);
+    let parsed2 = NuVersion::parse(v2);
+
+    match (parsed1, parsed2) {
+        (Ok(p1), Ok(p2)) => p1.major == p2.major && p1.minor == p2.minor,
+        _ => false, // If parsing fails, treat as incompatible
+    }
 }
 
 fn check_journals(root: &Path, nu_paths: Option<&NuPaths>, findings: &mut Vec<Finding>) {
@@ -2400,6 +2412,152 @@ mod tests {
                 .contains("simulated version probe failure"),
             "unexpected: {}",
             managed_finding.message
+        );
+    }
+
+    #[test]
+    fn doctor_reports_incompatible_nu_version_mismatch() {
+        let _path_restore = PathRestoreGuard::new();
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root).unwrap();
+
+        // Set up PATH Nu with version 0.113.1
+        let path_dir = dir.path().join("path-nu");
+        std::fs::create_dir_all(&path_dir).unwrap();
+        let fake_nu = path_dir.join(if cfg!(windows) { "nu.exe" } else { "nu" });
+        std::fs::write(&fake_nu, b"fake").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&fake_nu).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&fake_nu, perms).unwrap();
+        }
+
+        let mut path_entries = vec![path_dir];
+        if let Some(existing) = std::env::var_os("PATH") {
+            path_entries.extend(std::env::split_paths(&existing));
+        }
+        let joined = std::env::join_paths(&path_entries).expect("join PATH for test");
+        std::env::set_var("PATH", &joined);
+
+        // Set up managed Nu
+        ensure_fake_managed_nu(root);
+
+        // Probe returns different major/minor versions: PATH = 0.113.1, managed = 0.114.0
+        fn probe_path_nu(path: &Path) -> Result<String> {
+            if path.to_string_lossy().contains("path-nu") {
+                Ok("0.113.1".to_string())
+            } else {
+                Ok("0.114.0".to_string())
+            }
+        }
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: true,
+                nupm_home: None,
+            },
+            root,
+            &DoctorOptions {
+                skip_network: true,
+                nu_version_probe: Some(probe_path_nu),
+                discover_off_path: Some(|| None),
+                ..DoctorOptions::default()
+            },
+        )
+        .unwrap();
+
+        let mismatch = report
+            .findings
+            .iter()
+            .find(|f| f.id == "nu.version_mismatch");
+        assert!(mismatch.is_some(), "Expected nu.version_mismatch finding");
+        let mismatch = mismatch.unwrap();
+        assert_eq!(mismatch.severity, Severity::Warn);
+        assert!(
+            mismatch.message.contains("0.113.1"),
+            "message should mention PATH version: {}",
+            mismatch.message
+        );
+        assert!(
+            mismatch.message.contains("0.114.0"),
+            "message should mention managed version: {}",
+            mismatch.message
+        );
+        assert!(
+            mismatch.message.contains("incompatible"),
+            "message should mention incompatibility: {}",
+            mismatch.message
+        );
+    }
+
+    #[test]
+    fn doctor_allows_patch_version_differences() {
+        let _path_restore = PathRestoreGuard::new();
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root).unwrap();
+
+        // Set up PATH Nu
+        let path_dir = dir.path().join("path-nu");
+        std::fs::create_dir_all(&path_dir).unwrap();
+        let fake_nu = path_dir.join(if cfg!(windows) { "nu.exe" } else { "nu" });
+        std::fs::write(&fake_nu, b"fake").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&fake_nu).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&fake_nu, perms).unwrap();
+        }
+
+        let mut path_entries = vec![path_dir];
+        if let Some(existing) = std::env::var_os("PATH") {
+            path_entries.extend(std::env::split_paths(&existing));
+        }
+        let joined = std::env::join_paths(&path_entries).expect("join PATH for test");
+        std::env::set_var("PATH", &joined);
+
+        // Set up managed Nu
+        ensure_fake_managed_nu(root);
+
+        // Probe returns same major/minor but different patch: PATH = 0.113.1, managed = 0.113.2
+        fn probe_patch_diff(path: &Path) -> Result<String> {
+            if path.to_string_lossy().contains("path-nu") {
+                Ok("0.113.1".to_string())
+            } else {
+                Ok("0.113.2".to_string())
+            }
+        }
+
+        let report = run_checks_with_options(
+            &DoctorArgs {
+                scan: true,
+                json: true,
+                nupm_home: None,
+            },
+            root,
+            &DoctorOptions {
+                skip_network: true,
+                nu_version_probe: Some(probe_patch_diff),
+                discover_off_path: Some(|| None),
+                ..DoctorOptions::default()
+            },
+        )
+        .unwrap();
+
+        let mismatch = report
+            .findings
+            .iter()
+            .find(|f| f.id == "nu.version_mismatch");
+        assert!(
+            mismatch.is_none(),
+            "Patch-only differences should not trigger mismatch warning"
         );
     }
 
