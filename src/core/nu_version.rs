@@ -106,9 +106,9 @@ impl NuVersion {
                     _ => return false,
                 }
             } else if let Some(ver) = part.strip_prefix('=') {
-                if let Some(minor_str) = ver.strip_prefix("0.") {
+                if let Some(minor_str) = ver.strip_prefix("0.").and_then(|v| v.strip_suffix(".x")) {
                     // "=0.113.x" format — exact minor
-                    match minor_str.trim_end_matches(".x").parse::<u64>() {
+                    match minor_str.parse::<u64>() {
                         Ok(minor) if self.minor == minor => {}
                         _ => return false,
                     }
@@ -195,6 +195,13 @@ mod tests {
         let v = NuVersion::parse("0.113.1").unwrap();
         assert!(v.matches_constraint("=0.113.x"));
         assert!(!v.matches_constraint("=0.112.x"));
+    }
+
+    #[test]
+    fn matches_exact_zero_major_full_version() {
+        let v = NuVersion::parse("0.113.1").unwrap();
+        assert!(v.matches_constraint("=0.113.1"));
+        assert!(!v.matches_constraint("=0.113.2"));
     }
 
     #[test]

@@ -180,6 +180,7 @@ fn doctor_report_only_leaves_root_unchanged() {
 
 #[test]
 fn doctor_fix_auto_creates_layout_without_network() {
+    let _numan_root_guard = numan_cli::util::test_paths::NumanRootRestoreGuard::new();
     let dir = TempDir::new().unwrap();
     let root = dir.path();
     std::fs::create_dir_all(root).unwrap();

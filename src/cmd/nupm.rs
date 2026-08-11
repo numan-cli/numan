@@ -491,10 +491,11 @@ mod tests {
                 exit_on_ineligible: false,
             }),
         };
-        // Points at a nonexistent path so resolve_nupm_home falls through to
-        // NotConfigured or scan_nupm_home errors; either way this is not a
-        // successful scan and must not panic.
-        let _ = execute(&args, root.path(), &mut buf);
+        let err = execute(&args, root.path(), &mut buf).unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to read nupm home path"),
+            "expected a nonexistent --nupm-home to fail validation, got: {err}"
+        );
     }
 
     #[test]

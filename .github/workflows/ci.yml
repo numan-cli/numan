@@ -74,10 +74,13 @@ jobs:
       - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026 # v2.85.11
         with:
           tool: cargo-llvm-cov
-      # Informational only: no --fail-under-lines threshold is enforced. This
-      # step can still fail the build if `cargo llvm-cov` itself exits nonzero
-      # (e.g. a test fails during the coverage run), just not on low coverage.
+      # Informational only: continue-on-error means neither a low-coverage
+      # number nor cargo llvm-cov itself exiting nonzero (e.g. a test fails
+      # during this instrumented run) can fail the build. The `test` job
+      # already runs the full hermetic suite and gates on real test failures;
+      # this job exists purely to publish the coverage summary.
       - name: Run coverage
+        continue-on-error: true
         run: |
           {
             echo "### Coverage summary"
