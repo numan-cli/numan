@@ -19,11 +19,16 @@ pub struct SearchArgs {
 }
 
 pub fn execute(args: &SearchArgs, root: &Path) -> Result<()> {
+    let mut stdout = std::io::stdout();
+    execute_to(args, root, &mut stdout)
+}
+
+fn execute_to(args: &SearchArgs, root: &Path, out: &mut dyn std::io::Write) -> Result<()> {
     let mgr = RegistryManager::new(root)?;
     let results = mgr.search(&args.query)?;
 
     if results.is_empty() {
-        println!("No packages found matching '{}'.", args.query);
+        writeln!(out, "No packages found matching '{}'.", args.query)?;
         return Ok(());
     }
 
@@ -35,13 +40,18 @@ pub fn execute(args: &SearchArgs, root: &Path) -> Result<()> {
     let mut hidden = 0usize;
     let mut first_hidden_id: Option<String> = None;
 
-    println!(
+    writeln!(
+        out,
         "Found {} package(s) matching '{}':",
         results.len(),
         args.query
-    );
-    println!("{}", format_search_header(nu.as_ref(), &platform.triple));
-    println!();
+    )?;
+    writeln!(
+        out,
+        "{}",
+        format_search_header(nu.as_ref(), &platform.triple)
+    )?;
+    writeln!(out,)?;
 
     for pkg in &results {
         let compatible = resolver
@@ -104,7 +114,8 @@ pub fn execute(args: &SearchArgs, root: &Path) -> Result<()> {
         let fork_marker = fork_marker(&pkg.id.owner);
         let provisional_marker = provisional_marker(display_entry);
 
-        println!(
+        writeln!(
+            out,
             "  {}/{}  v{}  [{}]{}{}{}
     {}",
             pkg.id.owner,
@@ -115,16 +126,20 @@ pub fn execute(args: &SearchArgs, root: &Path) -> Result<()> {
             fork_marker,
             provisional_marker,
             pkg.description
-        );
+        )?;
     }
 
     if shown == 0 && hidden > 0 {
-        println!("(no compatible packages for your Nu/platform; {hidden} match(es) hidden)");
+        writeln!(
+            out,
+            "(no compatible packages for your Nu/platform; {hidden} match(es) hidden)"
+        )?;
     }
 
     if hidden > 0 {
         let nu_label = nu.as_ref().map(|n| n.version.as_str()).unwrap_or("unknown");
-        println!(
+        writeln!(
+            out,
             "\n{}",
             format_hidden_footer(
                 hidden,
@@ -132,7 +147,7 @@ pub fn execute(args: &SearchArgs, root: &Path) -> Result<()> {
                 &platform.triple,
                 first_hidden_id.as_deref(),
             )
-        );
+        )?;
     }
 
     Ok(())
@@ -235,6 +250,7 @@ mod tests {
     use super::*;
     use crate::core::package::*;
     use crate::core::resolve::Resolver;
+    use crate::nu::paths::NuPaths;
     use std::collections::{BTreeMap, HashMap};
 
     fn sample_pkg(nu_constraint: &str) -> Package {
@@ -413,5 +429,91 @@ mod tests {
         let pkg = sample_pkg_typed(PackageType::Module, "*", vec!["0.113.1".to_string()]);
         assert_eq!(pkg.package_type, PackageType::Module);
         assert_eq!(pkg.versions[0].verified_with, vec!["0.113.1"]);
+    }
+
+    fn setup_root_with_index(index: &crate::core::package::RegistryIndex) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("registry/official")).unwrap();
+        std::fs::write(
+            root.join("registry/official/index.json"),
+            serde_json::to_string_pretty(index).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("config.toml"),
+            "[general]\ndefault_registry = \"official\"\n",
+        )
+        .unwrap();
+        tmp
+    }
+
+    fn index_with_packages(packages: Vec<Package>) -> crate::core::package::RegistryIndex {
+        crate::core::package::RegistryIndex {
+            schema_version: 1,
+            updated_at: "2026-06-27T00:00:00Z".to_string(),
+            registry_revision: None,
+            trust: None,
+            packages,
+        }
+    }
+
+    #[test]
+    fn execute_reports_no_matches() {
+        let index = index_with_packages(vec![sample_pkg("*")]);
+        let tmp = setup_root_with_index(&index);
+        let args = SearchArgs {
+            query: "nothing-matches-this".to_string(),
+            all: false,
+        };
+        let mut out = Vec::new();
+        execute_to(&args, tmp.path(), &mut out).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "No packages found matching 'nothing-matches-this'.\n"
+        );
+    }
+
+    #[test]
+    fn execute_finds_matching_package() {
+        let index = index_with_packages(vec![sample_pkg("*")]);
+        let tmp = setup_root_with_index(&index);
+        let args = SearchArgs {
+            query: "pkg".to_string(),
+            all: false,
+        };
+        let mut out = Vec::new();
+        execute_to(&args, tmp.path(), &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("Found 1 package(s) matching 'pkg':"));
+        assert!(s.contains("owner/pkg  v1.0.0"));
+    }
+
+    #[test]
+    fn execute_with_all_flag_shows_incompatible() {
+        let index = index_with_packages(vec![sample_pkg(">=99.0.0")]);
+        let tmp = setup_root_with_index(&index);
+        std::fs::create_dir_all(tmp.path().join("nu_state")).unwrap();
+        let nu_paths = NuPaths {
+            nu_executable: "/usr/bin/nu".to_string(),
+            nu_version: "0.114.1".to_string(),
+            plugin_registry_path: "/tmp/plugins.msgpackz".to_string(),
+            nu_executable_hash: "abc".to_string(),
+            platform: "x86_64-unknown-linux-gnu".to_string(),
+            data_dir: None,
+            vendor_autoload_dirs: vec![],
+            vendor_autoload_dir: None,
+        };
+        nu_paths.save(tmp.path()).unwrap();
+
+        let args = SearchArgs {
+            query: "pkg".to_string(),
+            all: true,
+        };
+        let mut out = Vec::new();
+        execute_to(&args, tmp.path(), &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("owner/pkg"));
+        assert!(s.contains("[needs Nu >=99.0.0]"));
     }
 }

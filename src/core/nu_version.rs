@@ -86,43 +86,36 @@ impl NuVersion {
         let parts: Vec<&str> = constraint.split_whitespace().collect();
         for part in parts {
             if let Some(ver) = part.strip_prefix(">=") {
-                if let Ok(min) = parse_version(ver) {
-                    if !version_gte(self, &min) {
-                        return false;
-                    }
-                }
-            } else if let Some(ver) = part.strip_prefix('>') {
-                if let Ok(min) = parse_version(ver) {
-                    if !version_gt(self, &min) {
-                        return false;
-                    }
+                match parse_version(ver) {
+                    Ok(min) if version_gte(self, &min) => {}
+                    _ => return false,
                 }
             } else if let Some(ver) = part.strip_prefix("<=") {
-                if let Some(ver) = ver.strip_prefix('=') {
-                    // <=0.114.0
-                    if let Ok(max) = parse_version(ver) {
-                        if !version_lte(self, &max) {
-                            return false;
-                        }
-                    }
+                match parse_version(ver) {
+                    Ok(max) if version_lte(self, &max) => {}
+                    _ => return false,
+                }
+            } else if let Some(ver) = part.strip_prefix('>') {
+                match parse_version(ver) {
+                    Ok(min) if version_gt(self, &min) => {}
+                    _ => return false,
                 }
             } else if let Some(ver) = part.strip_prefix('<') {
-                if let Ok(max) = parse_version(ver) {
-                    if !version_lt(self, &max) {
-                        return false;
-                    }
+                match parse_version(ver) {
+                    Ok(max) if version_lt(self, &max) => {}
+                    _ => return false,
                 }
             } else if let Some(ver) = part.strip_prefix('=') {
-                if let Some(ver) = ver.strip_prefix("0.") {
+                if let Some(minor_str) = ver.strip_prefix("0.").and_then(|v| v.strip_suffix(".x")) {
                     // "=0.113.x" format — exact minor
-                    if let Ok(minor) = ver.trim_end_matches(".x").parse::<u64>() {
-                        if self.minor != minor {
-                            return false;
-                        }
+                    match minor_str.parse::<u64>() {
+                        Ok(minor) if self.minor == minor => {}
+                        _ => return false,
                     }
-                } else if let Ok(exact) = parse_version(ver) {
-                    if !version_eq(self, &exact) {
-                        return false;
+                } else {
+                    match parse_version(ver) {
+                        Ok(exact) if version_eq(self, &exact) => {}
+                        _ => return false,
                     }
                 }
             }
@@ -205,6 +198,13 @@ mod tests {
     }
 
     #[test]
+    fn matches_exact_zero_major_full_version() {
+        let v = NuVersion::parse("0.113.1").unwrap();
+        assert!(v.matches_constraint("=0.113.1"));
+        assert!(!v.matches_constraint("=0.113.2"));
+    }
+
+    #[test]
     fn from_binary_errors_when_executable_missing() {
         let err =
             NuVersion::from_binary(Path::new("/nonexistent/numan-test-nu-binary")).unwrap_err();
@@ -212,5 +212,79 @@ mod tests {
             err.to_string().contains("--version"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn parse_rejects_wrong_segment_count() {
+        assert!(NuVersion::parse("0.113").is_err());
+        assert!(NuVersion::parse("0.113.1.2").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_non_numeric_segments() {
+        assert!(NuVersion::parse("x.113.1").is_err());
+        assert!(NuVersion::parse("0.y.1").is_err());
+        assert!(NuVersion::parse("0.113.z").is_err());
+    }
+
+    #[test]
+    fn matches_greater_than() {
+        let v = NuVersion::parse("0.113.1").unwrap();
+        assert!(v.matches_constraint(">0.113.0"));
+        assert!(!v.matches_constraint(">0.113.1"));
+    }
+
+    #[test]
+    fn matches_less_than() {
+        let v = NuVersion::parse("0.113.1").unwrap();
+        assert!(v.matches_constraint("<0.114.0"));
+        assert!(!v.matches_constraint("<0.113.1"));
+    }
+
+    #[test]
+    fn matches_exact_full_version() {
+        let v = NuVersion::parse("1.2.3").unwrap();
+        assert!(v.matches_constraint("=1.2.3"));
+        assert!(!v.matches_constraint("=1.2.4"));
+    }
+
+    #[test]
+    fn matches_constraint_rejects_unparseable_bound() {
+        let v = NuVersion::parse("0.113.1").unwrap();
+        // Malformed bound fails closed rather than being silently ignored.
+        assert!(!v.matches_constraint(">=not-a-version"));
+    }
+
+    #[test]
+    fn matches_less_than_or_equal() {
+        let v = NuVersion::parse("0.113.1").unwrap();
+        assert!(v.matches_constraint("<=0.113.1"));
+        assert!(v.matches_constraint("<=0.114.0"));
+        assert!(!v.matches_constraint("<=0.113.0"));
+    }
+
+    #[test]
+    fn from_paths_or_detect_uses_cached_version() {
+        use crate::nu::paths::NuPaths;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("nu_state")).unwrap();
+        let paths = NuPaths {
+            nu_executable: "/usr/bin/nu".to_string(),
+            nu_version: "0.113.1".to_string(),
+            plugin_registry_path: "/tmp/plugin.msgpackz".to_string(),
+            nu_executable_hash: "deadbeef".to_string(),
+            platform: "x86_64-unknown-linux-gnu".to_string(),
+            data_dir: None,
+            vendor_autoload_dirs: Vec::new(),
+            vendor_autoload_dir: None,
+        };
+        paths.save(dir.path()).unwrap();
+
+        let version = NuVersion::from_paths_or_detect(dir.path()).unwrap();
+        assert_eq!(version.major, 0);
+        assert_eq!(version.minor, 113);
+        assert_eq!(version.patch, 1);
     }
 }
