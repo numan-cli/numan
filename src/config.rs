@@ -219,11 +219,11 @@ mod tests {
 
     #[test]
     fn resolve_root_prefers_numan_root_env_var() {
+        let _guard = crate::util::test_paths::NumanRootRestoreGuard::new();
         let dir = tempdir().unwrap();
         std::env::set_var("NUMAN_ROOT", dir.path());
         let platform = Platform::detect();
         let resolved = Config::resolve_root(&platform);
-        std::env::remove_var("NUMAN_ROOT");
         assert_eq!(resolved, dir.path());
     }
 }
