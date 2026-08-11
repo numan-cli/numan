@@ -86,43 +86,36 @@ impl NuVersion {
         let parts: Vec<&str> = constraint.split_whitespace().collect();
         for part in parts {
             if let Some(ver) = part.strip_prefix(">=") {
-                if let Ok(min) = parse_version(ver) {
-                    if !version_gte(self, &min) {
-                        return false;
-                    }
-                }
-            } else if let Some(ver) = part.strip_prefix('>') {
-                if let Ok(min) = parse_version(ver) {
-                    if !version_gt(self, &min) {
-                        return false;
-                    }
+                match parse_version(ver) {
+                    Ok(min) if version_gte(self, &min) => {}
+                    _ => return false,
                 }
             } else if let Some(ver) = part.strip_prefix("<=") {
-                if let Some(ver) = ver.strip_prefix('=') {
-                    // <=0.114.0
-                    if let Ok(max) = parse_version(ver) {
-                        if !version_lte(self, &max) {
-                            return false;
-                        }
-                    }
+                match parse_version(ver) {
+                    Ok(max) if version_lte(self, &max) => {}
+                    _ => return false,
+                }
+            } else if let Some(ver) = part.strip_prefix('>') {
+                match parse_version(ver) {
+                    Ok(min) if version_gt(self, &min) => {}
+                    _ => return false,
                 }
             } else if let Some(ver) = part.strip_prefix('<') {
-                if let Ok(max) = parse_version(ver) {
-                    if !version_lt(self, &max) {
-                        return false;
-                    }
+                match parse_version(ver) {
+                    Ok(max) if version_lt(self, &max) => {}
+                    _ => return false,
                 }
             } else if let Some(ver) = part.strip_prefix('=') {
-                if let Some(ver) = ver.strip_prefix("0.") {
+                if let Some(minor_str) = ver.strip_prefix("0.") {
                     // "=0.113.x" format — exact minor
-                    if let Ok(minor) = ver.trim_end_matches(".x").parse::<u64>() {
-                        if self.minor != minor {
-                            return false;
-                        }
+                    match minor_str.trim_end_matches(".x").parse::<u64>() {
+                        Ok(minor) if self.minor == minor => {}
+                        _ => return false,
                     }
-                } else if let Ok(exact) = parse_version(ver) {
-                    if !version_eq(self, &exact) {
-                        return false;
+                } else {
+                    match parse_version(ver) {
+                        Ok(exact) if version_eq(self, &exact) => {}
+                        _ => return false,
                     }
                 }
             }
@@ -249,10 +242,18 @@ mod tests {
     }
 
     #[test]
-    fn matches_constraint_ignores_unparseable_bound() {
+    fn matches_constraint_rejects_unparseable_bound() {
         let v = NuVersion::parse("0.113.1").unwrap();
-        // Malformed bound is silently skipped rather than erroring.
-        assert!(v.matches_constraint(">=not-a-version"));
+        // Malformed bound fails closed rather than being silently ignored.
+        assert!(!v.matches_constraint(">=not-a-version"));
+    }
+
+    #[test]
+    fn matches_less_than_or_equal() {
+        let v = NuVersion::parse("0.113.1").unwrap();
+        assert!(v.matches_constraint("<=0.113.1"));
+        assert!(v.matches_constraint("<=0.114.0"));
+        assert!(!v.matches_constraint("<=0.113.0"));
     }
 
     #[test]

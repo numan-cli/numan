@@ -136,6 +136,15 @@ mod tests {
             err.to_string().contains("Failed to install managed Nu"),
             "expected install failure context, got: {err}"
         );
+        let chain: String = err
+            .chain()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" / ");
+        assert!(
+            chain.contains("Failed to normalize requested version 'not-a-version'"),
+            "expected version-normalization failure in the error chain, got: {chain}"
+        );
     }
 
     #[test]
@@ -148,6 +157,10 @@ mod tests {
             })
             .unwrap();
         assert!(!result);
+        assert!(
+            std::fs::read_dir(dir.path()).unwrap().next().is_none(),
+            "declining must not install anything under root"
+        );
     }
 
     #[test]
@@ -160,6 +173,10 @@ mod tests {
             })
             .unwrap();
         assert!(!result);
+        assert!(
+            std::fs::read_dir(dir.path()).unwrap().next().is_none(),
+            "invalid input must not install anything under root"
+        );
     }
 
     #[test]

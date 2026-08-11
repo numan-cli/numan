@@ -62,6 +62,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: stable
@@ -72,13 +74,15 @@ jobs:
       - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026 # v2.85.11
         with:
           tool: cargo-llvm-cov
-      # Informational only: no --fail-under-lines, so coverage can never fail the build.
+      # Informational only: no --fail-under-lines threshold is enforced. This
+      # step can still fail the build if `cargo llvm-cov` itself exits nonzero
+      # (e.g. a test fails during the coverage run), just not on low coverage.
       - name: Run coverage
         run: |
           {
             echo "### Coverage summary"
             echo '```'
-            cargo llvm-cov --workspace --summary-only
+            cargo llvm-cov --workspace --locked --summary-only
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

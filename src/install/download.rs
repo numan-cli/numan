@@ -8,12 +8,12 @@ pub fn download_file(url: &str, dest: &Path) -> Result<()> {
     // Handle local file paths (for testing and local installs)
     if url.starts_with("file://") || (!url.contains("://") && std::path::Path::new(url).exists()) {
         let src = if url.starts_with("file://") {
-            // Strip file:// prefix
-            #[cfg(windows)]
-            let path = url.strip_prefix("file://").unwrap_or(url);
-            #[cfg(not(windows))]
-            let path = url.strip_prefix("file://").unwrap_or(url);
-            std::path::PathBuf::from(path)
+            url::Url::parse(url)
+                .map_err(|e| anyhow::anyhow!("Invalid file:// URL '{url}': {e}"))?
+                .to_file_path()
+                .map_err(|_| {
+                    anyhow::anyhow!("file:// URL '{url}' does not resolve to a local path")
+                })?
         } else {
             std::path::PathBuf::from(url)
         };
@@ -106,5 +106,23 @@ mod tests {
         download_file(&url, &dest).unwrap();
 
         assert_eq!(std::fs::read(&dest).unwrap(), b"world");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn download_file_copies_file_url_windows_drive_form() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src.txt");
+        std::fs::write(&src, b"windows").unwrap();
+        let dest = dir.path().join("dest.txt");
+
+        // Standard Windows file URL: forward slashes, drive letter directly
+        // after the third slash, no host (file:///C:/path/to/file).
+        let path_str = src.to_string_lossy().replace('\\', "/");
+        let url = format!("file:///{}", path_str.trim_start_matches('/'));
+
+        download_file(&url, &dest).unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"windows");
     }
 }

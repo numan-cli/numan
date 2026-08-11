@@ -4,6 +4,7 @@ use crate::core::trust::TrustStore;
 use crate::util::fs_safety::acquire_mutation_lock;
 use anyhow::{bail, Context, Result};
 use clap::Subcommand;
+use std::io::Write;
 use std::path::Path;
 
 #[derive(Subcommand)]
@@ -33,26 +34,26 @@ pub enum RegistryCommands {
 
 pub fn execute(cmd: RegistryCommands, root: &Path) -> Result<()> {
     match cmd {
-        RegistryCommands::List => list_registries(root),
+        RegistryCommands::List => list_registries(root, &mut std::io::stdout()),
         RegistryCommands::Sync => sync_registries(root),
         RegistryCommands::Add { name, url, key } => add_registry(root, &name, &url, &key),
         RegistryCommands::Remove { name } => remove_registry(root, &name),
-        RegistryCommands::Packages => list_packages(root),
+        RegistryCommands::Packages => list_packages(root, &mut std::io::stdout()),
     }
 }
 
-fn list_registries(root: &Path) -> Result<()> {
+fn list_registries(root: &Path, out: &mut dyn Write) -> Result<()> {
     let config = crate::config::Config::load(root)?;
     if config.registries.is_empty() {
-        println!("No registries configured.");
+        writeln!(out, "No registries configured.")?;
         return Ok(());
     }
 
-    println!("Configured registries:\n");
+    writeln!(out, "Configured registries:\n")?;
     for (name, reg) in &config.registries {
         let status = if reg.enabled { "enabled" } else { "disabled" };
-        println!("  {name}  [{status}]");
-        println!("    url: {}", reg.url);
+        writeln!(out, "  {name}  [{status}]")?;
+        writeln!(out, "    url: {}", reg.url)?;
     }
 
     Ok(())
@@ -171,19 +172,23 @@ fn remove_registry(root: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn list_packages(root: &Path) -> Result<()> {
+fn list_packages(root: &Path, out: &mut dyn Write) -> Result<()> {
     let config = crate::config::Config::load(root)?;
     let mgr = RegistryManager::new(root)?;
 
     let default_reg = &config.general.default_registry;
     let index = mgr.load_index(default_reg)?;
 
-    println!("Packages in '{default_reg}' ({}):\n", index.packages.len());
+    writeln!(
+        out,
+        "Packages in '{default_reg}' ({}):\n",
+        index.packages.len()
+    )?;
 
     let desc_width = package_description_width();
     for (i, pkg) in index.packages.iter().enumerate() {
         if i > 0 {
-            println!();
+            writeln!(out)?;
         }
         let latest = pkg
             .versions
@@ -191,15 +196,16 @@ fn list_packages(root: &Path) -> Result<()> {
             .map(|v| v.version.to_string())
             .unwrap_or_else(|| "n/a".to_string());
         let id = format!("{}/{}", pkg.id.owner, pkg.id.name);
-        println!(
+        writeln!(
+            out,
             "  {}  {}  [{}]",
             console::style(id).cyan().bold(),
             console::style(format!("v{latest}")).dim(),
             console::style(pkg.package_type.to_string()).dim(),
-        );
+        )?;
         if !pkg.description.trim().is_empty() {
             for line in wrap_words(pkg.description.trim(), desc_width) {
-                println!("    {}", console::style(line).dim());
+                writeln!(out, "    {}", console::style(line).dim())?;
             }
         }
     }
@@ -269,7 +275,12 @@ mod tests {
     #[test]
     fn list_registries_prints_none_when_empty() {
         let dir = tempfile::tempdir().unwrap();
-        list_registries(dir.path()).unwrap();
+        let mut out = Vec::new();
+        list_registries(dir.path(), &mut out).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "No registries configured.\n"
+        );
     }
 
     #[test]
@@ -287,7 +298,11 @@ mod tests {
             },
         );
         config.save(root).unwrap();
-        list_registries(root).unwrap();
+        let mut out = Vec::new();
+        list_registries(root, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("custom  [enabled]"));
+        assert!(s.contains("url: https://example.com/index.json"));
     }
 
     #[test]
@@ -388,7 +403,14 @@ mod tests {
         )
         .unwrap();
 
-        list_packages(root).unwrap();
+        let mut out = Vec::new();
+        list_packages(root, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("Packages in 'official' (1):"));
+        assert!(s.contains("test/pkg"));
+        assert!(s.contains("v1.0.0"));
+        assert!(s.contains("plugin"));
+        assert!(s.contains("A test package for listing"));
     }
 
     #[test]

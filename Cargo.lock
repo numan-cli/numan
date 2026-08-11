@@ -1223,6 +1223,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "toml",
+ "url",
  "uuid",
  "wait-timeout",
  "xz2",

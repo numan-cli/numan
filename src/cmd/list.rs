@@ -2,18 +2,24 @@ use crate::nu::paths::NuPaths;
 use crate::nupm_compat::schema::NUPM_IMPORT_ORIGIN;
 use crate::state::lockfile::Lockfile;
 use anyhow::Result;
+use std::io::Write;
 use std::path::Path;
 
 pub fn execute(root: &Path) -> Result<()> {
+    let mut stdout = std::io::stdout();
+    execute_to(root, &mut stdout)
+}
+
+fn execute_to(root: &Path, out: &mut dyn Write) -> Result<()> {
     let lockfile = Lockfile::load(root)?;
     let nu_paths = NuPaths::load(root).ok();
 
     if lockfile.is_empty() {
-        println!("No packages installed.");
+        writeln!(out, "No packages installed.")?;
         return Ok(());
     }
 
-    println!("Installed packages ({}):\n", lockfile.packages.len());
+    writeln!(out, "Installed packages ({}):\n", lockfile.packages.len())?;
 
     for (id, entry) in &lockfile.packages {
         let status = match &nu_paths {
@@ -33,10 +39,11 @@ pub fn execute(root: &Path) -> Result<()> {
         } else {
             ""
         };
-        println!(
+        writeln!(
+            out,
             "  {}  v{}  [{}]  {}{}",
             id, entry.version, entry.package_type, status, origin_tag
-        );
+        )?;
     }
 
     Ok(())
@@ -87,7 +94,9 @@ mod tests {
     fn execute_empty_lockfile() {
         let dir = tempfile::tempdir().unwrap();
         Lockfile::empty().save(dir.path()).unwrap();
-        execute(dir.path()).unwrap();
+        let mut out = Vec::new();
+        execute_to(dir.path(), &mut out).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "No packages installed.\n");
     }
 
     #[test]
@@ -97,7 +106,11 @@ mod tests {
         lock.packages
             .insert("owner/pkg".to_string(), base_entry("1.0.0", "plugin"));
         lock.save(dir.path()).unwrap();
-        execute(dir.path()).unwrap();
+        let mut out = Vec::new();
+        execute_to(dir.path(), &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("Installed packages (1):"));
+        assert!(s.contains("owner/pkg  v1.0.0  [plugin]  installed"));
     }
 
     #[test]
@@ -131,6 +144,11 @@ mod tests {
         };
         nu_paths.save(root).unwrap();
 
-        execute(root).unwrap();
+        let mut out = Vec::new();
+        execute_to(root, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("Installed packages (2):"));
+        assert!(s.contains("owner/active  v1.0.0  [plugin]  activated"));
+        assert!(s.contains("owner/inactive  v2.0.0  [module]  installed"));
     }
 }

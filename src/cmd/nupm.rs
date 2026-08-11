@@ -619,6 +619,11 @@ mod tests {
         execute(&args, root.path(), &mut buf).unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert!(!s.contains("not configured"));
+        assert!(s.contains("modules dir: present"));
+        assert!(s.contains("scripts dir: present"));
+        assert!(s.contains("Installed-only module directories: 1"));
+        assert!(s.contains("Script entries: 1"));
+        assert!(s.contains("Unsafe/unreadable entries: 0"));
     }
 
     #[test]
@@ -634,6 +639,11 @@ mod tests {
             }),
         };
         execute(&args, root.path(), &mut buf).unwrap();
-        assert!(!String::from_utf8(buf).unwrap().is_empty());
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("minimal-module (installed-only)"));
+        assert!(s.contains("Metadata:     unavailable"));
+        assert!(
+            s.contains("Eligible:     no (metadata unavailable; not eligible for Numan import)")
+        );
     }
 }
