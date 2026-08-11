@@ -1857,6 +1857,7 @@ mod tests {
 
     #[test]
     fn doctor_fix_auto_creates_layout_and_inits() {
+        let _numan_root_guard = crate::util::test_paths::NumanRootRestoreGuard::new();
         let dir = TempDir::new().unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root).unwrap();
@@ -1889,6 +1890,7 @@ mod tests {
 
     #[test]
     fn doctor_fix_adds_official_registry_when_initialized_without_registries() {
+        let _numan_root_guard = crate::util::test_paths::NumanRootRestoreGuard::new();
         let dir = TempDir::new().unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("nu_state")).unwrap();

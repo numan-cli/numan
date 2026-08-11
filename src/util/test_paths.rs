@@ -131,6 +131,47 @@ impl Default for HomeRestoreGuard {
     }
 }
 
+/// Serializes every NUMAN_ROOT snapshot/restore so concurrent tests cannot
+/// race through the process-global environment.
+static NUMAN_ROOT_MUTEX: Mutex<()> = Mutex::new(());
+
+/// RAII guard that snapshots `NUMAN_ROOT` on construction and restores it on
+/// drop. `crate::config::Config::resolve_root` reads this env var, so any
+/// test that sets it (even indirectly, via code under test) must hold this
+/// guard for the duration — otherwise a concurrently-running test doing the
+/// same thing can read or restore the wrong value.
+pub struct NumanRootRestoreGuard {
+    original: Option<OsString>,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl NumanRootRestoreGuard {
+    pub fn new() -> Self {
+        let lock = NUMAN_ROOT_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Self {
+            original: std::env::var_os("NUMAN_ROOT"),
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for NumanRootRestoreGuard {
+    fn drop(&mut self) {
+        match self.original.as_ref() {
+            Some(root) => std::env::set_var("NUMAN_ROOT", root),
+            None => std::env::remove_var("NUMAN_ROOT"),
+        }
+    }
+}
+
+impl Default for NumanRootRestoreGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

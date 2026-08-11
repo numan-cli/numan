@@ -44,3 +44,6 @@ desktop.ini
 # Python
 __pycache__/
 *.py[cod]
+
+# Coverage
+*.profraw

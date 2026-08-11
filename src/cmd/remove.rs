@@ -368,4 +368,32 @@ mod tests {
             "--yes must bypass the guard: {msg}"
         );
     }
+
+    #[test]
+    fn execute_removes_installed_package_end_to_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("owner/pkg")).unwrap();
+
+        let mut lockfile = Lockfile::empty();
+        let mut entry = base_entry();
+        entry.payload_path = "owner/pkg".to_string();
+        lockfile.packages.insert("owner/pkg".to_string(), entry);
+        lockfile.save(root).unwrap();
+
+        execute_with_tty(
+            &RemoveArgs {
+                package: "owner/pkg".to_string(),
+                yes: true,
+                force: false,
+            },
+            root,
+            false,
+        )
+        .unwrap();
+
+        let reloaded = Lockfile::load(root).unwrap();
+        assert!(!reloaded.packages.contains_key("owner/pkg"));
+        assert!(!root.join("owner/pkg").exists());
+    }
 }

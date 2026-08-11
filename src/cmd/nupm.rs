@@ -451,4 +451,200 @@ mod tests {
         };
         assert!(execute(&args, root.path(), &mut buf).is_err());
     }
+
+    #[test]
+    fn diff_rejects_invalid_scoped_id() {
+        let root = tempfile::tempdir().unwrap();
+        let mut buf = Vec::new();
+        let args = NupmArgs {
+            command: NupmCommands::Diff(DiffArgs {
+                package_id: "not-a-scoped-id".to_string(),
+            }),
+        };
+        assert!(execute(&args, root.path(), &mut buf).is_err());
+    }
+
+    #[test]
+    fn diff_reports_cannot_compare_when_no_import_exists() {
+        let root = tempfile::tempdir().unwrap();
+        let mut buf = Vec::new();
+        let args = NupmArgs {
+            command: NupmCommands::Diff(DiffArgs {
+                package_id: "owner/pkg".to_string(),
+            }),
+        };
+        let err = execute(&args, root.path(), &mut buf).unwrap_err();
+        assert!(err.to_string().contains("Cannot compare drift"));
+        let s = String::from_utf8(buf).unwrap();
+        assert!(!s.is_empty(), "drift report should still be printed");
+    }
+
+    #[test]
+    fn inspect_all_without_nupm_home_bails() {
+        let root = tempfile::tempdir().unwrap();
+        let mut buf = Vec::new();
+        let args = NupmArgs {
+            command: NupmCommands::Inspect(InspectArgs {
+                all: true,
+                path: None,
+                nupm_home: Some(PathBuf::from("/nonexistent/nupm-home")),
+                exit_on_ineligible: false,
+            }),
+        };
+        let err = execute(&args, root.path(), &mut buf).unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to read nupm home path"),
+            "expected a nonexistent --nupm-home to fail validation, got: {err}"
+        );
+    }
+
+    #[test]
+    fn inspect_rejects_nupm_home_with_path() {
+        let root = tempfile::tempdir().unwrap();
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/nupm/rejected/script-type");
+        let mut buf = Vec::new();
+        let args = NupmArgs {
+            command: NupmCommands::Inspect(InspectArgs {
+                all: false,
+                path: Some(path),
+                nupm_home: Some(PathBuf::from("/tmp/whatever")),
+                exit_on_ineligible: false,
+            }),
+        };
+        let err = execute(&args, root.path(), &mut buf).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("--nupm-home cannot be used with inspect <PATH>"));
+    }
+
+    #[test]
+    fn inspect_requires_path_or_all() {
+        let root = tempfile::tempdir().unwrap();
+        let mut buf = Vec::new();
+        let args = NupmArgs {
+            command: NupmCommands::Inspect(InspectArgs {
+                all: false,
+                path: None,
+                nupm_home: None,
+                exit_on_ineligible: false,
+            }),
+        };
+        let err = execute(&args, root.path(), &mut buf).unwrap_err();
+        assert!(err.to_string().contains("requires either <PATH> or --all"));
+    }
+
+    #[test]
+    fn import_rejects_path_with_manifest() {
+        let root = tempfile::tempdir().unwrap();
+        let mut buf = Vec::new();
+        let args = NupmArgs {
+            command: NupmCommands::Import(ImportArgs {
+                path: Some(PathBuf::from("/tmp/whatever")),
+                manifest: Some(PathBuf::from("/tmp/manifest.toml")),
+                nupm_home: None,
+                r#as: None,
+                yes: true,
+            }),
+        };
+        let err = execute(&args, root.path(), &mut buf).unwrap_err();
+        assert!(err.to_string().contains("Cannot use PATH with --manifest"));
+    }
+
+    #[test]
+    fn import_requires_path_or_manifest() {
+        let root = tempfile::tempdir().unwrap();
+        let mut buf = Vec::new();
+        let args = NupmArgs {
+            command: NupmCommands::Import(ImportArgs {
+                path: None,
+                manifest: None,
+                nupm_home: None,
+                r#as: None,
+                yes: true,
+            }),
+        };
+        let err = execute(&args, root.path(), &mut buf).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("import requires PATH or --manifest"));
+    }
+
+    #[test]
+    fn import_single_requires_as() {
+        let root = tempfile::tempdir().unwrap();
+        let mut buf = Vec::new();
+        let args = NupmArgs {
+            command: NupmCommands::Import(ImportArgs {
+                path: Some(PathBuf::from("/tmp/whatever")),
+                manifest: None,
+                nupm_home: None,
+                r#as: None,
+                yes: true,
+            }),
+        };
+        let err = execute(&args, root.path(), &mut buf).unwrap_err();
+        assert!(err.to_string().contains("single import requires --as"));
+    }
+
+    #[test]
+    fn import_fails_without_configured_nu_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let mut buf = Vec::new();
+        let args = NupmArgs {
+            command: NupmCommands::Import(ImportArgs {
+                path: Some(PathBuf::from("/tmp/whatever")),
+                manifest: None,
+                nupm_home: None,
+                r#as: Some("owner/pkg".to_string()),
+                yes: true,
+            }),
+        };
+        let err = execute(&args, root.path(), &mut buf).unwrap_err();
+        assert!(err.to_string().contains("Nu paths are not configured"));
+    }
+
+    fn nupm_home_fixture() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nupm/nupm-home-layout")
+    }
+
+    #[test]
+    fn status_found_reports_scan_results() {
+        let root = tempfile::tempdir().unwrap();
+        let mut buf = Vec::new();
+        let args = NupmArgs {
+            command: NupmCommands::Status(StatusArgs {
+                nupm_home: Some(nupm_home_fixture()),
+            }),
+        };
+        execute(&args, root.path(), &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(!s.contains("not configured"));
+        assert!(s.contains("modules dir: present"));
+        assert!(s.contains("scripts dir: present"));
+        assert!(s.contains("Installed-only module directories: 1"));
+        assert!(s.contains("Script entries: 1"));
+        assert!(s.contains("Unsafe/unreadable entries: 0"));
+    }
+
+    #[test]
+    fn inspect_all_reports_candidates() {
+        let root = tempfile::tempdir().unwrap();
+        let mut buf = Vec::new();
+        let args = NupmArgs {
+            command: NupmCommands::Inspect(InspectArgs {
+                all: true,
+                path: None,
+                nupm_home: Some(nupm_home_fixture()),
+                exit_on_ineligible: false,
+            }),
+        };
+        execute(&args, root.path(), &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("minimal-module (installed-only)"));
+        assert!(s.contains("Metadata:     unavailable"));
+        assert!(
+            s.contains("Eligible:     no (metadata unavailable; not eligible for Numan import)")
+        );
+    }
 }
