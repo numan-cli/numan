@@ -539,9 +539,11 @@ fn check_nu_environments(root: &Path, options: &DoctorOptions, findings: &mut Ve
                      Plugins are ABI-locked to a specific Nu major/minor version — \
                      packages installed under one will not load in the other."
                 ),
-                Some("Ensure you are running a Nu version compatible with your installed packages. \
-                      Use `numan setup nu` to install a specific Nu version, or `numan use` to \
-                      switch the active managed Nu version."),
+                Some(
+                    "Select a managed Nu release with the compatible major/minor version: \
+                     install it with `numan setup nu <version>`, then pin it with \
+                     `numan use <version>`.",
+                ),
                 RepairTier::None,
             ));
         }
@@ -622,15 +624,14 @@ fn probe_nu_version(path: &Path, options: &DoctorOptions) -> Result<String> {
     Ok(NuVersion::from_binary(path)?.version)
 }
 
-/// Check if two Nu version strings are compatible (same major and minor versions).
-/// Patch-only differences do not break ABI compatibility.
+/// Nu plugin ABI compatibility is scoped to major/minor; patch releases are compatible.
 fn versions_compatible(v1: &str, v2: &str) -> bool {
     let parsed1 = NuVersion::parse(v1);
     let parsed2 = NuVersion::parse(v2);
 
     match (parsed1, parsed2) {
         (Ok(p1), Ok(p2)) => p1.major == p2.major && p1.minor == p2.minor,
-        _ => false, // If parsing fails, treat as incompatible
+        _ => false,
     }
 }
 
@@ -1704,6 +1705,7 @@ fn print_report(args: &DoctorArgs, root: &Path, report: &DoctorReport) -> Result
                 "nu.binary.found_off_path",
                 "nu.path.version",
                 "nu.managed.version",
+                "nu.version_mismatch",
                 "nu.active_version.malformed",
                 "nu_paths.missing",
                 "nu_paths.drift",
@@ -2471,12 +2473,17 @@ mod tests {
         )
         .unwrap();
 
-        let mismatch = report
+        let mismatches: Vec<_> = report
             .findings
             .iter()
-            .find(|f| f.id == "nu.version_mismatch");
-        assert!(mismatch.is_some(), "Expected nu.version_mismatch finding");
-        let mismatch = mismatch.unwrap();
+            .filter(|f| f.id == "nu.version_mismatch")
+            .collect();
+        assert_eq!(
+            mismatches.len(),
+            1,
+            "expected exactly one nu.version_mismatch finding"
+        );
+        let mismatch = mismatches[0];
         assert_eq!(mismatch.severity, Severity::Warn);
         assert!(
             mismatch.message.contains("0.113.1"),
@@ -2551,13 +2558,14 @@ mod tests {
         )
         .unwrap();
 
-        let mismatch = report
+        let mismatch_count = report
             .findings
             .iter()
-            .find(|f| f.id == "nu.version_mismatch");
-        assert!(
-            mismatch.is_none(),
-            "Patch-only differences should not trigger mismatch warning"
+            .filter(|f| f.id == "nu.version_mismatch")
+            .count();
+        assert_eq!(
+            mismatch_count, 0,
+            "patch-only differences should not trigger mismatch warning"
         );
     }
 

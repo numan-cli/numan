@@ -91,6 +91,7 @@ Repair steps run in this **order** (each step re-validates only what it changed)
 | **auto** | Never | `registry.index_missing` | `numan registry sync` (skipped with `snapshot_unavailable` when PreMutation fails) |
 | **auto** | Never | `registry.none` (production trust root only) | Add official registry via same path as `numan init` (continues even when PreMutation fails) |
 | **manual** | Never auto | `nu.binary.missing_on_path` | Print fix hint (`numan setup nu`); doctor never downloads managed Nu without explicit user opt-in |
+| **none** | Never | `nu.version_mismatch` | Report incompatible PATH and managed Nu major/minor versions. Install a compatible managed release with `numan setup nu <version>`, then select it with `numan use <version>`; doctor never switches Nu automatically. |
 | **confirm** | Explicit consent when managed Nu exists | `nu.binary.found_off_path` | `numan setup nu use <path>` (adds existing install to PATH; doctor never passes `--yes`, so a managed wipe stays fail-closed / interactive) |
 | **confirm** | Never (applied in default mode) | `nu_paths.drift`, `nu_paths.vendor_drift` | `numan init --refresh` |
 | **confirm** | Never (applied in default mode) | `journal.plugin_pending`, `journal.autoload_pending`, `journal.plugin_stale`, `journal.autoload_stale`, `activation.plugin_stale`, `activation.module_stale`, `autoload.projection`, `autoload.managed_missing` | `numan activate` (empty package list — reconciles journals and re-activates stale entries; same entry point as normal activate recovery) |
@@ -131,6 +132,7 @@ Checks run in order below. Implementation should call existing validators (`NuPa
 | `nu.binary.found_off_path` | `warn` | Nu exists in a known install root (e.g. `~/.cargo/bin`, `%LOCALAPPDATA%\Programs\nushell`) but not on PATH → fix: `numan setup nu use <path>` |
 | `nu.path.version` | `info` | PATH-only Nu version (`PATH Nu: 0.114.1`), `PATH Nu: not found`, or `PATH Nu: found at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Does not treat managed Nu as PATH. Report-only (no automatic repair). |
 | `nu.managed.version` | `info` | Managed binary under `$NUMAN_ROOT/tools/nushell/` with version, `Managed Nu: not installed`, or `Managed Nu: present at '<path>' but version probe failed (<error>)` when the binary exists but `--version` fails. Report-only (no automatic repair). |
+| `nu.version_mismatch` | `warn` | PATH and managed Nu resolve to different major/minor versions. Patch-only differences are compatible. Plugins installed for one Nu major/minor do not load under the other. Report-only; use `numan setup nu <version>` and `numan use <version>` to install and select a compatible managed release. |
 | `nu.active_version.invalid` | `error` | `nu_state/active-version.json` is present but unreadable/invalid JSON. Lookup would otherwise soft-miss the marker and fall back to PATH. **auto:** copy raw bytes to `active-version.json.corrupt` (best-effort, recoverable `binary_path`), then clear via `clear_active_version` so resolution recovers cleanly. |
 | `nu_paths.missing` | `error` | `paths.json` absent → fix: `numan init` |
 | `nu_paths.drift` | `error` | `NuPaths::validate_drift()` fails → fix: `numan init --refresh` |
@@ -270,6 +272,8 @@ pub fn execute_with_options(args: &DoctorArgs, root: &Path, options: DoctorOptio
 |---------|------|
 | `numan init` / `init --refresh` | **Repair** Nu path drift (default doctor delegates here) |
 | `numan setup nu` | **Manual fix** for missing Nushell (`nu.binary.missing_on_path`; doctor prints the hint and does not download) |
+| `numan setup nu <version>` | Install a managed Nu release compatible with installed plugins when doctor reports `nu.version_mismatch` |
+| `numan use <version>` | Select the compatible managed Nu release after installation; doctor never switches versions automatically |
 | `numan setup nu use <path>` | **Repair** off-PATH Nushell (`nu.binary.found_off_path`; adds parent dir to user PATH; consented wipe of managed Nu requires `--yes` / TTY; doctor does not auto-approve) |
 | `numan activate` | **Repair** activation + journal reconciliation |
 | `numan registry sync` | **Repair** missing index cache (auto tier) |
