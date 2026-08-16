@@ -1118,6 +1118,8 @@ mod tests {
 
     #[test]
     fn prepend_process_path_adds_canonical_dir() {
+        use crate::util::test_paths::PathRestoreGuard;
+        let _path_guard = PathRestoreGuard::new();
         let dir = TempDir::new().unwrap();
         let sub = dir.path().join("bin");
         std::fs::create_dir_all(&sub).unwrap();
