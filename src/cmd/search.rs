@@ -263,14 +263,13 @@ mod tests {
         verified_with: Vec<String>,
     ) -> Package {
         let mut targets = HashMap::new();
-        targets.insert(
-            "x86_64-unknown-linux-gnu".to_string(),
-            TargetArtifact {
-                url: "https://example.com/p.zip".to_string(),
-                sha256: "abc".to_string(),
-                executable_path: "p".to_string(),
-            },
-        );
+        let artifact = TargetArtifact {
+            url: "https://example.com/p.zip".to_string(),
+            sha256: "abc".to_string(),
+            executable_path: "p".to_string(),
+        };
+        targets.insert("x86_64-unknown-linux-gnu".to_string(), artifact.clone());
+        targets.insert(Platform::detect().triple, artifact);
         Package {
             id: ScopedId::new("owner", "pkg"),
             description: "desc".to_string(),
