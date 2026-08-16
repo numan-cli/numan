@@ -224,6 +224,8 @@ def process_release(
 ) -> int:
     """Process fetched release against tracked state and update files/outputs."""
     tag_name = release.get("tag_name", "").lstrip("v").strip()
+    if not tag_name or not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", tag_name):
+        raise ValueError(f"Unexpected release tag_name: {tag_name!r}")
     github_url = release.get("html_url", f"https://github.com/nushell/nushell/releases/tag/{tag_name}")
     published_at = release.get("published_at", datetime.now(timezone.utc).isoformat())
     date_str = published_at[:10] if published_at else datetime.now(timezone.utc).strftime("%Y-%m-%d")
