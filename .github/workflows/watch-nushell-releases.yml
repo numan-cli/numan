@@ -50,7 +50,7 @@ jobs:
 
           git add .github/latest-nu-version.json docs/nushell-releases.md
           git commit -m "feat(release): track official Nushell ${VERSION} release"
-          git push origin "${BRANCH}" --force
+          git push origin "${BRANCH}" --force-with-lease
 
           PR_BODY=$(cat <<EOF
           ## Official Nushell ${VERSION} Released
