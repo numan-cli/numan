@@ -1,0 +1,83 @@
+name: Watch Nushell Releases
+
+on:
+  schedule:
+    # Run daily at 04:00 UTC
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  watch-release:
+    name: Check Nushell Releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Nushell release watcher
+        id: watcher
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/watch_nu_releases.py --write
+
+      - name: Open Tracking PR and Enable Auto-Merge
+        if: steps.watcher.outputs.is_new == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.watcher.outputs.version }}
+          BLOG_URL: ${{ steps.watcher.outputs.blog_url }}
+          GITHUB_URL: ${{ steps.watcher.outputs.github_url }}
+        run: |
+          BRANCH="feat/nu-release-${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH}"
+
+          git add .github/latest-nu-version.json docs/nushell-releases.md
+          git commit -m "feat(release): track official Nushell ${VERSION} release"
+          git push origin "${BRANCH}" --force
+
+          PR_BODY=$(cat <<EOF
+          ## Official Nushell ${VERSION} Released
+
+          A new official Nushell release has been published.
+
+          - **Release Notes**: ${GITHUB_URL}
+          - **Changelog / Blog**: ${BLOG_URL}
+
+          ### Ecosystem Checklist
+          - [ ] Review breaking engine/protocol changes affecting plugins
+          - [ ] Audit \`numan-maintained/*\` fork dependencies (\`Cargo.toml\`)
+          - [ ] Update \`manifest.json\` active plugin versions in \`numan-plugins\`
+          - [ ] Rebuild & test active plugins for Nu ${VERSION} band
+          - [ ] Update \`numan\` CI acceptance matrix (\`.github/workflows/ci.yml\`)
+
+          _Automated by \`.github/workflows/watch-nushell-releases.yml\`._
+          EOF
+          )
+
+          PR_URL=$(gh pr create \
+            --title "feat(release): track official Nushell ${VERSION} release" \
+            --body "${PR_BODY}" \
+            --head "${BRANCH}" \
+            --base master)
+
+          echo "Created PR: ${PR_URL}"
+
+          # Enable auto-merge
+          gh pr merge "${PR_URL}" --auto --squash || echo "Auto-merge could not be enabled; manual merge required."

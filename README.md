@@ -426,7 +426,7 @@ cargo test                    # unit + hermetic integration tests
 cargo clippy -- -D warnings   # lint (CI-enforced)
 cargo fmt                     # format
 
-# Real-Nu acceptance tests (requires Nu 0.113+ on PATH)
+# Real-Nu acceptance tests (requires Nu 0.115+ on PATH)
 cargo test -- --ignored
 ```
 
