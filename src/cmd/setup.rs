@@ -193,7 +193,7 @@ impl NuSetupArgs {
     }
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Clone, Default)]
 pub struct LoaderArgs {
     /// Overwrite an existing loader.nu without prompting
     #[arg(long)]
@@ -206,6 +206,34 @@ pub struct LoaderArgs {
     /// Skip confirmation prompts
     #[arg(long)]
     pub yes: bool,
+
+    /// Display current status of loader, configured tools, and cache files
+    #[arg(long)]
+    pub status: bool,
+
+    /// Scan PATH for known CLI tools (starship, zoxide, carapace, etc.) and configure them
+    #[arg(long)]
+    pub detect: bool,
+
+    /// Add a tool preset (e.g. starship, zoxide) or custom name=command pair
+    #[arg(long, value_name = "TOOL")]
+    pub add: Option<String>,
+
+    /// Remove a tool from loader configuration and delete its cached autoload file
+    #[arg(long, value_name = "TOOL")]
+    pub remove: Option<String>,
+
+    /// Invalidate and remove cached tool init files
+    #[arg(long)]
+    pub clean: bool,
+
+    /// Automatically download and install missing tools from GitHub
+    #[arg(long)]
+    pub install: bool,
+
+    /// Automatically download and install missing tools when detected or added
+    #[arg(long)]
+    pub install_missing: bool,
 }
 
 pub fn execute(cmd: SetupCommands, root: &Path) -> Result<()> {
@@ -708,7 +736,7 @@ pub fn execute_loader(args: &LoaderArgs, root: &Path) -> Result<()> {
     // numan use). The probe helper below stays unlocked so unit tests can
     // inject a fake config path without contending on the advisory lock.
     setup_subcommand_lock(root, "nushell-loader install", || {
-        execute_loader_with_probe(args, || {
+        execute_loader_with_probe_and_root(args, Some(root), || {
             let nu_exe = find_nu_executable_with_root(root)?;
             probe_nu_config_path(&nu_exe)
         })
@@ -723,11 +751,24 @@ pub fn execute_loader_with_probe<F>(args: &LoaderArgs, probe: F) -> Result<()>
 where
     F: FnOnce() -> Result<PathBuf>,
 {
+    execute_loader_with_probe_and_root(args, None, probe)
+}
+
+/// Unlocked test seam supporting root injection.
+pub fn execute_loader_with_probe_and_root<F>(
+    args: &LoaderArgs,
+    root: Option<&Path>,
+    probe: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<PathBuf>,
+{
     let config_path = probe()?;
     let config_dir = config_path
         .parent()
         .context("Nu config path has no parent directory")?;
     let loader_path = config_dir.join("loader.nu");
+    let loader_config_path = config_dir.join("loader-config.nu");
 
     std::fs::create_dir_all(config_dir).with_context(|| {
         format!(
@@ -736,15 +777,389 @@ where
         )
     })?;
 
+    // 1. Status action
+    if args.status {
+        return execute_loader_status(&loader_path, &loader_config_path, &config_path, root);
+    }
+
+    // 2. Clean action
+    if args.clean {
+        return execute_loader_clean(&loader_config_path, root);
+    }
+
+    // 3. Remove action
+    if let Some(tool_name) = &args.remove {
+        return execute_loader_remove(&loader_config_path, tool_name, root);
+    }
+
+    // Install/update loader engine file
     install_loader_file(&loader_path, args)?;
 
+    // Ensure loader-config.nu exists
+    if !loader_config_path.exists() {
+        write_loader_config(&loader_config_path, &[])?;
+    }
+
+    let should_install = args.install || args.install_missing;
+
+    // 4. Add action
+    if let Some(tool_spec) = &args.add {
+        execute_loader_add(
+            &loader_config_path,
+            tool_spec,
+            root,
+            should_install,
+            args.yes,
+        )?;
+    }
+
+    // 5. Detect action
+    if args.detect {
+        execute_loader_detect(&loader_config_path, root, should_install, args.yes)?;
+    }
+
+    // Configure config.nu if requested
     if args.configure {
         configure_config_nu(&config_path, args)?;
-    } else {
+    } else if args.add.is_none() && !args.detect {
         print_manual_snippet(&config_path);
     }
 
-    print_next_steps(&loader_path, args.configure);
+    if args.add.is_none() && !args.detect {
+        print_next_steps(&loader_path, &loader_config_path, args.configure);
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoaderConfigEntry {
+    pub name: String,
+    pub command: String,
+}
+
+pub fn read_loader_config(config_path: &Path) -> Result<Vec<LoaderConfigEntry>> {
+    if !config_path.is_file() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(config_path)
+        .with_context(|| format!("Failed to read '{}'", config_path.display()))?;
+    Ok(parse_loader_config(&content))
+}
+
+pub fn parse_loader_config(content: &str) -> Vec<LoaderConfigEntry> {
+    let mut entries = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') || trimmed.starts_with("//") {
+            continue;
+        }
+        if let Some(entry) = parse_loader_record_line(trimmed) {
+            entries.push(entry);
+        }
+    }
+    entries
+}
+
+fn parse_loader_record_line(line: &str) -> Option<LoaderConfigEntry> {
+    let name_idx = line.find("name:")?;
+    let after_name = &line[name_idx + 5..].trim_start();
+    let name_quote = after_name.chars().next()?;
+    if name_quote != '\'' && name_quote != '"' {
+        return None;
+    }
+    let name_end = after_name[1..].find(name_quote)?;
+    let name = &after_name[1..1 + name_end];
+
+    let cmd_idx = line.find("command:")?;
+    let after_cmd = &line[cmd_idx + 8..].trim_start();
+    let cmd_quote = after_cmd.chars().next()?;
+    if cmd_quote != '\'' && cmd_quote != '"' {
+        return None;
+    }
+    let cmd_end = after_cmd[1..].find(cmd_quote)?;
+    let command = &after_cmd[1..1 + cmd_end];
+
+    Some(LoaderConfigEntry {
+        name: name.to_string(),
+        command: command.to_string(),
+    })
+}
+
+pub fn render_loader_config(entries: &[LoaderConfigEntry]) -> String {
+    let mut out = String::from(
+        "# Generated by Numan. Tool configurations for nushell-loader.\n# Manage via `numan setup loader --add <tool>` or `numan setup loader --remove <tool>`.\n\nlet aidnem_loader_configs: list<record> = [\n",
+    );
+    for e in entries {
+        out.push_str(&format!(
+            "  {{ name: '{}', command: \"{}\" }}\n",
+            e.name,
+            e.command.replace('"', "\\\"")
+        ));
+    }
+    out.push_str("]\n");
+    out
+}
+
+pub fn write_loader_config(config_path: &Path, entries: &[LoaderConfigEntry]) -> Result<()> {
+    let rendered = render_loader_config(entries);
+    write_bytes_atomic(config_path, rendered.as_bytes())
+        .with_context(|| format!("Failed to write '{}'", config_path.display()))?;
+    Ok(())
+}
+
+fn resolve_vendor_autoload_dir(root: Option<&Path>) -> Option<PathBuf> {
+    if let Some(r) = root {
+        if let Ok(paths) = crate::nu::paths::NuPaths::load(r) {
+            if let Some(v) = paths.vendor_autoload_dir {
+                return Some(PathBuf::from(v));
+            }
+            if let Some(data) = paths.data_dir {
+                return Some(Path::new(&data).join("vendor").join("autoload"));
+            }
+        }
+    }
+    dirs::data_dir().map(|d| d.join("nushell").join("vendor").join("autoload"))
+}
+
+fn execute_loader_status(
+    loader_path: &Path,
+    loader_config_path: &Path,
+    config_path: &Path,
+    root: Option<&Path>,
+) -> Result<()> {
+    println!("Nushell Loader Status:");
+    println!("  Engine script: {}", loader_path.display());
+    if loader_path.is_file() {
+        println!("    Status: installed");
+    } else {
+        println!("    Status: not installed (run 'numan setup loader')");
+    }
+
+    println!("  Config file: {}", loader_config_path.display());
+    let entries = read_loader_config(loader_config_path).unwrap_or_default();
+    println!("  Configured tools ({}):", entries.len());
+
+    let autoload_dir = resolve_vendor_autoload_dir(root);
+
+    for e in &entries {
+        let bin_found = crate::cmd::setup_tools::find_binary_on_path(&e.name, root);
+        let bin_status = match bin_found {
+            Some(p) => format!("found at {}", p.display()),
+            None => "missing from PATH".to_string(),
+        };
+
+        let cache_status = if let Some(ref ad) = autoload_dir {
+            let cache_file = ad.join(format!("{}.nu", e.name));
+            if cache_file.is_file() {
+                "cached in vendor/autoload"
+            } else {
+                "not yet cached (will generate on startup)"
+            }
+        } else {
+            "unknown vendor autoload dir"
+        };
+
+        println!("    • {}:", e.name);
+        println!("        Command: {}", e.command);
+        println!("        Binary:  {}", bin_status);
+        println!("        Cache:   {}", cache_status);
+    }
+
+    if config_path.is_file() {
+        let content = std::fs::read_to_string(config_path).unwrap_or_default();
+        let sourced = config_already_sources_loader(&content);
+        println!(
+            "  Sourced in config.nu: {}",
+            if sourced {
+                "yes"
+            } else {
+                "no (run 'numan setup loader --configure')"
+            }
+        );
+    }
+
+    Ok(())
+}
+
+fn execute_loader_clean(loader_config_path: &Path, root: Option<&Path>) -> Result<()> {
+    let entries = read_loader_config(loader_config_path).unwrap_or_default();
+    let Some(autoload_dir) = resolve_vendor_autoload_dir(root) else {
+        println!("Could not determine vendor/autoload directory to clean.");
+        return Ok(());
+    };
+
+    if !autoload_dir.is_dir() {
+        println!(
+            "Vendor autoload directory '{}' does not exist.",
+            autoload_dir.display()
+        );
+        return Ok(());
+    }
+
+    let mut removed = 0;
+    for e in &entries {
+        let target = autoload_dir.join(format!("{}.nu", e.name));
+        if target.is_file() {
+            let _ = std::fs::remove_file(&target);
+            println!("Removed cache '{}'", target.display());
+            removed += 1;
+        }
+    }
+
+    println!("Cleaned {} cached loader file(s).", removed);
+    Ok(())
+}
+
+fn execute_loader_remove(
+    loader_config_path: &Path,
+    tool_name: &str,
+    root: Option<&Path>,
+) -> Result<()> {
+    let mut entries = read_loader_config(loader_config_path)?;
+    let initial_len = entries.len();
+    entries.retain(|e| e.name != tool_name);
+
+    if entries.len() == initial_len {
+        println!("Tool '{}' is not registered in loader config.", tool_name);
+        return Ok(());
+    }
+
+    write_loader_config(loader_config_path, &entries)?;
+    println!(
+        "Removed '{}' from '{}'.",
+        tool_name,
+        loader_config_path.display()
+    );
+
+    if let Some(autoload_dir) = resolve_vendor_autoload_dir(root) {
+        let target = autoload_dir.join(format!("{tool_name}.nu"));
+        if target.is_file() {
+            let _ = std::fs::remove_file(&target);
+            println!("Removed cached autoload file '{}'.", target.display());
+        }
+    }
+
+    Ok(())
+}
+
+fn execute_loader_add(
+    loader_config_path: &Path,
+    tool_spec: &str,
+    root: Option<&Path>,
+    should_install: bool,
+    yes: bool,
+) -> Result<()> {
+    let (name, command) = if let Some(preset) = crate::cmd::setup_tools::find_preset(tool_spec) {
+        (preset.name.to_string(), preset.init_command.to_string())
+    } else if let Some((n, cmd)) = tool_spec.split_once('=') {
+        (n.trim().to_string(), cmd.trim().to_string())
+    } else {
+        bail!(
+            "Unknown tool preset '{}'. Use a known preset (starship, zoxide, carapace, atuin, mise, direnv, oh-my-posh) or specify 'name=command'.",
+            tool_spec
+        );
+    };
+
+    let bin_found = crate::cmd::setup_tools::find_binary_on_path(&name, root);
+    if bin_found.is_none() {
+        if let Some(preset) = crate::cmd::setup_tools::find_preset(&name) {
+            if should_install {
+                if let Some(r) = root {
+                    crate::cmd::setup_tools::download_and_install_tool(
+                        preset,
+                        r,
+                        &Platform::detect(),
+                    )?;
+                } else {
+                    println!("Cannot install tool without a Numan root directory.");
+                }
+            } else if !yes {
+                println!(
+                    "Notice: '{}' is not currently on your PATH. Pass '--install' to download it automatically.",
+                    name
+                );
+            }
+        } else {
+            println!("Notice: '{}' binary was not found on PATH.", name);
+        }
+    }
+
+    let mut entries = read_loader_config(loader_config_path)?;
+    if let Some(existing) = entries.iter_mut().find(|e| e.name == name) {
+        existing.command = command.clone();
+        println!("Updated '{}' command in loader config.", name);
+    } else {
+        entries.push(LoaderConfigEntry {
+            name: name.clone(),
+            command: command.clone(),
+        });
+        println!(
+            "Added '{}' (command: \"{}\") to loader config.",
+            name, command
+        );
+    }
+
+    write_loader_config(loader_config_path, &entries)?;
+    Ok(())
+}
+
+fn execute_loader_detect(
+    loader_config_path: &Path,
+    root: Option<&Path>,
+    should_install: bool,
+    _yes: bool,
+) -> Result<()> {
+    let mut entries = read_loader_config(loader_config_path)?;
+    let mut added_count = 0;
+
+    for preset in crate::cmd::setup_tools::KNOWN_TOOLS {
+        let is_configured = entries.iter().any(|e| e.name == preset.name);
+        let bin_found = crate::cmd::setup_tools::find_binary_on_path(preset.binary_name, root);
+
+        if bin_found.is_some() {
+            if !is_configured {
+                entries.push(LoaderConfigEntry {
+                    name: preset.name.to_string(),
+                    command: preset.init_command.to_string(),
+                });
+                println!(
+                    "Detected '{}' on PATH -> added to loader config (command: \"{}\").",
+                    preset.display_name, preset.init_command
+                );
+                added_count += 1;
+            }
+        } else if should_install && !is_configured {
+            if let Some(r) = root {
+                println!("Installing missing preset '{}'…", preset.display_name);
+                if crate::cmd::setup_tools::download_and_install_tool(
+                    preset,
+                    r,
+                    &Platform::detect(),
+                )
+                .is_ok()
+                {
+                    entries.push(LoaderConfigEntry {
+                        name: preset.name.to_string(),
+                        command: preset.init_command.to_string(),
+                    });
+                    added_count += 1;
+                }
+            }
+        }
+    }
+
+    if added_count > 0 {
+        write_loader_config(loader_config_path, &entries)?;
+        println!(
+            "Updated '{}' with {} tool(s).",
+            loader_config_path.display(),
+            added_count
+        );
+    } else {
+        println!("No new tools detected to add.");
+    }
+
     Ok(())
 }
 
@@ -854,15 +1269,13 @@ fn print_manual_snippet(config_path: &Path) {
     println!("{CONFIG_SNIPPET}");
 }
 
-fn print_next_steps(loader_path: &Path, configured: bool) {
+fn print_next_steps(_loader_path: &Path, loader_config_path: &Path, configured: bool) {
     println!();
     println!("Next steps:");
     println!(
-        "  1. Edit '{}' and add entries to aidnem_loader_configs.",
-        loader_path.display()
+        "  1. Configure tools with 'numan setup loader --detect' or 'numan setup loader --add <tool>'.\n     (Configurations are stored in '{}')",
+        loader_config_path.display()
     );
-    println!("     Example:");
-    println!("       {{name: 'starship', command: \"starship init nu\"}}");
     if !configured {
         println!("  2. Source loader.nu from config.nu (see snippet above).");
         println!("  3. Restart Nu. First startup generates caches; later startups are faster.");
@@ -917,6 +1330,7 @@ mod tests {
             force: false,
             configure: false,
             yes: true,
+            ..Default::default()
         };
 
         install_loader_file(&loader_path, &args).unwrap();
@@ -934,6 +1348,7 @@ mod tests {
             force: false,
             configure: false,
             yes: true,
+            ..Default::default()
         };
         install_loader_file(&loader_path, &args).unwrap();
         assert_eq!(
@@ -957,6 +1372,7 @@ mod tests {
             force: false,
             configure: true,
             yes: true,
+            ..Default::default()
         };
         let err = configure_config_nu(&config_path, &args).unwrap_err();
         assert!(err.to_string().contains("symlink"));
@@ -971,6 +1387,7 @@ mod tests {
             force: false,
             configure: true,
             yes: true,
+            ..Default::default()
         };
         configure_config_nu(&config_path, &args).unwrap();
 
@@ -989,12 +1406,31 @@ mod tests {
             force: false,
             configure: true,
             yes: true,
+            ..Default::default()
         };
 
         execute_loader_with_probe(&args, || Ok(config_path.clone())).unwrap();
         assert!(dir.path().join("loader.nu").is_file());
         let config = std::fs::read_to_string(&config_path).unwrap();
         assert!(config_already_sources_loader(&config));
+    }
+
+    #[test]
+    fn loader_config_parsing_and_rendering_roundtrips() {
+        let entries = vec![
+            LoaderConfigEntry {
+                name: "starship".to_string(),
+                command: "starship init nu".to_string(),
+            },
+            LoaderConfigEntry {
+                name: "zoxide".to_string(),
+                command: "zoxide init nushell".to_string(),
+            },
+        ];
+
+        let rendered = render_loader_config(&entries);
+        let parsed = parse_loader_config(&rendered);
+        assert_eq!(entries, parsed);
     }
 
     #[test]

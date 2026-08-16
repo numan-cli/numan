@@ -76,6 +76,7 @@ src/
     nupm.rs            — `numan nupm status|inspect|import|diff`: nupm discovery + import + drift (Phase 6.1–6.3)
     completions.rs     — `numan completions <shell>`: install by default (mkdir+write); `--print` for stdout (Phase 7.3)
     setup.rs           — `numan setup nu [VERSION]|remove|path|use <path>` + `setup loader`: Nushell bootstrap + nushell-loader install
+    setup_tools.rs     — CLI shell tool presets + GitHub release binary installer (starship, zoxide, carapace, atuin, mise, direnv, oh-my-posh)
     try_cmd.rs         — `numan try <owner/name[@version]> [--no-activate]`: attempt a package for current Nu; explain compatible managed Nu versions if incompatible
     use_cmd.rs         — `numan use <version>|latest|list`: activates a previously installed managed Nu version (no auto-download); cross-minor leave/teardown (modules then plugins) + restore (plugins then modules) via activation profiles; same-target is restore-only; writes the active-version marker after a PreMutation snapshot under the root mutation lock
     activation_switch.rs — shared leave/restore orchestration for `numan use` (lower-level lifecycle, no profile-sync wrappers)
