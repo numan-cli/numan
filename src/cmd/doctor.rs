@@ -624,14 +624,10 @@ fn probe_nu_version(path: &Path, options: &DoctorOptions) -> Result<String> {
     Ok(NuVersion::from_binary(path)?.version)
 }
 
-/// Nu plugin ABI compatibility is scoped to major/minor; patch releases are compatible.
 fn versions_compatible(v1: &str, v2: &str) -> bool {
-    let parsed1 = NuVersion::parse(v1);
-    let parsed2 = NuVersion::parse(v2);
-
-    match (parsed1, parsed2) {
+    match (NuVersion::parse(v1), NuVersion::parse(v2)) {
         (Ok(p1), Ok(p2)) => p1.major == p2.major && p1.minor == p2.minor,
-        _ => false,
+        _ => v1 == v2,
     }
 }
 
