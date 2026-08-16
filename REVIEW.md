@@ -14,7 +14,7 @@ PR CI (`.github/workflows/ci.yml`):
 - **MSRV (1.88)** — `cargo +1.88 check --locked --all-targets`
 - **Package** — `cargo package --locked`
 - **Deny** — `cargo deny` (CI: `EmbarkStudios/cargo-deny-action@v2`)
-- **Real-Nu acceptance** — `cargo test -- --ignored` with Nu 0.113 on PATH (PR job skips Stage 1 / active-plugin update suites)
+- **Real-Nu acceptance** — `cargo test -- --ignored` with Nu 0.115 on PATH (PR job skips Stage 1 / active-plugin update suites)
 
 ## Severity labels
 

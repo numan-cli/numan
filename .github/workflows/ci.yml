@@ -224,7 +224,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' }}
       - uses: hustcer/setup-nu@v3
         with:
-          version: "0.113"
+          version: "0.115.0"
       - run: nu --version
       # Stage 1 and the active-plugin update matrix are production/fixture
       # acceptance suites owned by workflow_dispatch jobs. Keep this matrix on

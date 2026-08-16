@@ -23,7 +23,6 @@ desktop.ini
 *.tmp
 
 # Tooling / agent local config (not project source)
-.opencode/
 .serena/
 .claude/
 .codex/
