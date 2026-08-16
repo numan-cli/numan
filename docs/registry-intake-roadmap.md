@@ -1,6 +1,12 @@
 # Registry Intake Roadmap
 
-**Status:** The Stage 1 lifecycle harness is implemented; authoritative production proof remains a manual workflow. The official registry is live with a production trust root. Continue growing the index in small curated batches while strengthening intake automation and promotion evidence. See the [README roadmap](../README.md#roadmap) for overall release milestones.
+**Status:** The Stage 1 lifecycle harness is implemented; authoritative production proof remains a manual workflow. The official registry is live with a production trust root. The August 2026 Intake Process Reform (governed by [ADR 0001](adr/0001-ecosystem-trust-upstream-contribution-fork-stewardship.md) and PR #113) has unlocked four key intake lanes across the ecosystem:
+- **P1: Commit-Snapshot Intake** (`0.0.0-snapshot.<date>.<sha>` for unreleased/tag-less source repositories).
+- **P2: Non-Binary Archive Intake** (`intake-archive.py` for standalone Nu scripts, modules, and custom completions).
+- **P4: Fork Stewardship** (`numan-maintained` distribution identity and transparent upstream attribution).
+- **P6: Provisional Evidence Tier** (`evidence_tier: provisional` with required deferral reasons for credential-dependent packages).
+
+Continue growing the index in small curated batches while strengthening intake automation and promotion evidence. See the [README roadmap](../README.md#roadmap) for overall release milestones.
 
 Numan should eventually make package onboarding feel close to "point it at a repo" while preserving the registry trust model. The target is not blind publishing. The target is a repeatable intake pipeline that can discover package metadata, validate artifacts, produce a reviewable registry candidate, and explain exactly what still needs human judgment.
 
