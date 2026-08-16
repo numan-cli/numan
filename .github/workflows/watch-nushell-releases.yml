@@ -71,13 +71,18 @@ jobs:
           EOF
           )
 
-          PR_URL=$(gh pr create \
-            --title "feat(release): track official Nushell ${VERSION} release" \
-            --body "${PR_BODY}" \
-            --head "${BRANCH}" \
-            --base master)
-
-          echo "Created PR: ${PR_URL}"
+          EXISTING_PR=$(gh pr list --head "${BRANCH}" --json url --jq '.[0].url // empty')
+          if [ -n "${EXISTING_PR}" ]; then
+            echo "PR already exists for ${BRANCH}: ${EXISTING_PR}"
+            PR_URL="${EXISTING_PR}"
+          else
+            PR_URL=$(gh pr create \
+              --title "feat(release): track official Nushell ${VERSION} release" \
+              --body "${PR_BODY}" \
+              --head "${BRANCH}" \
+              --base master)
+            echo "Created PR: ${PR_URL}"
+          fi
 
           # Enable auto-merge
           gh pr merge "${PR_URL}" --auto --squash || echo "Auto-merge could not be enabled; manual merge required."

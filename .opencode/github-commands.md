@@ -84,7 +84,7 @@ behavior below applies whether the review is triggered by `/oc review` or by PR 
 
       ```bash
       gh api repos/{owner}/{repo}/pulls/{pr_number}/comments \
-        -f body=@finding.md \
+        -F body=@finding.md \
         -f path="src/example.ts" \
         -F line=42 \
         -f commit_id="$HEAD_SHA"
@@ -98,7 +98,7 @@ behavior below applies whether the review is triggered by `/oc review` or by PR 
 
       ```bash
       gh api repos/{owner}/{repo}/pulls/{pr_number}/comments \
-        -f body=@finding.md \
+        -F body=@finding.md \
         -f path="src/example.ts" \
         -f subject_type=file
       ```
@@ -227,7 +227,7 @@ the current pull request.
    gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -F id=THREAD_ID
    ```
 
-   Write the reason to a temp file (`thread.md`) and pass `-f body=@thread.md` when it is
+   Write the reason to a temp file (`thread.md`) and pass `-F body=@thread.md` when it is
    long, so multiline Markdown survives intact. Only leave open a thread you genuinely could
    not address — no fix and no justification — and say why in the summary.
 4. **Your final reply text IS the single summary comment** (the action posts it). Do NOT post

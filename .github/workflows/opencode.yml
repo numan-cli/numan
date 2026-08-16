@@ -59,11 +59,27 @@ jobs:
         run: |
           gh api "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" -f content=eyes || true
 
+      - name: Resolve head branch
+        if: steps.guard.outputs.allowed == 'true'
+        id: branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "ref=${{ github.head_ref }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+            REF=$(gh pr view "${{ github.event.issue.number }}" -R "${{ github.repository }}" --json headRefName --jq .headRefName)
+            echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout repository
         if: steps.guard.outputs.allowed == 'true'
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/head', github.event.pull_request.number) || github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || github.sha }}
+          ref: ${{ steps.branch.outputs.ref }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -80,8 +96,10 @@ jobs:
         run: |
           if [[ -z "${OPENCODE_API_KEY:-}" ]]; then
             echo "::notice::OPENCODE_API_KEY secret is not set - skipping OpenCode run"
+            echo "available=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "available=true" >> "$GITHUB_OUTPUT"
 
           probe_zen() {
             local id="$1"
@@ -197,7 +215,7 @@ jobs:
           exit 1
 
       - name: Get opencode version and asset
-        if: steps.guard.outputs.allowed == 'true'
+        if: steps.guard.outputs.allowed == 'true' && steps.probe.outputs.available == 'true'
         id: version
         shell: bash
         run: |
@@ -205,8 +223,8 @@ jobs:
           VERSION=$(echo "${RELEASE}" | jq -r '.tag_name // empty')
           URL=$(echo "${RELEASE}" | jq -r '.assets[] | select(.name=="opencode-linux-x64.tar.gz") | .browser_download_url // empty')
           DIGEST=$(echo "${RELEASE}" | jq -r '.assets[] | select(.name=="opencode-linux-x64.tar.gz") | .digest // empty' | sed 's/^sha256://')
-          if [[ -z "${VERSION}" || -z "${URL}" ]]; then
-            echo "::error::Failed to fetch opencode release metadata"
+          if [[ -z "${VERSION}" || -z "${URL}" || -z "${DIGEST}" ]]; then
+            echo "::error::Failed to fetch opencode release metadata or digest"
             exit 1
           fi
           {
@@ -216,7 +234,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Cache opencode
-        if: steps.guard.outputs.allowed == 'true'
+        if: steps.guard.outputs.allowed == 'true' && steps.probe.outputs.available == 'true'
         id: cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -224,7 +242,7 @@ jobs:
           key: opencode-${{ runner.os }}-${{ runner.arch }}-${{ steps.version.outputs.version }}
 
       - name: Install opencode
-        if: steps.guard.outputs.allowed == 'true' && steps.cache.outputs.cache-hit != 'true'
+        if: steps.guard.outputs.allowed == 'true' && steps.probe.outputs.available == 'true' && steps.cache.outputs.cache-hit != 'true'
         shell: bash
         env:
           OPENCODE_URL: ${{ steps.version.outputs.url }}
@@ -243,14 +261,14 @@ jobs:
           rm -f "${TAR_FILE}"
 
       - name: Run opencode
-        if: steps.guard.outputs.allowed == 'true'
+        if: steps.guard.outputs.allowed == 'true' && steps.probe.outputs.available == 'true'
         id: run_opencode
         shell: bash
         env:
           ALIBABA_TOKEN_PLAN_API_KEY: ${{ secrets.ALIBABA_TOKEN_PLAN_API_KEY }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
+          CONTEXT7_API_KEY: ${{ github.event_name == 'issue_comment' && secrets.CONTEXT7_API_KEY || '' }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MODEL: ${{ steps.probe.outputs.model }}

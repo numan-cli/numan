@@ -32,7 +32,7 @@ def ensure_http_url(url: str) -> None:
         raise ValueError(f"URL must use http(s), got {url!r}")
     parsed = urlparse(url)
     try:
-        has_host = parsed.hostname is not None
+        has_host = bool(parsed.hostname)
     except ValueError:
         has_host = False
     if parsed.scheme.lower() not in HTTP_SCHEMES or not has_host:
@@ -138,28 +138,36 @@ def write_state(state_file: Path, new_state: dict) -> None:
     print(f"Updated {state_file}")
 
 
-def update_releases_markdown(releases_md: Path, new_entry: str, tag_name: str) -> bool:
+def update_releases_markdown(releases_md: Path, new_entry: str, tag_name: str, force: bool = False) -> bool:
     """Prepend or insert release entry into releases markdown document."""
     existing_content = ""
     if releases_md.exists():
         existing_content = releases_md.read_text(encoding="utf-8")
 
-    if f"## Nushell {tag_name}" in existing_content:
-        return False
-
-    header = (
-        "# Official Nushell Release & Stewardship Log\n\n"
-        "Chronological ledger of official Nushell releases, changelogs, ABI bands, and ecosystem impact checklists.\n\n"
-        "---\n\n"
-    )
-    if not existing_content.startswith("# Official Nushell Release & Stewardship Log"):
-        updated_content = header + new_entry + existing_content
+    section_header = f"## Nushell {tag_name}"
+    if section_header in existing_content:
+        if not force:
+            return False
+        # If force is true, replace the existing section up to next section header or EOF
+        pattern = re.compile(
+            rf"^## Nushell {re.escape(tag_name)}.*?(?=(?:^## Nushell |\Z))",
+            re.MULTILINE | re.DOTALL,
+        )
+        updated_content = pattern.sub(new_entry.strip() + "\n\n", existing_content)
     else:
-        parts = existing_content.split("---\n\n", 1)
-        if len(parts) == 2:
-            updated_content = parts[0] + "---\n\n" + new_entry + parts[1]
+        header = (
+            "# Official Nushell Release & Stewardship Log\n\n"
+            "Chronological ledger of official Nushell releases, changelogs, ABI bands, and ecosystem impact checklists.\n\n"
+            "---\n\n"
+        )
+        if not existing_content.startswith("# Official Nushell Release & Stewardship Log"):
+            updated_content = header + new_entry + existing_content
         else:
-            updated_content = existing_content + "\n" + new_entry
+            parts = existing_content.split("---\n\n", 1)
+            if len(parts) == 2:
+                updated_content = parts[0] + "---\n\n" + new_entry + parts[1]
+            else:
+                updated_content = existing_content + "\n" + new_entry
 
     releases_md.parent.mkdir(parents=True, exist_ok=True)
     releases_md.write_text(updated_content, encoding="utf-8")
@@ -265,7 +273,7 @@ def process_release(
         "blog_url": blog_url,
     }
     write_state(state_file, new_state)
-    update_releases_markdown(releases_md, new_entry, tag_name)
+    update_releases_markdown(releases_md, new_entry, tag_name, force=force)
     write_github_actions_outputs(is_new=True, tag_name=tag_name, github_url=github_url, blog_url=blog_url)
     write_github_step_summary(tag_name, date_str, github_url, blog_url, new_entry)
     return 0
@@ -281,12 +289,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error fetching release: {e}", file=sys.stderr)
         return 1
 
-    return process_release(
-        release=release,
-        write=args.write,
-        dry_run=args.dry_run,
-        force=args.force,
-    )
+    try:
+        return process_release(
+            release=release,
+            write=args.write,
+            dry_run=args.dry_run,
+            force=args.force,
+        )
+    except ValueError as e:
+        print(f"Error processing release: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

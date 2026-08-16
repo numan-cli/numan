@@ -165,6 +165,13 @@ class WatchNuReleasesTests(unittest.TestCase):
                 updated = self.mod.update_releases_markdown(md_file, entry_116, "0.116.0")
                 self.assertFalse(updated)
 
+                # Case 4: Version already present with force=True -> updates
+                entry_116_modified = self.mod.generate_release_entry("0.116.0", "2026-09-16", "https://github.com/new", None, 0, 116)
+                updated = self.mod.update_releases_markdown(md_file, entry_116_modified, "0.116.0", force=True)
+                self.assertTrue(updated)
+                content = md_file.read_text(encoding="utf-8")
+                self.assertIn("https://github.com/new", content)
+
     def test_github_actions_outputs_and_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
             gh_output = Path(tmp) / "github_output"
@@ -228,6 +235,12 @@ class WatchNuReleasesTests(unittest.TestCase):
                 code = self.mod.process_release(release, write=True, dry_run=False, force=True, state_file=state_file, releases_md=md_file)
                 self.assertEqual(code, 0)
 
+    def test_process_release_invalid_tag_raises(self):
+        with self.assertRaises(ValueError):
+            self.mod.process_release({"tag_name": ""}, write=False, dry_run=True, force=False)
+        with self.assertRaises(ValueError):
+            self.mod.process_release({"tag_name": "invalid-tag"}, write=False, dry_run=True, force=False)
+
     def test_main_cli_execution(self):
         fake_release = {
             "tag_name": "v0.115.0",
@@ -249,6 +262,14 @@ class WatchNuReleasesTests(unittest.TestCase):
                 code = self.mod.main(["--dry-run"])
             self.assertEqual(code, 1)
             self.assertIn("Error fetching release: network failure", err.getvalue())
+
+    def test_main_cli_value_error_handled(self):
+        with mock.patch.object(self.mod, "fetch_latest_release", return_value={"tag_name": "invalid"}):
+            err = io.StringIO()
+            with redirect_stderr(err):
+                code = self.mod.main(["--dry-run"])
+            self.assertEqual(code, 1)
+            self.assertIn("Error processing release:", err.getvalue())
 
 
 if __name__ == "__main__":
