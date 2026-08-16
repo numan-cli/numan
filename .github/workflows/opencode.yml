@@ -233,9 +233,11 @@ jobs:
           mkdir -p "$HOME/.opencode/bin"
           TAR_FILE="$(mktemp --suffix=.tar.gz)"
           curl -fsSL -o "${TAR_FILE}" "${OPENCODE_URL}"
-          if [[ -n "${OPENCODE_DIGEST:-}" ]]; then
-            echo "${OPENCODE_DIGEST}  ${TAR_FILE}" | sha256sum -c -
+          if [[ -z "${OPENCODE_DIGEST:-}" ]]; then
+            echo "::error::Missing sha256 digest for opencode asset"
+            exit 1
           fi
+          echo "${OPENCODE_DIGEST}  ${TAR_FILE}" | sha256sum -c -
           tar -xzf "${TAR_FILE}" -C "$HOME/.opencode/bin" opencode
           chmod 755 "$HOME/.opencode/bin/opencode"
           rm -f "${TAR_FILE}"
