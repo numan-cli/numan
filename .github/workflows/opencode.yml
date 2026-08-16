@@ -6,14 +6,23 @@ on:
   pull_request_review_comment:
     types: [created]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
 jobs:
   opencode:
     if: |
+      (github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request != null) &&
       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
-      (contains(github.event.comment.body, ' /oc') ||
-      startsWith(github.event.comment.body, '/oc') ||
-      contains(github.event.comment.body, ' /opencode') ||
-      startsWith(github.event.comment.body, '/opencode'))
+      (startsWith(github.event.comment.body, '/oc ') ||
+      github.event.comment.body == '/oc' ||
+      startsWith(github.event.comment.body, '/opencode ') ||
+      github.event.comment.body == '/opencode' ||
+      contains(github.event.comment.body, ' /oc ') ||
+      endsWith(github.event.comment.body, ' /oc') ||
+      contains(github.event.comment.body, ' /opencode ') ||
+      endsWith(github.event.comment.body, ' /opencode'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -21,6 +30,7 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+      actions: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -36,6 +46,11 @@ jobs:
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
+          if [[ -z "${OPENCODE_API_KEY:-}" ]]; then
+            echo "::error::OPENCODE_API_KEY secret is required but not set"
+            exit 1
+          fi
+
           probe_zen() {
             local id="$1"
             local url="https://opencode.ai/zen/v1/chat/completions"
@@ -58,8 +73,10 @@ jobs:
             MODEL="opencode/gpt-5.6-luna"
             VARIANT="max"
             if probe_zen gpt-5.6-luna; then
-              echo "model=${MODEL}" >> "$GITHUB_OUTPUT"
-              echo "variant=${VARIANT}" >> "$GITHUB_OUTPUT"
+              {
+                echo "model=${MODEL}"
+                echo "variant=${VARIANT}"
+              } >> "$GITHUB_OUTPUT"
               exit 0
             fi
             echo "::warning::Review model (opencode/gpt-5.6-luna) unavailable - falling back to big-pickle"
@@ -68,83 +85,102 @@ jobs:
           fi
 
           if probe_zen big-pickle; then
-            echo "model=${MODEL}" >> "$GITHUB_OUTPUT"
-            echo "variant=${VARIANT}" >> "$GITHUB_OUTPUT"
+            {
+              echo "model=${MODEL}"
+              echo "variant=${VARIANT}"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "::warning::Primary model (${MODEL}) unavailable - trying free fallback (nemotron-3-ultra-free)"
           MODEL="opencode/nemotron-3-ultra-free"
           VARIANT=""
           if probe_zen nemotron-3-ultra-free; then
-            echo "model=${MODEL}" >> "$GITHUB_OUTPUT"
-            echo "variant=${VARIANT}" >> "$GITHUB_OUTPUT"
+            {
+              echo "model=${MODEL}"
+              echo "variant=${VARIANT}"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "::warning::Nemotron 3 Ultra free unavailable - trying free fallback (mistral-medium-3.5)"
-          MODEL="mistral-medium-3.5"
-          VARIANT=""
-          if probe_zen mistral-medium-3.5; then
-            echo "model=${MODEL}" >> "$GITHUB_OUTPUT"
-            echo "variant=${VARIANT}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "::warning::Mistral Medium 3.5 unavailable - trying free fallback (nemotron-3.5-lightning-free)"
+          echo "::warning::Nemotron 3 Ultra free unavailable - trying free fallback (nemotron-3.5-lightning-free)"
           MODEL="opencode/nemotron-3.5-lightning-free"
           VARIANT=""
           if probe_zen nemotron-3.5-lightning-free; then
-            echo "model=${MODEL}" >> "$GITHUB_OUTPUT"
-            echo "variant=${VARIANT}" >> "$GITHUB_OUTPUT"
+            {
+              echo "model=${MODEL}"
+              echo "variant=${VARIANT}"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "::warning::Nemotron 3.5 Lightning free unavailable - trying free fallback (deepseek-v4-flash-free)"
-          MODEL="opencode/deepseek-v4-flash-free"
+          echo "::warning::Nemotron 3.5 Lightning free unavailable - trying free fallback (deepseek-v4-flash)"
+          MODEL="opencode/deepseek-v4-flash"
           VARIANT=""
-          if probe_zen deepseek-v4-flash-free; then
-            echo "model=${MODEL}" >> "$GITHUB_OUTPUT"
-            echo "variant=${VARIANT}" >> "$GITHUB_OUTPUT"
+          if probe_zen deepseek-v4-flash; then
+            {
+              echo "model=${MODEL}"
+              echo "variant=${VARIANT}"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "::warning::DeepSeek V4 Flash free unavailable - falling back to alibaba-token-plan"
+          echo "::warning::DeepSeek V4 Flash unavailable - falling back to alibaba-token-plan"
           MODEL="alibaba-token-plan/qwen3.8-max"
           VARIANT=""
-          if ! curl -sf --max-time 15 \
+          if curl -sf --max-time 15 \
             -X POST "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions" \
             -H "Authorization: Bearer ${ALIBABA_TOKEN_PLAN_API_KEY}" \
             -H "Content-Type: application/json" \
             -d '{"model":"qwen3.8-max","messages":[{"role":"user","content":"ping"}],"max_tokens":1}' \
             >/dev/null 2>&1; then
-            echo "::warning::alibaba-token-plan unavailable - trying DashScope"
-            MODEL="alibaba/qwen3.8-max"
-            if ! curl -sf --max-time 15 \
-              -X POST "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions" \
-              -H "Authorization: Bearer ${DASHSCOPE_API_KEY}" \
-              -H "Content-Type: application/json" \
-              -d '{"model":"qwen3.8-max","messages":[{"role":"user","content":"ping"}],"max_tokens":1}' \
-              >/dev/null 2>&1; then
-              echo "::warning::DashScope unavailable - trying paid Nemotron 3 Ultra"
-              MODEL="opencode/nemotron-3-ultra"
-              VARIANT=""
-              if probe_zen nemotron-3-ultra; then
-                echo "model=${MODEL}" >> "$GITHUB_OUTPUT"
-                echo "variant=${VARIANT}" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-              echo "::warning::All models unavailable"
-            fi
+            {
+              echo "model=${MODEL}"
+              echo "variant=${VARIANT}"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          echo "model=${MODEL}" >> "$GITHUB_OUTPUT"
-          echo "variant=${VARIANT}" >> "$GITHUB_OUTPUT"
+          echo "::warning::alibaba-token-plan unavailable - trying DashScope"
+          MODEL="alibaba/qwen3.8-max"
+          VARIANT=""
+          if curl -sf --max-time 15 \
+            -X POST "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions" \
+            -H "Authorization: Bearer ${DASHSCOPE_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{"model":"qwen3.8-max","messages":[{"role":"user","content":"ping"}],"max_tokens":1}' \
+            >/dev/null 2>&1; then
+            {
+              echo "model=${MODEL}"
+              echo "variant=${VARIANT}"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::warning::DashScope unavailable - trying paid Nemotron 3 Ultra"
+          MODEL="opencode/nemotron-3-ultra"
+          VARIANT=""
+          if probe_zen nemotron-3-ultra; then
+            {
+              echo "model=${MODEL}"
+              echo "variant=${VARIANT}"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::error::All models unavailable"
+          exit 1
 
-      # Replicates anomalyco/opencode/github@v1.18.18 (composite action) inline so
-      # the run step can retry. The composite action cannot wrap itself: classic
-      # Actions has no step retry and the CLI commits/pushes from this checkout,
-      # so on a rejected push (remote advanced mid-run) the work would be lost.
-      - name: Get opencode version
+      - name: Get opencode version and asset
         id: version
         shell: bash
         run: |
-          VERSION=$(curl -sf https://api.github.com/repos/anomalyco/opencode/releases/latest | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)
-          echo "version=${VERSION:-latest}" >> "$GITHUB_OUTPUT"
+          RELEASE=$(curl -sf https://api.github.com/repos/anomalyco/opencode/releases/latest)
+          VERSION=$(echo "${RELEASE}" | jq -r '.tag_name // empty')
+          URL=$(echo "${RELEASE}" | jq -r '.assets[] | select(.name=="opencode-linux-x64.tar.gz") | .browser_download_url // empty')
+          DIGEST=$(echo "${RELEASE}" | jq -r '.assets[] | select(.name=="opencode-linux-x64.tar.gz") | .digest // empty' | sed 's/^sha256://')
+          if [[ -z "${VERSION}" || -z "${URL}" || -z "${DIGEST}" ]]; then
+            echo "::error::Failed to fetch opencode release metadata"
+            exit 1
+          fi
+          {
+            echo "version=${VERSION}"
+            echo "url=${URL}"
+            echo "digest=${DIGEST}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Cache opencode
         id: cache
@@ -156,7 +192,17 @@ jobs:
       - name: Install opencode
         if: steps.cache.outputs.cache-hit != 'true'
         shell: bash
-        run: curl -fsSL https://opencode.ai/install | bash
+        env:
+          OPENCODE_URL: ${{ steps.version.outputs.url }}
+          OPENCODE_DIGEST: ${{ steps.version.outputs.digest }}
+        run: |
+          mkdir -p "$HOME/.opencode/bin"
+          TAR_FILE="$(mktemp --suffix=.tar.gz)"
+          curl -fsSL -o "${TAR_FILE}" "${OPENCODE_URL}"
+          echo "${OPENCODE_DIGEST}  ${TAR_FILE}" | sha256sum -c -
+          tar -xzf "${TAR_FILE}" -C "$HOME/.opencode/bin" opencode
+          chmod 755 "$HOME/.opencode/bin/opencode"
+          rm -f "${TAR_FILE}"
 
       - name: Run opencode
         id: run_opencode
@@ -172,6 +218,9 @@ jobs:
           set -u
           echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.opencode/bin:$PATH"
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           run_opencode() {
             opencode github run
@@ -192,7 +241,7 @@ jobs:
           if [[ -n "${BRANCH}" && "${BRANCH}" != "HEAD" ]]; then
             echo "==> salvaging agent commits onto updated remote (branch: ${BRANCH})"
             git config --local http.https://github.com/.extraheader \
-              "AUTHORIZATION: basic $(printf "x-access-token:${GH_TOKEN}" | base64 -w 0)" 2>/dev/null || true
+              "AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w 0)" 2>/dev/null || true
             git fetch --prune origin 2>/dev/null || true
             if git rev-parse --verify "origin/${BRANCH}" >/dev/null 2>&1; then
               if [[ "$(git rev-list --count "origin/${BRANCH}"..HEAD 2>/dev/null || echo 0)" -gt 0 ]]; then
