@@ -9,24 +9,24 @@ carefully before answering.
 
 The workflow probes and selects the agent model per command (see `.github/workflows/opencode.yml`):
 
-| Command      | Primary model                          | Fallback chain                                                                                |
-| ------------ | -------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `/oc review` | `opencode/gpt-5.6-luna` (`variant: max`) | `opencode/big-pickle` → `opencode/nemotron-3-ultra-free` → `opencode/nemotron-3.5-lightning-free` → `opencode/deepseek-v4-flash` → `alibaba-token-plan/qwen3.8-max` → `alibaba/qwen3.8-max` → `opencode/nemotron-3-ultra` |
-| `/oc fix`    | `opencode/big-pickle`                  | `opencode/nemotron-3-ultra-free` → `opencode/nemotron-3.5-lightning-free` → `opencode/deepseek-v4-flash` → `alibaba-token-plan/qwen3.8-max` → `alibaba/qwen3.8-max` → `opencode/nemotron-3-ultra` |
+| Command      | Primary model                          | Fallback chain                                   |
+| ------------ | -------------------------------------- | ------------------------------------------------ |
+| `/oc review` | `opencode/gpt-5.6-luna` (`variant: max`) | `opencode/big-pickle` → `alibaba-token-plan/qwen3.8-max` → `alibaba/qwen3.8-max` |
+| `/oc fix`    | `opencode/big-pickle`                  | `alibaba-token-plan/qwen3.8-max` → `alibaba/qwen3.8-max` |
 
 Each model is probed with a minimal request before the run; a disabled or unavailable model
 falls through to the next in the chain. The `opencode/*` models are probed through the
-opencode.ai `/zen` gateway; the two `alibaba/*` models are probed through their direct
-compatible-mode endpoints (`token-plan.ap-southeast-1.maas.aliyuncs.com` and
-`dashscope.aliyuncs.com`) behind the `ALIBABA_TOKEN_PLAN_API_KEY` / `DASHSCOPE_API_KEY`
-secrets. `/oc review` runs are short and judgment-heavy, so the cost-efficient
-`gpt-5.6-luna` runs with `max` reasoning effort to maximize finding quality while keeping
-per-run cost in the tens of cents; `/oc fix` runs are long agentic edit loops, where the
-free big-pickle keeps cost at $0. Note that `big-pickle` advertises no reasoning-effort
-variants, so `variant: max` is only applied when `gpt-5.6-luna` is actually selected — the
-probe clears it on any fallback. Review runs send code snippets to an OpenAI-hosted model —
-acceptable for public repos; keep in mind OpenAI may retain requests for evaluation
-purposes.
+opencode.ai `/zen` gateway; `alibaba-token-plan/qwen3.8-max` is probed through its direct
+compatible-mode endpoint (`token-plan.ap-southeast-1.maas.aliyuncs.com`) behind the
+`ALIBABA_TOKEN_PLAN_API_KEY` secret. `alibaba/qwen3.8-max` is an unprobed DashScope
+fallback used when all other probes fail. `/oc review` runs are short and
+judgment-heavy, so the cost-efficient `gpt-5.6-luna` runs with `max` reasoning effort to
+maximize finding quality while keeping per-run cost in the tens of cents; `/oc fix` runs
+are long agentic edit loops, where the free `big-pickle` keeps cost at $0. Note that
+`big-pickle` advertises no reasoning-effort variants, so `variant: max` is only applied
+when `gpt-5.6-luna` is actually selected — the probe clears it on any fallback. Review
+runs send code snippets to an OpenAI-hosted model — acceptable for public repos; keep in
+mind OpenAI may retain requests for evaluation purposes.
 
 ## Using context7
 
@@ -57,10 +57,6 @@ agent's training data can go stale. Use its `resolve-library-id` and `query-docs
 3. Use `use context7` in tool choice; keep queries narrow so results stay small and relevant.
 
 ## `/oc review`
-
-A review also runs **automatically when a pull request is first opened** (the workflow's
-`pull_request: [opened]` trigger), in addition to on-demand. It does NOT re-run on later
-commits to the same PR.
 
 When a user message is exactly `/oc review` or begins with `/oc review`, treat it as a
 request to review the current pull request. Extra text after the shortcut, e.g.
@@ -141,7 +137,7 @@ You are reviewing, not editing:
   fenced block so GitHub renders a one-click **Commit suggestion** button right in the
   comment:
 
-  ````
+  ````text
   ```suggestion
   <exact replacement lines — must match the current file content>
   ```

@@ -43,6 +43,10 @@ class WatchNuReleasesTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.mod = load_mod()
 
+    def setUp(self) -> None:
+        os.environ.pop("GITHUB_OUTPUT", None)
+        os.environ.pop("GITHUB_STEP_SUMMARY", None)
+
     def test_ensure_http_url_valid(self):
         self.mod.ensure_http_url("https://api.github.com/repos/nushell/nushell/releases/latest")
         self.mod.ensure_http_url("http://example.com/test")
@@ -248,12 +252,17 @@ class WatchNuReleasesTests(unittest.TestCase):
             "published_at": "2026-08-15T12:00:00Z",
             "body": "Nushell release",
         }
-        with mock.patch.object(self.mod, "fetch_latest_release", return_value=fake_release):
-            buf = io.StringIO()
-            with redirect_stdout(buf):
-                code = self.mod.main(["--dry-run"])
-            self.assertEqual(code, 0)
-            self.assertIn("Detected latest release: 0.115.0", buf.getvalue())
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "latest-nu-version.json"
+            md_file = Path(tmp) / "nushell-releases.md"
+            with mock.patch.object(self.mod, "fetch_latest_release", return_value=fake_release), \
+                 mock.patch.object(self.mod, "STATE_FILE", state_file), \
+                 mock.patch.object(self.mod, "RELEASES_MD", md_file):
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    code = self.mod.main(["--dry-run"])
+                self.assertEqual(code, 0)
+                self.assertIn("Detected latest release: 0.115.0", buf.getvalue())
 
     def test_main_cli_fetch_error_handled(self):
         with mock.patch.object(self.mod, "fetch_latest_release", side_effect=OSError("network failure")):

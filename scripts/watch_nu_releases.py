@@ -72,7 +72,10 @@ def fetch_latest_release(url: str = NU_RELEASES_API) -> dict:
 
 def parse_version_tuple(v_str: str) -> tuple[int, int, int]:
     """Parse version string into (major, minor, patch) integer tuple."""
-    clean = v_str.lstrip("v").split()[0].split("-")[0].split("+")[0]
+    tokens = v_str.lstrip("v").split()
+    if not tokens:
+        return (0, 0, 0)
+    clean = tokens[0].split("-")[0].split("+")[0]
     parts = clean.split(".")
     try:
         return (int(parts[0]), int(parts[1]), int(parts[2]) if len(parts) > 2 else 0)
@@ -144,13 +147,13 @@ def update_releases_markdown(releases_md: Path, new_entry: str, tag_name: str, f
     if releases_md.exists():
         existing_content = releases_md.read_text(encoding="utf-8")
 
-    section_header = f"## Nushell {tag_name}"
-    if section_header in existing_content:
+    section_header = re.compile(rf"^## Nushell {re.escape(tag_name)}(?=\s|$)", re.MULTILINE)
+    if section_header.search(existing_content):
         if not force:
             return False
         # If force is true, replace the existing section up to next section header or EOF
         pattern = re.compile(
-            rf"^## Nushell {re.escape(tag_name)}.*?(?=(?:^## Nushell |\Z))",
+            rf"^## Nushell {re.escape(tag_name)}(?=\s|$).*?(?=(?:^## Nushell |\Z))",
             re.MULTILINE | re.DOTALL,
         )
         updated_content = pattern.sub(new_entry.strip() + "\n\n", existing_content)

@@ -3,11 +3,16 @@ name: opencode
 on:
   issue_comment:
     types: [created]
-  workflow_dispatch:
+
+concurrency:
+  group: opencode-${{ github.event.issue.number || github.head_ref }}
+  cancel-in-progress: false
 
 jobs:
   opencode:
     if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
       (contains(github.event.comment.body, ' /oc') ||
       startsWith(github.event.comment.body, '/oc') ||
@@ -26,14 +31,24 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
-            IS_FORK=$(gh pr view "${{ github.event.issue.number }}" -R "${{ github.repository }}" --json isCrossRepository --jq .isCrossRepository)
-            if [[ "$IS_FORK" == "true" ]]; then
-              echo "::notice::Skipping /oc command on fork PR for security"
+          if [[ "${EVENT_NAME}" == "issue_comment" ]]; then
+            PR_INFO=$(gh pr view "${ISSUE_NUMBER}" -R "${REPOSITORY}" --json isCrossRepository,headRefName 2>&1) || {
+              echo "::warning::Failed to look up PR #${ISSUE_NUMBER}; denying for safety"
+              echo "allowed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            }
+            IS_FORK=$(echo "${PR_INFO}" | jq -r '.isCrossRepository')
+            HEAD_REF=$(echo "${PR_INFO}" | jq -r '.headRefName')
+            if [[ "${IS_FORK}" != "false" ]] || [[ -z "${HEAD_REF}" ]]; then
+              echo "::notice::Skipping /oc command on fork PR or non-PR comment for security"
               echo "allowed=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
+            echo "head_ref=${HEAD_REF}" >> "$GITHUB_OUTPUT"
           fi
           echo "allowed=true" >> "$GITHUB_OUTPUT"
 
@@ -50,15 +65,15 @@ jobs:
         id: branch
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ steps.guard.outputs.head_ref }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "ref=${{ github.head_ref }}" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event_name }}" == "issue_comment" ]]; then
-            REF=$(gh pr view "${{ github.event.issue.number }}" -R "${{ github.repository }}" --json headRefName --jq .headRefName)
-            echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+          if [[ -n "${HEAD_REF}" ]]; then
+            printf 'ref=%s\n' "${HEAD_REF}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${REF_NAME}" ]]; then
+            printf 'ref=%s\n' "${REF_NAME}" >> "$GITHUB_OUTPUT"
           else
-            echo "ref=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            printf 'ref=HEAD\n' >> "$GITHUB_OUTPUT"
           fi
 
       - name: Checkout repository
@@ -102,6 +117,7 @@ jobs:
             if probe_zen gpt-5.6-luna; then
               echo "model=${MODEL}" >> "$GITHUB_OUTPUT"
               echo "variant=${VARIANT}" >> "$GITHUB_OUTPUT"
+              echo "available=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             echo "::warning::Review model (opencode/gpt-5.6-luna) unavailable - falling back to big-pickle"
@@ -111,6 +127,7 @@ jobs:
           if probe_zen big-pickle; then
             echo "model=${MODEL}" >> "$GITHUB_OUTPUT"
             echo "variant=${VARIANT}" >> "$GITHUB_OUTPUT"
+            echo "available=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "::warning::Primary model (${MODEL}) unavailable - falling back to alibaba-token-plan"
@@ -127,6 +144,7 @@ jobs:
           fi
           echo "model=${MODEL}" >> "$GITHUB_OUTPUT"
           echo "variant=${VARIANT}" >> "$GITHUB_OUTPUT"
+          echo "available=true" >> "$GITHUB_OUTPUT"
       # Replicates anomalyco/opencode/github@v1.18.18 (composite action) inline so
       # the run step can retry. The composite action cannot wrap itself: classic
       # Actions has no step retry and the CLI commits/pushes from this checkout,
