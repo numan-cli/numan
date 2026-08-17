@@ -109,7 +109,9 @@ fn setup_loader_add_rejects_traversal_names() {
     assert!(result.is_err(), "path traversal name should be rejected");
     let msg = format!("{:#}", result.unwrap_err());
     assert!(
-        msg.contains("may only contain") || msg.contains("must be 1-64"),
+        msg.contains("may only contain")
+            || msg.contains("must be 1-64")
+            || msg.contains("must start with"),
         "expected name validation error, got: {msg}"
     );
 }
@@ -195,6 +197,7 @@ fn setup_loader_detect_discovers_installed_tool() {
     } else {
         "starship"
     });
+    std::fs::write(&fake_starship, b"fake").unwrap();
     // Ensure starship is executable so Unix systems detect it
     #[cfg(unix)]
     {
