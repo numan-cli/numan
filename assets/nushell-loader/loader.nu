@@ -12,7 +12,16 @@ mkdir $autoload_dir
 let loader_config_file = ($nu.config-path | path dirname | path join 'loader-config.nu')
 
 let aidnem_loader_configs: list<record> = if ($loader_config_file | path exists) {
-  (open $loader_config_file)
+  try {
+    let cfg = (open $loader_config_file)
+    if ($cfg | describe | str starts-with "list") {
+      $cfg
+    } else {
+      []
+    }
+  } catch {
+    []
+  }
 } else {
   []
 }

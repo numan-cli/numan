@@ -105,13 +105,31 @@ pub fn binary_file_name(base: &str) -> String {
     }
 }
 
+fn is_executable(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = path.metadata() {
+            return meta.permissions().mode() & 0o111 != 0;
+        }
+        false
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 /// Search PATH and `$NUMAN_ROOT/tools/bin` for an executable binary.
 pub fn find_binary_on_path(base_name: &str, root: Option<&Path>) -> Option<PathBuf> {
     let target = binary_file_name(base_name);
 
     if let Some(r) = root {
         let in_tools = tools_bin_dir(r).join(&target);
-        if in_tools.is_file() {
+        if is_executable(&in_tools) {
             return Some(in_tools);
         }
     }
@@ -128,7 +146,7 @@ pub fn find_binary_on_path(base_name: &str, root: Option<&Path>) -> Option<PathB
             continue;
         }
         let candidate = Path::new(trimmed).join(&target);
-        if candidate.is_file() {
+        if is_executable(&candidate) {
             return Some(candidate);
         }
     }
@@ -147,8 +165,9 @@ struct GitHubAsset {
     name: String,
     browser_download_url: String,
     #[serde(default)]
-    #[allow(dead_code)]
     size: u64,
+    #[serde(default)]
+    digest: Option<String>,
 }
 
 #[allow(unreachable_patterns)]
@@ -167,11 +186,9 @@ fn matches_tool_asset(tool: &ToolPreset, asset_name: &str, platform: &Platform) 
                 name.contains(&format!("x86_64-unknown-linux-{libc}")) && name.ends_with(".tar.gz")
             }
             (Os::Linux, Arch::Aarch64) => {
-                let libc = match platform.env {
-                    Env::Musl => "musl",
-                    _ => "gnu",
-                };
-                name.contains(&format!("aarch64-unknown-linux-{libc}")) && name.ends_with(".tar.gz")
+                (name.contains("aarch64-unknown-linux-musl.tar.gz")
+                    || name.contains("aarch64-unknown-linux"))
+                    && name.ends_with(".tar.gz")
             }
             (Os::Macos, Arch::X86_64) => name.contains("x86_64-apple-darwin.tar.gz"),
             (Os::Macos, Arch::Aarch64) => name.contains("aarch64-apple-darwin.tar.gz"),
@@ -179,19 +196,12 @@ fn matches_tool_asset(tool: &ToolPreset, asset_name: &str, platform: &Platform) 
         },
         "zoxide" => match (platform.os, platform.arch) {
             (Os::Windows, Arch::X86_64) => name.contains("x86_64-pc-windows-msvc.zip"),
+            (Os::Windows, Arch::Aarch64) => name.contains("aarch64-pc-windows-msvc.zip"),
             (Os::Linux, Arch::X86_64) => {
-                let libc = match platform.env {
-                    Env::Musl => "musl",
-                    _ => "gnu",
-                };
-                name.contains(&format!("x86_64-unknown-linux-{libc}")) && name.ends_with(".tar.gz")
+                name.contains("x86_64-unknown-linux") && name.ends_with(".tar.gz")
             }
             (Os::Linux, Arch::Aarch64) => {
-                let libc = match platform.env {
-                    Env::Musl => "musl",
-                    _ => "gnu",
-                };
-                name.contains(&format!("aarch64-unknown-linux-{libc}")) && name.ends_with(".tar.gz")
+                name.contains("aarch64-unknown-linux") && name.ends_with(".tar.gz")
             }
             (Os::Macos, Arch::X86_64) => name.contains("x86_64-apple-darwin.tar.gz"),
             (Os::Macos, Arch::Aarch64) => name.contains("aarch64-apple-darwin.tar.gz"),
@@ -207,30 +217,50 @@ fn matches_tool_asset(tool: &ToolPreset, asset_name: &str, platform: &Platform) 
             _ => false,
         },
         "atuin" => match (platform.os, platform.arch) {
-            (Os::Windows, Arch::X86_64) => name.contains("x86_64-pc-windows-msvc.zip"),
+            (Os::Windows, Arch::X86_64) => {
+                name.contains("x86_64-pc-windows-msvc.zip") && !name.contains("server")
+            }
             (Os::Linux, Arch::X86_64) => {
                 let libc = match platform.env {
                     Env::Musl => "musl",
                     _ => "gnu",
                 };
-                name.contains(&format!("x86_64-unknown-linux-{libc}")) && name.ends_with(".tar.gz")
+                name.contains(&format!("x86_64-unknown-linux-{libc}"))
+                    && name.ends_with(".tar.gz")
+                    && !name.contains("server")
             }
             (Os::Linux, Arch::Aarch64) => {
                 let libc = match platform.env {
                     Env::Musl => "musl",
                     _ => "gnu",
                 };
-                name.contains(&format!("aarch64-unknown-linux-{libc}")) && name.ends_with(".tar.gz")
+                name.contains(&format!("aarch64-unknown-linux-{libc}"))
+                    && name.ends_with(".tar.gz")
+                    && !name.contains("server")
             }
-            (Os::Macos, Arch::X86_64) => name.contains("x86_64-apple-darwin.tar.gz"),
-            (Os::Macos, Arch::Aarch64) => name.contains("aarch64-apple-darwin.tar.gz"),
+            (Os::Macos, Arch::X86_64) => {
+                name.contains("x86_64-apple-darwin.tar.gz") && !name.contains("server")
+            }
+            (Os::Macos, Arch::Aarch64) => {
+                name.contains("aarch64-apple-darwin.tar.gz") && !name.contains("server")
+            }
             _ => false,
         },
         "mise" => match (platform.os, platform.arch) {
-            (Os::Windows, Arch::X86_64) => name.contains("win-x64.zip"),
-            (Os::Windows, Arch::Aarch64) => name.contains("win-arm64.zip"),
-            (Os::Linux, Arch::X86_64) => name.contains("linux-x64.tar.gz"),
-            (Os::Linux, Arch::Aarch64) => name.contains("linux-arm64.tar.gz"),
+            (Os::Windows, Arch::X86_64) => {
+                name.contains("windows-x64.zip") || name.contains("win-x64.zip")
+            }
+            (Os::Windows, Arch::Aarch64) => {
+                name.contains("windows-arm64.zip") || name.contains("win-arm64.zip")
+            }
+            (Os::Linux, Arch::X86_64) => match platform.env {
+                Env::Musl => name.contains("linux-x64-musl.tar.gz"),
+                _ => name.contains("linux-x64.tar.gz") && !name.contains("musl"),
+            },
+            (Os::Linux, Arch::Aarch64) => match platform.env {
+                Env::Musl => name.contains("linux-arm64-musl.tar.gz"),
+                _ => name.contains("linux-arm64.tar.gz") && !name.contains("musl"),
+            },
             (Os::Macos, Arch::X86_64) => name.contains("macos-x64.tar.gz"),
             (Os::Macos, Arch::Aarch64) => name.contains("macos-arm64.tar.gz"),
             _ => false,
@@ -297,6 +327,79 @@ fn fetch_latest_release(repo: &str) -> Result<GitHubRelease> {
     let text = response.text()?;
     serde_json::from_str::<GitHubRelease>(&text)
         .with_context(|| format!("Failed to parse release JSON for {repo}"))
+}
+
+pub fn parse_checksum_from_text(text: &str, asset_name: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Some(trimmed.to_ascii_lowercase());
+    }
+
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            let hash_candidate = parts[0].trim_matches('*');
+            let file_candidate = parts[1].trim_start_matches('*');
+            if hash_candidate.len() == 64
+                && hash_candidate.chars().all(|c| c.is_ascii_hexdigit())
+                && (file_candidate == asset_name || file_candidate.ends_with(asset_name))
+            {
+                return Some(hash_candidate.to_ascii_lowercase());
+            }
+
+            let file_cand2 = parts[0].trim_end_matches(':');
+            let hash_cand2 = parts[1];
+            if hash_cand2.len() == 64
+                && hash_cand2.chars().all(|c| c.is_ascii_hexdigit())
+                && (file_cand2 == asset_name || file_cand2.ends_with(asset_name))
+            {
+                return Some(hash_cand2.to_ascii_lowercase());
+            }
+        }
+    }
+    None
+}
+
+fn fetch_checksum_text(url: &str) -> Result<String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .user_agent(USER_AGENT)
+        .build()
+        .context("Failed to build HTTP client for checksum download")?;
+    let resp = client
+        .get(url)
+        .header("User-Agent", USER_AGENT)
+        .send()
+        .with_context(|| format!("Failed to fetch checksum from {url}"))?;
+    if !resp.status().is_success() {
+        bail!("Failed to fetch checksum: HTTP {}", resp.status());
+    }
+    resp.text().context("Failed to read checksum text")
+}
+
+fn find_checksum_asset<'a>(assets: &'a [GitHubAsset], asset_name: &str) -> Option<&'a GitHubAsset> {
+    let exact_sha256 = format!("{asset_name}.sha256");
+    let exact_sha256sum = format!("{asset_name}.sha256sum");
+    if let Some(a) = assets
+        .iter()
+        .find(|a| a.name == exact_sha256 || a.name == exact_sha256sum)
+    {
+        return Some(a);
+    }
+
+    assets.iter().find(|a| {
+        let n = a.name.to_ascii_lowercase();
+        n == "checksums.txt"
+            || n == "shasums256.txt"
+            || n == "sha256.sum"
+            || n == "sha256sums"
+            || n == "sha256sums.txt"
+            || (n.contains("checksums") && n.ends_with(".txt"))
+    })
 }
 
 #[cfg(unix)]
@@ -370,14 +473,16 @@ pub fn download_and_install_tool(
 
     let cache_dir = root.join("tools").join(".cache");
     std::fs::create_dir_all(&cache_dir)?;
-    let sanitized_name = asset
-        .name
+    let sanitized_name = Path::new(&asset.name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(&asset.name)
         .chars()
-        .filter(|c| *c != '/' && *c != '\\' && *c != ':')
+        .filter(|c| !matches!(*c, '/' | '\\' | ':' | '\0'))
         .collect::<String>();
-    if sanitized_name.is_empty() {
+    if sanitized_name.is_empty() || sanitized_name == "." || sanitized_name == ".." {
         bail!(
-            "Release asset name for {} is empty after sanitization",
+            "Release asset name for {} is invalid after sanitization",
             tool.display_name
         );
     }
@@ -403,6 +508,28 @@ pub fn download_and_install_tool(
                 asset.size
             );
         }
+    }
+
+    // Verify SHA-256 integrity when available from release metadata or accompanying checksum asset.
+    let expected_sha = if let Some(ref d) = asset.digest {
+        if let Some(hex) = d.strip_prefix("sha256:") {
+            Some(hex.to_ascii_lowercase())
+        } else {
+            Some(d.to_ascii_lowercase())
+        }
+    } else if let Some(checksum_asset) = find_checksum_asset(&release.assets, &asset.name) {
+        if let Ok(text) = fetch_checksum_text(&checksum_asset.browser_download_url) {
+            parse_checksum_from_text(&text, &asset.name)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if let Some(sha) = expected_sha {
+        crate::core::integrity::verify_and_report(&download_dest, &sha, tool.display_name)?;
+        println!("Verified SHA-256 integrity: sha256:{sha}");
     }
 
     let bin_dir = tools_bin_dir(root);
@@ -609,5 +736,100 @@ mod tests {
             .iter()
             .find(|a| matches_tool_asset(starship, a, &linux_x64))
             .is_none());
+    }
+
+    #[test]
+    fn test_asset_matching_zoxide_windows_and_linux() {
+        let win_arm64 = Platform {
+            triple: "aarch64-pc-windows-msvc".to_string(),
+            os: Os::Windows,
+            arch: Arch::Aarch64,
+            env: crate::core::platform::Env::Msvc,
+        };
+        let linux_x64 = Platform {
+            triple: "x86_64-unknown-linux-gnu".to_string(),
+            os: Os::Linux,
+            arch: Arch::X86_64,
+            env: crate::core::platform::Env::Gnu,
+        };
+        let zoxide = find_preset("zoxide").unwrap();
+
+        assert!(matches_tool_asset(
+            zoxide,
+            "zoxide-0.10.0-aarch64-pc-windows-msvc.zip",
+            &win_arm64
+        ));
+        assert!(matches_tool_asset(
+            zoxide,
+            "zoxide-0.10.0-x86_64-unknown-linux-musl.tar.gz",
+            &linux_x64
+        ));
+    }
+
+    #[test]
+    fn test_asset_matching_atuin_excludes_server() {
+        let win_x64 = Platform {
+            triple: "x86_64-pc-windows-msvc".to_string(),
+            os: Os::Windows,
+            arch: Arch::X86_64,
+            env: crate::core::platform::Env::Msvc,
+        };
+        let atuin = find_preset("atuin").unwrap();
+
+        assert!(matches_tool_asset(
+            atuin,
+            "atuin-x86_64-pc-windows-msvc.zip",
+            &win_x64
+        ));
+        assert!(!matches_tool_asset(
+            atuin,
+            "atuin-server-x86_64-pc-windows-msvc.zip",
+            &win_x64
+        ));
+    }
+
+    #[test]
+    fn test_parse_checksum_from_text() {
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+        // Single line hash
+        assert_eq!(
+            parse_checksum_from_text(hash, "any-file.tar.gz"),
+            Some(hash.to_string())
+        );
+
+        // Multi-line sha256sums file
+        let multi = format!(
+            "# Checksums\n\
+             1111111111111111111111111111111111111111111111111111111111111111  other-file.tar.gz\n\
+             {hash}  target-asset.zip\n\
+             2222222222222222222222222222222222222222222222222222222222222222 *another.zip\n"
+        );
+        assert_eq!(
+            parse_checksum_from_text(&multi, "target-asset.zip"),
+            Some(hash.to_string())
+        );
+        assert_eq!(
+            parse_checksum_from_text(&multi, "another.zip"),
+            Some("2222222222222222222222222222222222222222222222222222222222222222".to_string())
+        );
+        assert_eq!(parse_checksum_from_text(&multi, "missing.zip"), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_non_executable_binary_is_skipped() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let tools_bin = dir.path().join("tools").join("bin");
+        std::fs::create_dir_all(&tools_bin).unwrap();
+        let bin = tools_bin.join("starship");
+        std::fs::write(&bin, b"fake").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert_eq!(find_binary_on_path("starship", Some(dir.path())), None);
+
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(find_binary_on_path("starship", Some(dir.path())), Some(bin));
     }
 }

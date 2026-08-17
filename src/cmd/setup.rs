@@ -806,7 +806,7 @@ where
     }
 
     if args.detect {
-        execute_loader_detect(&loader_config_path, root, should_install, args.yes)?;
+        execute_loader_detect(&loader_config_path, root, should_install)?;
     }
 
     // Configure config.nu if requested
@@ -1087,6 +1087,9 @@ fn execute_loader_remove(
     root: Option<&Path>,
 ) -> Result<()> {
     validate_tool_name(tool_name).context("Invalid tool name in --remove")?;
+    if RESERVED_LOADER_NAMES.contains(&tool_name) {
+        bail!("Tool name '{tool_name}' is reserved and cannot be removed via the loader.");
+    }
 
     let mut entries = read_loader_config(loader_config_path)?;
     let initial_len = entries.len();
@@ -1197,7 +1200,6 @@ fn execute_loader_detect(
     loader_config_path: &Path,
     root: Option<&Path>,
     should_install: bool,
-    _yes: bool,
 ) -> Result<()> {
     let mut entries = read_loader_config(loader_config_path)?;
     let mut added_count = 0;

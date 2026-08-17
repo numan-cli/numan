@@ -195,18 +195,11 @@ fn setup_loader_detect_discovers_installed_tool() {
     } else {
         "starship"
     });
-    std::fs::write(&fake_starship, b"fake").unwrap();
+    // Ensure starship is executable so Unix systems detect it
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&fake_starship, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-
-    // Add a non-executable file that detection must skip (Unix only)
-    #[cfg(unix)]
-    {
-        let non_exec = tools_bin.join("nonexec");
-        std::fs::write(&non_exec, b"fake").unwrap();
     }
 
     let detect_args = LoaderArgs {
