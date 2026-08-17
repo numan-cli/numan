@@ -329,6 +329,27 @@ fn fetch_latest_release(repo: &str) -> Result<GitHubRelease> {
         .with_context(|| format!("Failed to parse release JSON for {repo}"))
 }
 
+fn matches_checksum_filename(candidate: &str, asset_name: &str) -> bool {
+    let clean = candidate
+        .trim_start_matches('*')
+        .trim_matches('\'')
+        .trim_matches('"');
+    if clean == asset_name {
+        return true;
+    }
+    if let Some(rest) = clean.strip_prefix("./") {
+        if rest == asset_name {
+            return true;
+        }
+    }
+    if let Some(rest) = clean.strip_prefix(".\\") {
+        if rest == asset_name {
+            return true;
+        }
+    }
+    clean.ends_with(&format!("/{asset_name}")) || clean.ends_with(&format!("\\{asset_name}"))
+}
+
 pub fn parse_checksum_from_text(text: &str, asset_name: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -343,10 +364,10 @@ pub fn parse_checksum_from_text(text: &str, asset_name: &str) -> Option<String> 
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 2 {
             let hash_candidate = parts[0].trim_matches('*');
-            let file_candidate = parts[1].trim_start_matches('*');
+            let file_candidate = parts[1];
             if hash_candidate.len() == 64
                 && hash_candidate.chars().all(|c| c.is_ascii_hexdigit())
-                && (file_candidate == asset_name || file_candidate.ends_with(asset_name))
+                && matches_checksum_filename(file_candidate, asset_name)
             {
                 return Some(hash_candidate.to_ascii_lowercase());
             }
@@ -355,7 +376,7 @@ pub fn parse_checksum_from_text(text: &str, asset_name: &str) -> Option<String> 
             let hash_cand2 = parts[1];
             if hash_cand2.len() == 64
                 && hash_cand2.chars().all(|c| c.is_ascii_hexdigit())
-                && (file_cand2 == asset_name || file_cand2.ends_with(asset_name))
+                && matches_checksum_filename(file_cand2, asset_name)
             {
                 return Some(hash_cand2.to_ascii_lowercase());
             }
@@ -798,16 +819,26 @@ mod tests {
             Some(hash.to_string())
         );
 
-        // Multi-line sha256sums file
+        // Multi-line sha256sums file with paths and potential suffix collisions
         let multi = format!(
             "# Checksums\n\
              1111111111111111111111111111111111111111111111111111111111111111  other-file.tar.gz\n\
+             3333333333333333333333333333333333333333333333333333333333333333  prefix-target-asset.zip\n\
              {hash}  target-asset.zip\n\
+             4444444444444444444444444444444444444444444444444444444444444444  ./dist/path-asset.tar.gz\n\
              2222222222222222222222222222222222222222222222222222222222222222 *another.zip\n"
         );
         assert_eq!(
             parse_checksum_from_text(&multi, "target-asset.zip"),
             Some(hash.to_string())
+        );
+        assert_eq!(
+            parse_checksum_from_text(&multi, "prefix-target-asset.zip"),
+            Some("3333333333333333333333333333333333333333333333333333333333333333".to_string())
+        );
+        assert_eq!(
+            parse_checksum_from_text(&multi, "path-asset.tar.gz"),
+            Some("4444444444444444444444444444444444444444444444444444444444444444".to_string())
         );
         assert_eq!(
             parse_checksum_from_text(&multi, "another.zip"),
