@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-use crate::core::platform::{Arch, Os, Platform};
+use crate::core::platform::{Arch, Env, Os, Platform};
 use crate::install::download::download_file;
 use crate::install::extract::{extract_archive, ArchiveFormat, ExtractConfig};
 use crate::nu::bootstrap::{persist_path_dir, prepend_process_path};
@@ -160,10 +160,18 @@ fn matches_tool_asset(tool: &ToolPreset, asset_name: &str, platform: &Platform) 
             (Os::Windows, Arch::X86_64) => name.contains("x86_64-pc-windows-msvc.zip"),
             (Os::Windows, Arch::Aarch64) => name.contains("aarch64-pc-windows-msvc.zip"),
             (Os::Linux, Arch::X86_64) => {
-                name.contains("x86_64-unknown-linux") && name.ends_with(".tar.gz")
+                let libc = match platform.env {
+                    Env::Musl => "musl",
+                    _ => "gnu",
+                };
+                name.contains(&format!("x86_64-unknown-linux-{libc}")) && name.ends_with(".tar.gz")
             }
             (Os::Linux, Arch::Aarch64) => {
-                name.contains("aarch64-unknown-linux") && name.ends_with(".tar.gz")
+                let libc = match platform.env {
+                    Env::Musl => "musl",
+                    _ => "gnu",
+                };
+                name.contains(&format!("aarch64-unknown-linux-{libc}")) && name.ends_with(".tar.gz")
             }
             (Os::Macos, Arch::X86_64) => name.contains("x86_64-apple-darwin.tar.gz"),
             (Os::Macos, Arch::Aarch64) => name.contains("aarch64-apple-darwin.tar.gz"),
@@ -172,10 +180,18 @@ fn matches_tool_asset(tool: &ToolPreset, asset_name: &str, platform: &Platform) 
         "zoxide" => match (platform.os, platform.arch) {
             (Os::Windows, Arch::X86_64) => name.contains("x86_64-pc-windows-msvc.zip"),
             (Os::Linux, Arch::X86_64) => {
-                name.contains("x86_64-unknown-linux") && name.ends_with(".tar.gz")
+                let libc = match platform.env {
+                    Env::Musl => "musl",
+                    _ => "gnu",
+                };
+                name.contains(&format!("x86_64-unknown-linux-{libc}")) && name.ends_with(".tar.gz")
             }
             (Os::Linux, Arch::Aarch64) => {
-                name.contains("aarch64-unknown-linux") && name.ends_with(".tar.gz")
+                let libc = match platform.env {
+                    Env::Musl => "musl",
+                    _ => "gnu",
+                };
+                name.contains(&format!("aarch64-unknown-linux-{libc}")) && name.ends_with(".tar.gz")
             }
             (Os::Macos, Arch::X86_64) => name.contains("x86_64-apple-darwin.tar.gz"),
             (Os::Macos, Arch::Aarch64) => name.contains("aarch64-apple-darwin.tar.gz"),
@@ -193,10 +209,18 @@ fn matches_tool_asset(tool: &ToolPreset, asset_name: &str, platform: &Platform) 
         "atuin" => match (platform.os, platform.arch) {
             (Os::Windows, Arch::X86_64) => name.contains("x86_64-pc-windows-msvc.zip"),
             (Os::Linux, Arch::X86_64) => {
-                name.contains("x86_64-unknown-linux") && name.ends_with(".tar.gz")
+                let libc = match platform.env {
+                    Env::Musl => "musl",
+                    _ => "gnu",
+                };
+                name.contains(&format!("x86_64-unknown-linux-{libc}")) && name.ends_with(".tar.gz")
             }
             (Os::Linux, Arch::Aarch64) => {
-                name.contains("aarch64-unknown-linux") && name.ends_with(".tar.gz")
+                let libc = match platform.env {
+                    Env::Musl => "musl",
+                    _ => "gnu",
+                };
+                name.contains(&format!("aarch64-unknown-linux-{libc}")) && name.ends_with(".tar.gz")
             }
             (Os::Macos, Arch::X86_64) => name.contains("x86_64-apple-darwin.tar.gz"),
             (Os::Macos, Arch::Aarch64) => name.contains("aarch64-apple-darwin.tar.gz"),
@@ -241,10 +265,27 @@ fn fetch_latest_release(repo: &str) -> Result<GitHubRelease> {
         .context("Failed to build HTTP client for tool download")?;
 
     let url = format!("https://api.github.com/repos/{repo}/releases/latest");
-    let response = client
+    let mut request = client
         .get(&url)
+        .header("Accept", "application/vnd.github+json");
+
+    // Authenticate when a GitHub token is available for higher rate limits.
+    if let Ok(token) = std::env::var("GITHUB_TOKEN").or_else(|_| std::env::var("GH_TOKEN")) {
+        if !token.is_empty() {
+            request = request.bearer_auth(&token);
+        }
+    }
+
+    let response = request
         .send()
         .with_context(|| format!("Failed to fetch release metadata for {repo}"))?;
+
+    if response.status().as_u16() == 403 || response.status().as_u16() == 429 {
+        bail!(
+            "GitHub API rate limit exceeded while fetching releases for {repo}. \
+             Set GITHUB_TOKEN or GH_TOKEN to authenticate and increase the limit."
+        );
+    }
 
     if !response.status().is_success() {
         bail!(
@@ -329,13 +370,40 @@ pub fn download_and_install_tool(
 
     let cache_dir = root.join("tools").join(".cache");
     std::fs::create_dir_all(&cache_dir)?;
-    let download_dest = cache_dir.join(&asset.name);
+    let sanitized_name = asset
+        .name
+        .chars()
+        .filter(|c| *c != '/' && *c != '\\' && *c != ':')
+        .collect::<String>();
+    if sanitized_name.is_empty() {
+        bail!(
+            "Release asset name for {} is empty after sanitization",
+            tool.display_name
+        );
+    }
+    let download_dest = cache_dir.join(&sanitized_name);
 
     println!(
         "Downloading {} {} ({})…",
         tool.display_name, release.tag_name, asset.name
     );
     download_file(&asset.browser_download_url, &download_dest)?;
+
+    // Validate downloaded file size when the release metadata provides one.
+    if asset.size > 0 {
+        let actual = std::fs::metadata(&download_dest)
+            .with_context(|| format!("Failed to stat downloaded '{}'", download_dest.display()))?
+            .len();
+        if actual != asset.size {
+            bail!(
+                "Downloaded {} asset '{}' has {} bytes but release metadata reports {} bytes",
+                tool.display_name,
+                asset.name,
+                actual,
+                asset.size
+            );
+        }
+    }
 
     let bin_dir = tools_bin_dir(root);
     std::fs::create_dir_all(&bin_dir)?;
@@ -383,7 +451,14 @@ pub fn download_and_install_tool(
 
     // Add tools bin to PATH
     prepend_process_path(&bin_dir)?;
-    let _ = persist_path_dir(&bin_dir);
+    if let Err(err) = persist_path_dir(&bin_dir) {
+        eprintln!(
+            "Warning: failed to persist '{}' on PATH: {err:#}. \
+             Add it manually to keep {} available in new shells.",
+            bin_dir.display(),
+            tool.binary_name
+        );
+    }
 
     println!(
         "Installed {} {} to '{}'.",
@@ -414,6 +489,93 @@ mod tests {
 
     #[test]
     fn test_asset_matching_starship() {
+        let linux_x64_gnu = Platform {
+            triple: "x86_64-unknown-linux-gnu".to_string(),
+            os: Os::Linux,
+            arch: Arch::X86_64,
+            env: crate::core::platform::Env::Gnu,
+        };
+        let linux_x64_musl = Platform {
+            triple: "x86_64-unknown-linux-musl".to_string(),
+            os: Os::Linux,
+            arch: Arch::X86_64,
+            env: crate::core::platform::Env::Musl,
+        };
+        let win_x64 = Platform {
+            triple: "x86_64-pc-windows-msvc".to_string(),
+            os: Os::Windows,
+            arch: Arch::X86_64,
+            env: crate::core::platform::Env::Msvc,
+        };
+        let starship = find_preset("starship").unwrap();
+
+        // GNU Linux matches gnu asset
+        assert!(matches_tool_asset(
+            starship,
+            "starship-x86_64-unknown-linux-gnu.tar.gz",
+            &linux_x64_gnu
+        ));
+        // GNU Linux rejects musl asset
+        assert!(!matches_tool_asset(
+            starship,
+            "starship-x86_64-unknown-linux-musl.tar.gz",
+            &linux_x64_gnu
+        ));
+        // Musl Linux matches musl asset
+        assert!(matches_tool_asset(
+            starship,
+            "starship-x86_64-unknown-linux-musl.tar.gz",
+            &linux_x64_musl
+        ));
+        // Musl Linux rejects gnu asset
+        assert!(!matches_tool_asset(
+            starship,
+            "starship-x86_64-unknown-linux-gnu.tar.gz",
+            &linux_x64_musl
+        ));
+        assert!(matches_tool_asset(
+            starship,
+            "starship-x86_64-pc-windows-msvc.zip",
+            &win_x64
+        ));
+        assert!(!matches_tool_asset(
+            starship,
+            "starship-x86_64-apple-darwin.tar.gz",
+            &win_x64
+        ));
+    }
+
+    #[test]
+    fn test_asset_matching_direnv_exact_names() {
+        let linux_x64 = Platform {
+            triple: "x86_64-unknown-linux-gnu".to_string(),
+            os: Os::Linux,
+            arch: Arch::X86_64,
+            env: crate::core::platform::Env::Gnu,
+        };
+        let darwin_arm64 = Platform {
+            triple: "aarch64-apple-darwin".to_string(),
+            os: Os::Macos,
+            arch: Arch::Aarch64,
+            env: crate::core::platform::Env::Darwin,
+        };
+        let direnv = find_preset("direnv").unwrap();
+
+        assert!(matches_tool_asset(direnv, "direnv.linux-amd64", &linux_x64));
+        assert!(!matches_tool_asset(
+            direnv,
+            "direnv.linux-amd64.tar.gz",
+            &linux_x64
+        ));
+        assert!(matches_tool_asset(
+            direnv,
+            "direnv.darwin-arm64",
+            &darwin_arm64
+        ));
+    }
+
+    #[test]
+    fn test_asset_matching_oh_my_posh_exact_names() {
         let linux_x64 = Platform {
             triple: "x86_64-unknown-linux-gnu".to_string(),
             os: Os::Linux,
@@ -426,22 +588,26 @@ mod tests {
             arch: Arch::X86_64,
             env: crate::core::platform::Env::Msvc,
         };
-        let starship = find_preset("starship").unwrap();
+        let omp = find_preset("oh-my-posh").unwrap();
 
-        assert!(matches_tool_asset(
-            starship,
-            "starship-x86_64-unknown-linux-gnu.tar.gz",
-            &linux_x64
-        ));
-        assert!(matches_tool_asset(
-            starship,
-            "starship-x86_64-pc-windows-msvc.zip",
-            &win_x64
-        ));
-        assert!(!matches_tool_asset(
-            starship,
-            "starship-x86_64-apple-darwin.tar.gz",
-            &win_x64
-        ));
+        assert!(matches_tool_asset(omp, "posh-linux-amd64", &linux_x64));
+        assert!(!matches_tool_asset(omp, "posh-linux-amd64.exe", &linux_x64));
+        assert!(matches_tool_asset(omp, "posh-windows-amd64.exe", &win_x64));
+    }
+
+    #[test]
+    fn test_asset_matching_empty_assets_yields_no_match() {
+        let linux_x64 = Platform {
+            triple: "x86_64-unknown-linux-gnu".to_string(),
+            os: Os::Linux,
+            arch: Arch::X86_64,
+            env: crate::core::platform::Env::Gnu,
+        };
+        let starship = find_preset("starship").unwrap();
+        let empty: Vec<String> = vec![];
+        assert!(empty
+            .iter()
+            .find(|a| matches_tool_asset(starship, a, &linux_x64))
+            .is_none());
     }
 }

@@ -228,12 +228,8 @@ pub struct LoaderArgs {
     pub clean: bool,
 
     /// Automatically download and install missing tools from GitHub
-    #[arg(long)]
+    #[arg(long, alias = "install-missing")]
     pub install: bool,
-
-    /// Automatically download and install missing tools when detected or added
-    #[arg(long)]
-    pub install_missing: bool,
 }
 
 pub fn execute(cmd: SetupCommands, root: &Path) -> Result<()> {
@@ -777,17 +773,14 @@ where
         )
     })?;
 
-    // 1. Status action
     if args.status {
         return execute_loader_status(&loader_path, &loader_config_path, &config_path, root);
     }
 
-    // 2. Clean action
     if args.clean {
         return execute_loader_clean(&loader_config_path, root);
     }
 
-    // 3. Remove action
     if let Some(tool_name) = &args.remove {
         return execute_loader_remove(&loader_config_path, tool_name, root);
     }
@@ -800,9 +793,8 @@ where
         write_loader_config(&loader_config_path, &[])?;
     }
 
-    let should_install = args.install || args.install_missing;
+    let should_install = args.install;
 
-    // 4. Add action
     if let Some(tool_spec) = &args.add {
         execute_loader_add(
             &loader_config_path,
@@ -813,7 +805,6 @@ where
         )?;
     }
 
-    // 5. Detect action
     if args.detect {
         execute_loader_detect(&loader_config_path, root, should_install, args.yes)?;
     }
@@ -847,6 +838,23 @@ pub fn read_loader_config(config_path: &Path) -> Result<Vec<LoaderConfigEntry>> 
     Ok(parse_loader_config(&content))
 }
 
+/// Validate a tool name for use in loader config and autoload file paths.
+fn validate_tool_name(name: &str) -> Result<()> {
+    if name.is_empty() || name.len() > 64 {
+        bail!("Tool name '{name}' must be 1-64 characters.");
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        bail!("Tool name '{name}' may only contain ASCII letters, digits, '-' and '_'.");
+    }
+    Ok(())
+}
+
+/// Reserved tool name that must not be overwritten by loader add/remove.
+const RESERVED_LOADER_NAMES: &[&str] = &["numan"];
+
 pub fn parse_loader_config(content: &str) -> Vec<LoaderConfigEntry> {
     let mut entries = Vec::new();
     for line in content.lines() {
@@ -868,33 +876,92 @@ fn parse_loader_record_line(line: &str) -> Option<LoaderConfigEntry> {
     if name_quote != '\'' && name_quote != '"' {
         return None;
     }
-    let name_end = after_name[1..].find(name_quote)?;
-    let name = &after_name[1..1 + name_end];
 
-    let cmd_idx = line.find("command:")?;
-    let after_cmd = &line[cmd_idx + 8..].trim_start();
+    let mut name = String::new();
+    let mut rest = &after_name[name_quote.len_utf8()..];
+    loop {
+        match rest.chars().next()? {
+            '\\' if name_quote == '"' => {
+                rest = &rest[1..];
+                match rest.chars().next()? {
+                    '\\' => {
+                        name.push('\\');
+                        rest = &rest[1..];
+                    }
+                    '"' => {
+                        name.push('"');
+                        rest = &rest[1..];
+                    }
+                    c => {
+                        name.push('\\');
+                        name.push(c);
+                        rest = &rest[c.len_utf8()..];
+                    }
+                }
+            }
+            c if c == name_quote => {
+                rest = &rest[name_quote.len_utf8()..];
+                break;
+            }
+            c => {
+                name.push(c);
+                rest = &rest[c.len_utf8()..];
+            }
+        }
+    }
+
+    let cmd_idx = rest.find("command:")?;
+    let after_cmd = &rest[cmd_idx + 8..].trim_start();
     let cmd_quote = after_cmd.chars().next()?;
     if cmd_quote != '\'' && cmd_quote != '"' {
         return None;
     }
-    let cmd_end = after_cmd[1..].find(cmd_quote)?;
-    let command = &after_cmd[1..1 + cmd_end];
 
-    Some(LoaderConfigEntry {
-        name: name.to_string(),
-        command: command.to_string(),
-    })
+    let mut command = String::new();
+    let mut cmd_rest = &after_cmd[cmd_quote.len_utf8()..];
+    loop {
+        match cmd_rest.chars().next()? {
+            '\\' if cmd_quote == '"' => {
+                cmd_rest = &cmd_rest[1..];
+                match cmd_rest.chars().next()? {
+                    '\\' => {
+                        command.push('\\');
+                        cmd_rest = &cmd_rest[1..];
+                    }
+                    '"' => {
+                        command.push('"');
+                        cmd_rest = &cmd_rest[1..];
+                    }
+                    c => {
+                        command.push('\\');
+                        command.push(c);
+                        cmd_rest = &cmd_rest[c.len_utf8()..];
+                    }
+                }
+            }
+            c if c == cmd_quote => {
+                break;
+            }
+            c => {
+                command.push(c);
+                cmd_rest = &cmd_rest[c.len_utf8()..];
+            }
+        }
+    }
+
+    Some(LoaderConfigEntry { name, command })
 }
 
 pub fn render_loader_config(entries: &[LoaderConfigEntry]) -> String {
     let mut out = String::from(
-        "# Generated by Numan. Tool configurations for nushell-loader.\n# Manage via `numan setup loader --add <tool>` or `numan setup loader --remove <tool>`.\n\nlet aidnem_loader_configs: list<record> = [\n",
+        "# Generated by Numan. Tool configurations for nushell-loader.\n# Manage via `numan setup loader --add <tool>` or `numan setup loader --remove <tool>`.\n\n[\n",
     );
     for e in entries {
+        let escaped_name = e.name.replace('\\', "\\\\").replace('\'', "\\'");
+        let escaped_cmd = e.command.replace('\\', "\\\\").replace('"', "\\\"");
         out.push_str(&format!(
             "  {{ name: '{}', command: \"{}\" }}\n",
-            e.name,
-            e.command.replace('"', "\\\"")
+            escaped_name, escaped_cmd
         ));
     }
     out.push_str("]\n");
@@ -909,17 +976,9 @@ pub fn write_loader_config(config_path: &Path, entries: &[LoaderConfigEntry]) ->
 }
 
 fn resolve_vendor_autoload_dir(root: Option<&Path>) -> Option<PathBuf> {
-    if let Some(r) = root {
-        if let Ok(paths) = crate::nu::paths::NuPaths::load(r) {
-            if let Some(v) = paths.vendor_autoload_dir {
-                return Some(PathBuf::from(v));
-            }
-            if let Some(data) = paths.data_dir {
-                return Some(Path::new(&data).join("vendor").join("autoload"));
-            }
-        }
-    }
-    dirs::data_dir().map(|d| d.join("nushell").join("vendor").join("autoload"))
+    let r = root?;
+    let paths = crate::nu::paths::NuPaths::load(r).ok()?;
+    paths.vendor_autoload_dir.map(PathBuf::from)
 }
 
 fn execute_loader_status(
@@ -937,7 +996,8 @@ fn execute_loader_status(
     }
 
     println!("  Config file: {}", loader_config_path.display());
-    let entries = read_loader_config(loader_config_path).unwrap_or_default();
+    let entries = read_loader_config(loader_config_path)
+        .with_context(|| format!("Failed to parse '{}'", loader_config_path.display()))?;
     println!("  Configured tools ({}):", entries.len());
 
     let autoload_dir = resolve_vendor_autoload_dir(root);
@@ -983,7 +1043,8 @@ fn execute_loader_status(
 }
 
 fn execute_loader_clean(loader_config_path: &Path, root: Option<&Path>) -> Result<()> {
-    let entries = read_loader_config(loader_config_path).unwrap_or_default();
+    let entries = read_loader_config(loader_config_path)
+        .with_context(|| format!("Failed to parse '{}'", loader_config_path.display()))?;
     let Some(autoload_dir) = resolve_vendor_autoload_dir(root) else {
         println!("Could not determine vendor/autoload directory to clean.");
         return Ok(());
@@ -1001,9 +1062,18 @@ fn execute_loader_clean(loader_config_path: &Path, root: Option<&Path>) -> Resul
     for e in &entries {
         let target = autoload_dir.join(format!("{}.nu", e.name));
         if target.is_file() {
-            let _ = std::fs::remove_file(&target);
-            println!("Removed cache '{}'", target.display());
-            removed += 1;
+            match std::fs::remove_file(&target) {
+                Ok(()) => {
+                    println!("Removed cache '{}'", target.display());
+                    removed += 1;
+                }
+                Err(err) => {
+                    eprintln!(
+                        "Warning: failed to remove cache '{}': {err:#}",
+                        target.display()
+                    );
+                }
+            }
         }
     }
 
@@ -1016,6 +1086,8 @@ fn execute_loader_remove(
     tool_name: &str,
     root: Option<&Path>,
 ) -> Result<()> {
+    validate_tool_name(tool_name).context("Invalid tool name in --remove")?;
+
     let mut entries = read_loader_config(loader_config_path)?;
     let initial_len = entries.len();
     entries.retain(|e| e.name != tool_name);
@@ -1035,8 +1107,17 @@ fn execute_loader_remove(
     if let Some(autoload_dir) = resolve_vendor_autoload_dir(root) {
         let target = autoload_dir.join(format!("{tool_name}.nu"));
         if target.is_file() {
-            let _ = std::fs::remove_file(&target);
-            println!("Removed cached autoload file '{}'.", target.display());
+            match std::fs::remove_file(&target) {
+                Ok(()) => {
+                    println!("Removed cached autoload file '{}'.", target.display());
+                }
+                Err(err) => {
+                    eprintln!(
+                        "Warning: failed to remove cached autoload file '{}': {err:#}",
+                        target.display()
+                    );
+                }
+            }
         }
     }
 
@@ -1060,6 +1141,14 @@ fn execute_loader_add(
             tool_spec
         );
     };
+
+    validate_tool_name(&name).context("Invalid tool name in --add")?;
+    if RESERVED_LOADER_NAMES.contains(&name.as_str()) {
+        bail!(
+            "Tool name '{}' is reserved and cannot be added via the loader.",
+            name
+        );
+    }
 
     let bin_found = crate::cmd::setup_tools::find_binary_on_path(&name, root);
     if bin_found.is_none() {
@@ -1132,19 +1221,30 @@ fn execute_loader_detect(
         } else if should_install && !is_configured {
             if let Some(r) = root {
                 println!("Installing missing preset '{}'…", preset.display_name);
-                if crate::cmd::setup_tools::download_and_install_tool(
+                match crate::cmd::setup_tools::download_and_install_tool(
                     preset,
                     r,
                     &Platform::detect(),
-                )
-                .is_ok()
-                {
-                    entries.push(LoaderConfigEntry {
-                        name: preset.name.to_string(),
-                        command: preset.init_command.to_string(),
-                    });
-                    added_count += 1;
+                ) {
+                    Ok(_) => {
+                        entries.push(LoaderConfigEntry {
+                            name: preset.name.to_string(),
+                            command: preset.init_command.to_string(),
+                        });
+                        added_count += 1;
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "Warning: failed to install '{}': {err:#}",
+                            preset.display_name
+                        );
+                    }
                 }
+            } else {
+                eprintln!(
+                    "Warning: cannot install '{}' without a Numan root directory.",
+                    preset.display_name
+                );
             }
         }
     }
@@ -1425,6 +1525,14 @@ mod tests {
             LoaderConfigEntry {
                 name: "zoxide".to_string(),
                 command: "zoxide init nushell".to_string(),
+            },
+            LoaderConfigEntry {
+                name: "mytool".to_string(),
+                command: r#"echo "hello world""#.to_string(),
+            },
+            LoaderConfigEntry {
+                name: "escaped".to_string(),
+                command: r#"run "C:\path\to\app""#.to_string(),
             },
         ];
 

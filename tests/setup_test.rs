@@ -2,7 +2,7 @@
 
 use numan_cli::cmd::setup::{
     config_already_sources_loader, execute_loader_with_probe, execute_loader_with_probe_and_root,
-    read_loader_config, LoaderArgs,
+    parse_loader_config, read_loader_config, render_loader_config, LoaderArgs, LoaderConfigEntry,
 };
 
 #[test]
@@ -88,12 +88,39 @@ fn setup_loader_add_and_remove_tool() {
 }
 
 #[test]
+fn setup_loader_add_rejects_traversal_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.nu");
+    std::fs::write(&config_path, "# user config\n").unwrap();
+
+    let args = LoaderArgs {
+        yes: true,
+        ..Default::default()
+    };
+    execute_loader_with_probe(&args, || Ok(config_path.clone())).unwrap();
+
+    // Attempt to add a tool with path traversal in the name
+    let add_args = LoaderArgs {
+        add: Some("../../../escape=echo bad".to_string()),
+        yes: true,
+        ..Default::default()
+    };
+    let result = execute_loader_with_probe(&add_args, || Ok(config_path.clone()));
+    assert!(result.is_err(), "path traversal name should be rejected");
+    let msg = format!("{:#}", result.unwrap_err());
+    assert!(
+        msg.contains("may only contain") || msg.contains("must be 1-64"),
+        "expected name validation error, got: {msg}"
+    );
+}
+
+#[test]
 fn setup_loader_config_isolation_preserves_user_entries_on_force() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.nu");
     std::fs::write(&config_path, "# user config\n").unwrap();
 
-    // Add tool
+    // Add preset tool
     let add_args = LoaderArgs {
         add: Some("zoxide".to_string()),
         yes: true,
@@ -101,10 +128,20 @@ fn setup_loader_config_isolation_preserves_user_entries_on_force() {
     };
     execute_loader_with_probe(&add_args, || Ok(config_path.clone())).unwrap();
 
+    // Add a custom entry
+    let add_custom = LoaderArgs {
+        add: Some("mytool=some_command".to_string()),
+        yes: true,
+        ..Default::default()
+    };
+    execute_loader_with_probe(&add_custom, || Ok(config_path.clone())).unwrap();
+
     let loader_config_path = dir.path().join("loader-config.nu");
     let configs = read_loader_config(&loader_config_path).unwrap();
-    assert_eq!(configs.len(), 1);
+    assert_eq!(configs.len(), 2);
     assert_eq!(configs[0].name, "zoxide");
+    assert_eq!(configs[1].name, "mytool");
+    assert_eq!(configs[1].command, "some_command");
 
     // Force re-install loader.nu engine
     let force_args = LoaderArgs {
@@ -114,10 +151,12 @@ fn setup_loader_config_isolation_preserves_user_entries_on_force() {
     };
     execute_loader_with_probe(&force_args, || Ok(config_path.clone())).unwrap();
 
-    // User configs must remain intact!
+    // Both entries must remain intact
     let configs_after = read_loader_config(&loader_config_path).unwrap();
-    assert_eq!(configs_after.len(), 1);
+    assert_eq!(configs_after.len(), 2);
     assert_eq!(configs_after[0].name, "zoxide");
+    assert_eq!(configs_after[1].name, "mytool");
+    assert_eq!(configs_after[1].command, "some_command");
 }
 
 #[test]
@@ -157,6 +196,18 @@ fn setup_loader_detect_discovers_installed_tool() {
         "starship"
     });
     std::fs::write(&fake_starship, b"fake").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake_starship, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    // Add a non-executable file that detection must skip (Unix only)
+    #[cfg(unix)]
+    {
+        let non_exec = tools_bin.join("nonexec");
+        std::fs::write(&non_exec, b"fake").unwrap();
+    }
 
     let detect_args = LoaderArgs {
         detect: true,
@@ -170,4 +221,26 @@ fn setup_loader_detect_discovers_installed_tool() {
     let loader_config_path = dir.path().join("loader-config.nu");
     let configs = read_loader_config(&loader_config_path).unwrap();
     assert!(configs.iter().any(|e| e.name == "starship"));
+}
+
+#[test]
+fn loader_config_roundtrip_with_escaping() {
+    let entries = vec![
+        LoaderConfigEntry {
+            name: "starship".to_string(),
+            command: "starship init nu".to_string(),
+        },
+        LoaderConfigEntry {
+            name: "mytool".to_string(),
+            command: r#"echo "hello world""#.to_string(),
+        },
+        LoaderConfigEntry {
+            name: "escaped".to_string(),
+            command: r#"run "C:\path\to\app""#.to_string(),
+        },
+    ];
+
+    let rendered = render_loader_config(&entries);
+    let parsed = parse_loader_config(&rendered);
+    assert_eq!(entries, parsed);
 }

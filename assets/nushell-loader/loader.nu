@@ -6,17 +6,21 @@
 let autoload_dir: path = $nu.data-dir | path join "vendor/autoload"
 mkdir $autoload_dir
 
-# Configuration is loaded from `loader-config.nu` in the same directory as loader.nu
+# Load tool configuration from loader-config.nu in the same directory as loader.nu.
+# Uses `open` at runtime instead of `source` so the path does not need to be a
+# parse-time constant and a missing config file is handled gracefully.
 let loader_config_file = ($nu.config-path | path dirname | path join 'loader-config.nu')
 
 let aidnem_loader_configs: list<record> = if ($loader_config_file | path exists) {
-  source $loader_config_file
-  $aidnem_loader_configs
+  (open $loader_config_file)
 } else {
   []
 }
 
 def _aidnem_loader_get_file_from_name [name: string] {
+  if not ($name =~ '^[A-Za-z0-9][A-Za-z0-9_-]*$') {
+    error make { msg: $"Invalid loader name: '($name)'. Names must match [A-Za-z0-9][A-Za-z0-9_-]*" }
+  }
   { parent: $autoload_dir, stem: $name, extension: 'nu' } | path join
 }
 
@@ -26,7 +30,7 @@ for item in $aidnem_loader_configs {
     print $"[Aidnem Loader] Generating cache for ($item.name)..."
     try {
       let res = (nu -n -c $item.command | complete)
-      if $res.exit_code == 0 and not ($res.stdout | is-empty) {
+      if $res.exit_code == 0 and ($res.stderr | is-empty) and not ($res.stdout | is-empty) {
         $res.stdout | save -f $target
         print $"[Aidnem Loader] Successfully cached ($item.name) -> ($target)"
       } else {
