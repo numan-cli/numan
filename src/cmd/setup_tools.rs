@@ -178,18 +178,22 @@ fn matches_tool_asset(tool: &ToolPreset, asset_name: &str, platform: &Platform) 
         "starship" => match (platform.os, platform.arch) {
             (Os::Windows, Arch::X86_64) => name.contains("x86_64-pc-windows-msvc.zip"),
             (Os::Windows, Arch::Aarch64) => name.contains("aarch64-pc-windows-msvc.zip"),
-            (Os::Linux, Arch::X86_64) => {
-                let libc = match platform.env {
-                    Env::Musl => "musl",
-                    _ => "gnu",
-                };
-                name.contains(&format!("x86_64-unknown-linux-{libc}")) && name.ends_with(".tar.gz")
-            }
-            (Os::Linux, Arch::Aarch64) => {
-                (name.contains("aarch64-unknown-linux-musl.tar.gz")
-                    || name.contains("aarch64-unknown-linux"))
-                    && name.ends_with(".tar.gz")
-            }
+            (Os::Linux, Arch::X86_64) => match platform.env {
+                Env::Musl => {
+                    name.contains("x86_64-unknown-linux-musl") && name.ends_with(".tar.gz")
+                }
+                _ => name.contains("x86_64-unknown-linux-gnu") && name.ends_with(".tar.gz"),
+            },
+            (Os::Linux, Arch::Aarch64) => match platform.env {
+                Env::Musl => {
+                    name.contains("aarch64-unknown-linux-musl") && name.ends_with(".tar.gz")
+                }
+                _ => {
+                    (name.contains("aarch64-unknown-linux-gnu")
+                        || name.contains("aarch64-unknown-linux-musl"))
+                        && name.ends_with(".tar.gz")
+                }
+            },
             (Os::Macos, Arch::X86_64) => name.contains("x86_64-apple-darwin.tar.gz"),
             (Os::Macos, Arch::Aarch64) => name.contains("aarch64-apple-darwin.tar.gz"),
             _ => false,
@@ -197,12 +201,26 @@ fn matches_tool_asset(tool: &ToolPreset, asset_name: &str, platform: &Platform) 
         "zoxide" => match (platform.os, platform.arch) {
             (Os::Windows, Arch::X86_64) => name.contains("x86_64-pc-windows-msvc.zip"),
             (Os::Windows, Arch::Aarch64) => name.contains("aarch64-pc-windows-msvc.zip"),
-            (Os::Linux, Arch::X86_64) => {
-                name.contains("x86_64-unknown-linux") && name.ends_with(".tar.gz")
-            }
-            (Os::Linux, Arch::Aarch64) => {
-                name.contains("aarch64-unknown-linux") && name.ends_with(".tar.gz")
-            }
+            (Os::Linux, Arch::X86_64) => match platform.env {
+                Env::Musl => {
+                    name.contains("x86_64-unknown-linux-musl") && name.ends_with(".tar.gz")
+                }
+                _ => {
+                    (name.contains("x86_64-unknown-linux-gnu")
+                        || name.contains("x86_64-unknown-linux-musl"))
+                        && name.ends_with(".tar.gz")
+                }
+            },
+            (Os::Linux, Arch::Aarch64) => match platform.env {
+                Env::Musl => {
+                    name.contains("aarch64-unknown-linux-musl") && name.ends_with(".tar.gz")
+                }
+                _ => {
+                    (name.contains("aarch64-unknown-linux-gnu")
+                        || name.contains("aarch64-unknown-linux-musl"))
+                        && name.ends_with(".tar.gz")
+                }
+            },
             (Os::Macos, Arch::X86_64) => name.contains("x86_64-apple-darwin.tar.gz"),
             (Os::Macos, Arch::Aarch64) => name.contains("aarch64-apple-darwin.tar.gz"),
             _ => false,
@@ -767,11 +785,17 @@ mod tests {
             arch: Arch::Aarch64,
             env: crate::core::platform::Env::Msvc,
         };
-        let linux_x64 = Platform {
+        let linux_x64_gnu = Platform {
             triple: "x86_64-unknown-linux-gnu".to_string(),
             os: Os::Linux,
             arch: Arch::X86_64,
             env: crate::core::platform::Env::Gnu,
+        };
+        let linux_x64_musl = Platform {
+            triple: "x86_64-unknown-linux-musl".to_string(),
+            os: Os::Linux,
+            arch: Arch::X86_64,
+            env: crate::core::platform::Env::Musl,
         };
         let zoxide = find_preset("zoxide").unwrap();
 
@@ -783,7 +807,17 @@ mod tests {
         assert!(matches_tool_asset(
             zoxide,
             "zoxide-0.10.0-x86_64-unknown-linux-musl.tar.gz",
-            &linux_x64
+            &linux_x64_gnu
+        ));
+        assert!(matches_tool_asset(
+            zoxide,
+            "zoxide-0.10.0-x86_64-unknown-linux-musl.tar.gz",
+            &linux_x64_musl
+        ));
+        assert!(!matches_tool_asset(
+            zoxide,
+            "zoxide-0.10.0-x86_64-unknown-linux-gnu.tar.gz",
+            &linux_x64_musl
         ));
     }
 
