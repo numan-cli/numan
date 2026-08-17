@@ -26,7 +26,7 @@ jobs:
       contains(github.event.comment.body, ' /oc ') ||
       endsWith(github.event.comment.body, ' /oc') ||
       contains(github.event.comment.body, ' /opencode ') ||
-      endsWith(github.event.comment.body, ' /opencode'))
+      endsWith(github.event.comment.body, ' /opencode')))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
