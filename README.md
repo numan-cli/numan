@@ -42,13 +42,12 @@ These workflows are covered by unit tests, hermetic integration tests, and real-
 
 - **Registry-backed installs**: Search packages, inspect available versions, and install `owner/name` or `owner/name@version`.
 - **Official registry**: `numan init` configures the `official` registry automatically. Its production trust root is built into numan, and `numan registry sync` verifies every signed index.
-- **Registry-backed installs**: Search packages, inspect available versions, and install `owner/name` or `owner/name@version`.
-- **Official registry**: `numan init` configures the `official` registry automatically. Its production trust root is built into numan, and `numan registry sync` verifies every signed index.
 - **Package types**: Plugins and modules support activation. Scripts and completion packages are currently install-only while their activation contracts are finalized.
 - **Verified artifacts**: Plugin binaries require SHA-256 hashes, and registry indexes require valid Ed25519 signatures.
 - **Scoped activation**: Plugins remain active only while the Nushell executable hash, Nushell version, and plugin registry path match the recorded activation state.
 - **Module autoloads**: numan writes managed vendor autoload files with ownership markers and validates candidate files before promotion.
 - **Lifecycle management**: Update, remove, and garbage collection operations recover safely through lifecycle journals.
+- **Shell tool integration & loader**: `numan setup loader` configures cached initialization for third-party shell CLI tools (Starship, Zoxide, Carapace, Atuin, Mise, Direnv, Oh-My-Posh), detects installed tools, isolates configurations in `loader-config.nu`, and downloads missing prebuilt binaries into `$NUMAN_ROOT/tools/bin/`.
 - **nupm interoperability**: Use `numan nupm status`, `inspect`, `import`, and `diff` to inspect, migrate, and detect drift in existing [nupm](https://github.com/nushell/nupm) installations.
 - **Health checks**: `numan doctor` diagnoses installation health and applies safe repairs by default. Use `--scan` for report-only mode.
 - **Shell completions**: Install completions for Bash, Fish, Zsh, PowerShell, and Nushell with `numan completions` (use `--print` to emit the script).
@@ -353,6 +352,7 @@ Global flag: `--root <path>` — override the numan root directory (all commands
 | `numan setup nu remove` | Remove the managed Nushell install and fall back to PATH Nu |
 | `numan setup nu path` | Use the Nushell already on PATH (removes managed install) |
 | `numan setup nu use <path>` | Register a specific existing Nushell binary |
+| `numan setup loader` | Setup nushell-loader integration and third-party shell CLI tools |
 | `numan use <version>` | Switch the active managed Nu to a pinned version (no auto-install; errors with a hint to run `numan setup nu <version>` if missing). Cross-minor switches deactivate Numan-active plugins/modules for the leaving Nu and restore that minor's remembered set when you switch back. |
 | `numan use latest` | Switch the active managed Nu to the latest installed version (same leave/restore behavior as `use <version>`) |
 | `numan use list` | List installed managed Nu versions and mark the active one |
@@ -380,8 +380,35 @@ Global flag: `--root <path>` — override the numan root directory (all commands
 | `nupm import` | `--as owner/name` (single import); `--manifest <file>` (batch); `--nupm-home <path>`; `--yes` skip consent |
 | `doctor` | `--scan` report only; `--json` machine output; `--nupm-home <path>` (repairs by default) |
 | `setup nu` | `--force` re-download; `--skip-path` don't update PATH; `--yes` skip prompt |
+| `setup loader` | `--status` check health/cache; `--detect` scan PATH tools; `--add <tool>` add preset/custom; `--remove <tool>` remove tool; `--clean` purge caches; `--install` / `--install-missing` download binaries; `--force` overwrite engine; `--configure` append to `config.nu` |
 
 Run `numan <command> --help` for full flag documentation.
+
+---
+
+## Shell tool integration (nushell-loader)
+
+Numan includes a high-performance loader integration based on [nushell-loader](https://github.com/aidnem/nushell-loader). It caches initialization scripts for external tools (Starship, Zoxide, Carapace, Atuin, Mise, Direnv, Oh-My-Posh) in `$nu.data-dir/vendor/autoload/`, speeding up Nushell startup.
+
+```bash
+# 1. Install loader.nu and append source snippet to config.nu
+numan setup loader --configure
+
+# 2. Detect shell tools on your PATH and register them
+numan setup loader --detect
+
+# 3. Add a tool preset (with optional binary download if missing from PATH)
+numan setup loader --add starship --install
+numan setup loader --add "custom=echo 'source ~/.custom.nu'"
+
+# 4. Check status and cache files
+numan setup loader --status
+
+# 5. Clean / invalidate cached initialization scripts
+numan setup loader --clean
+```
+
+Tool definitions are isolated in `loader-config.nu`, ensuring that updating the loader engine (`numan setup loader --force`) preserves your custom configuration. Binaries downloaded via `--install` or `--install-missing` are placed in `$NUMAN_ROOT/tools/bin/` and persisted to your `PATH`.
 
 ---
 

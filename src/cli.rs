@@ -56,7 +56,7 @@ pub enum Commands {
     Completions(cmd::completions::CompletionsArgs),
     /// Diagnose Numan root health and apply safe repairs (use `--scan` for report-only)
     Doctor(cmd::doctor::DoctorArgs),
-    /// Install optional Nushell integration helpers
+    /// Manage Nushell installations and external shell CLI tool integrations
     #[command(subcommand)]
     Setup(cmd::setup::SetupCommands),
     /// Try a package against your current Nu and platform, with compatibility guidance

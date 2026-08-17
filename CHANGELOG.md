@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Enhanced `numan setup loader`**:
+  - Configuration isolation: separates user tool configurations into `loader-config.nu` so that updating the loader engine (`numan setup loader --force`) preserves custom tool definitions.
+  - Direct GitHub release binary installer: downloads prebuilt verified binaries for CLI tools (Starship, Zoxide, Carapace, Atuin, Mise, Direnv, Oh-My-Posh) into `$NUMAN_ROOT/tools/bin/` with `--install` / `--install-missing` and persists them to the user's `PATH`.
+  - Tool management flags: `--status` (inspect health, config, PATH status, and cached autoload files), `--detect` (discover PATH tools), `--add <tool>` (preset or custom), `--remove <tool>` (with cache purge), and `--clean` (invalidate cached init files).
+
 ## [0.2.2] - 2026-08-16
 
 ### Added

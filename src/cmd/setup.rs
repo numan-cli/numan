@@ -55,7 +55,7 @@ source ($nu.config-path | path dirname | path join 'loader.nu')
 pub enum SetupCommands {
     /// Download and install the official Nushell release under the Numan root
     Nu(NuSetupArgs),
-    /// Install the vendored nushell-loader script and print a config.nu snippet
+    /// Setup nushell-loader integration and manage external shell CLI tools
     Loader(LoaderArgs),
 }
 
