@@ -66,7 +66,7 @@ CONTRACT_DOC_DIR="$REPO_ROOT/docs/contracts"
 DRIFT_SCRIPT="$REPO_ROOT/scripts/check-roadmap-drift.py"
 
 # Repos. Order matters: numan is the source-of-truth broker.
-REPO_OWNER="tonythethompson"
+REPO_OWNER="numan-cli"
 REPO_NUMAN="$REPO_OWNER/numan"
 REPO_PLUGINS="$REPO_OWNER/numan-plugins"
 REPO_REGISTRY="$REPO_OWNER/numan-registry"
@@ -279,8 +279,8 @@ import re, sys
 path, sha = sys.argv[1], sys.argv[2]
 text = open(path, encoding="utf-8").read()
 text2, n = re.subn(
-    r"https://github\.com/tonythethompson/numan/blob/(?:numan-roadmap-contract/v\d+|[0-9a-f]{7,40})/",
-    f"https://github.com/tonythethompson/numan/blob/{sha}/",
+    r"https://github\.com/numan-cli/numan/blob/(?:numan-roadmap-contract/v\d+|[0-9a-f]{7,40})/",
+    f"https://github.com/numan-cli/numan/blob/{sha}/",
     text,
 )
 if n < 1:

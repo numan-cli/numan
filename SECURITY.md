@@ -7,9 +7,9 @@ official catalog.
 Companion policies:
 
 - Registry (signed index, yanks, key incidents):
-  [tonythethompson/numan-registry SECURITY.md](https://github.com/tonythethompson/numan-registry/blob/main/SECURITY.md)
+  [numan-cli/numan-registry SECURITY.md](https://github.com/numan-cli/numan-registry/blob/main/SECURITY.md)
 - Plugin build pipeline:
-  [tonythethompson/numan-plugins SECURITY.md](https://github.com/tonythethompson/numan-plugins/blob/main/SECURITY.md)
+  [numan-cli/numan-plugins SECURITY.md](https://github.com/numan-cli/numan-plugins/blob/main/SECURITY.md)
 
 ## Report a vulnerability
 
@@ -17,7 +17,7 @@ Do not publish exploit details, private keys, or proof-of-concept payloads that
 could harm other users in a public issue.
 
 Preferred: open a private GitHub security advisory at
-<https://github.com/tonythethompson/numan/security/advisories/new>.
+<https://github.com/numan-cli/numan/security/advisories/new>.
 
 Fallback: open a public issue titled **Security contact request** with no
 technical details. The maintainer will establish a private channel before
@@ -47,9 +47,9 @@ Helpful report contents:
 **Out of scope here (report elsewhere)**
 
 - Compromised or malicious packages already listed in the signed official index:
-  [numan-registry](https://github.com/tonythethompson/numan-registry)
+  [numan-registry](https://github.com/numan-cli/numan-registry)
 - Bad builds or release assets that never reached a signed index:
-  [numan-plugins](https://github.com/tonythethompson/numan-plugins)
+  [numan-plugins](https://github.com/numan-cli/numan-plugins)
 - Vulnerabilities inside upstream Nushell plugins/modules themselves
 - Issues that only appear after deliberately disabling verification
   (`NUMAN_ALLOW_UNSIGNED=1` and similar override paths)
@@ -81,6 +81,6 @@ upgrading to the latest release after an advisory.
 
 - Client overview and trust features: [README.md](README.md)
 - Registry incident procedures (yank, rollback, user remediation):
-  [numan-registry incident-response](https://github.com/tonythethompson/numan-registry/blob/main/docs/incident-response.md)
+  [numan-registry incident-response](https://github.com/numan-cli/numan-registry/blob/main/docs/incident-response.md)
 - Active-plugin mutation gate:
   [docs/active-plugin-gate.md](docs/active-plugin-gate.md)
