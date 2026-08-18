@@ -1,10 +1,10 @@
 name: Publish to Homebrew tap
 
 # After a successful v*.*.* Release workflow finishes, regenerate Formula/numan.rb
-# from SHA256SUMS and push it to tonythethompson/homebrew-numan.
+# from SHA256SUMS and push it to numan-cli/homebrew-numan.
 #
-# Requires repository secret HOMEBREW_TAP_TOKEN on tonythethompson/numan: a PAT
-# (classic or fine-grained) with contents:write on tonythethompson/homebrew-numan.
+# Requires repository secret HOMEBREW_TAP_TOKEN on numan-cli/numan: a PAT
+# (classic or fine-grained) with contents:write on numan-cli/homebrew-numan.
 # Without it the job fails closed so a missing secret cannot silently skip updates.
 
 on:
@@ -36,7 +36,7 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     env:
-      TAP_REPO: tonythethompson/homebrew-numan
+      TAP_REPO: numan-cli/homebrew-numan
     steps:
       - name: Verify required tools
         shell: bash
@@ -179,9 +179,9 @@ jobs:
           from pathlib import Path
           Path("/tmp/homebrew-numan/README.md").write_text(
               "# homebrew-numan\n\n"
-              "Homebrew tap for [Numan](https://github.com/tonythethompson/numan).\n\n"
+              "Homebrew tap for [Numan](https://github.com/numan-cli/numan).\n\n"
               "```bash\n"
-              "brew tap tonythethompson/numan\n"
+              "brew tap numan-cli/numan\n"
               "brew install numan\n"
               "```\n\n"
               "This repository must stay **public**. Formula digests are updated\n"

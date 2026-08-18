@@ -1,8 +1,8 @@
 # numan
 
-[![CI](https://github.com/tonythethompson/numan/actions/workflows/ci.yml/badge.svg)](https://github.com/tonythethompson/numan/actions/workflows/ci.yml)
+[![CI](https://github.com/numan-cli/numan/actions/workflows/ci.yml/badge.svg)](https://github.com/numan-cli/numan/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-<a href="https://github.com/tonythethompson/homebrew-numan"><img alt="Homebrew Package Version" src="https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Ftonythethompson%2Fhomebrew-numan%2Fmaster%2FFormula%2Fnuman.rb&search=version%20%22(%5B%5E%22%5D%2B)%22&replace=%241&label=homebrew&logo=homebrew&color=fbb040"></a>
+<a href="https://github.com/numan-cli/homebrew-numan"><img alt="Homebrew Package Version" src="https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnuman-cli%2Fhomebrew-numan%2Fmaster%2FFormula%2Fnuman.rb&search=version%20%22(%5B%5E%22%5D%2B)%22&replace=%241&label=homebrew&logo=homebrew&color=fbb040"></a>
 ![WinGet Package Version](https://img.shields.io/winget/v/tonythethompson.numan)
 <img alt="Crates.io Version" src="https://img.shields.io/crates/v/numan-cli">
 <img alt="Crates.io Version" src="https://img.shields.io/crates/d/numan-cli">
@@ -78,7 +78,7 @@ zsh, PowerShell, and Nushell (`nu`); use `--print` to emit the script instead.
 Requires [Rust](https://rustup.rs/) **1.88+** (stable recommended) and a Nushell binary on `PATH` for activation commands.
 
 ```bash
-git clone https://github.com/tonythethompson/numan.git
+git clone https://github.com/numan-cli/numan.git
 cd numan
 cargo install --path .
 ```
@@ -87,7 +87,7 @@ The binary is named `numan`.
 
 ### Pre-built releases
 
-Download the latest archive for your platform from [GitHub Releases](https://github.com/tonythethompson/numan/releases). Each release ships:
+Download the latest archive for your platform from [GitHub Releases](https://github.com/numan-cli/numan/releases). Each release ships:
 
 | Platform | Archive | Binary |
 | ---------- | --------- | -------- |
@@ -116,19 +116,19 @@ Verify downloads with the `SHA256SUMS` file attached to each release.
 ### From git (latest `master`)
 
 ```bash
-cargo install --git https://github.com/tonythethompson/numan
+cargo install --git https://github.com/numan-cli/numan
 ```
 
-Tracks the default branch. For a reproducible install, choose a published tag from [GitHub Releases](https://github.com/tonythethompson/numan/releases) and pass `--tag vX.Y.Z`.
+Tracks the default branch. For a reproducible install, choose a published tag from [GitHub Releases](https://github.com/numan-cli/numan/releases) and pass `--tag vX.Y.Z`.
 
 ### Homebrew (macOS / Linux)
 
 ```bash
-brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan
+brew tap numan-cli/numan https://github.com/numan-cli/homebrew-numan
 brew install numan
 ```
 
-Uses the public [`homebrew-numan`](https://github.com/tonythethompson/homebrew-numan) tap. Prefer the explicit HTTPS remote so `brew update` does not depend on SSH host keys. Formula digests update automatically after each GitHub Release (see [docs/PACKAGING.md](docs/PACKAGING.md)).
+Uses the public [`homebrew-numan`](https://github.com/numan-cli/homebrew-numan) tap. Prefer the explicit HTTPS remote so `brew update` does not depend on SSH host keys. Formula digests update automatically after each GitHub Release (see [docs/PACKAGING.md](docs/PACKAGING.md)).
 
 ### winget (Windows)
 
@@ -175,7 +175,7 @@ Install with **one** of the options below, then run the activation path.
 ### Homebrew (macOS / Linux)
 
 ```bash
-brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan && brew install numan
+brew tap numan-cli/numan https://github.com/numan-cli/homebrew-numan && brew install numan
 ```
 
 ### winget (Windows)
@@ -190,7 +190,7 @@ winget install tonythethompson.numan
 cargo install numan-cli
 ```
 
-Or download a release archive from [GitHub Releases](https://github.com/tonythethompson/numan/releases) and add `numan` to `PATH`.
+Or download a release archive from [GitHub Releases](https://github.com/numan-cli/numan/releases) and add `numan` to `PATH`.
 
 Then:
 
@@ -472,7 +472,7 @@ PR reviewers should follow [`REVIEW.md`](REVIEW.md).
 
 ## Roadmap
 
-**Releases:** see the [latest GitHub Release](https://github.com/tonythethompson/numan/releases/latest) — feature-complete core on **0.2.x** while dogfooding the official registry ([catalog × Nu matrix](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md) for live package counts and Nu bands).
+**Releases:** see the [latest GitHub Release](https://github.com/numan-cli/numan/releases/latest) — feature-complete core on **0.2.x** while dogfooding the official registry ([catalog × Nu matrix](https://github.com/numan-cli/numan-registry/blob/main/docs/catalog-compat.md) for live package counts and Nu bands).
 
 For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 `numan-plugins`, see
@@ -487,17 +487,17 @@ For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 | **5** | `update` / `remove` / `gc`, lockfile v2, [snapshots + rollback](docs/snapshots-and-rollback.md) | ✅ (source builds deferred; active-plugin update opt-in) |
 | **6** | [nupm](docs/nupm-compatibility.md) status, inspect, import, drift | ✅ |
 | **7** | Doctor, completions, onboarding, CI hardening, [winget + Homebrew tap](docs/PACKAGING.md) | ✅ — [plan](docs/plans/Phase7Plan.md) |
-| **Post-7.6** | Production [official registry](https://tonythethompson.github.io/numan-registry/) cutover; `numan init` and `numan doctor` auto-configure `official` | ✅ (v0.1.4) |
+| **Post-7.6** | Production [official registry](https://numan-cli.github.io/numan-registry/) cutover; `numan init` and `numan doctor` auto-configure `official` | ✅ (v0.1.4) |
 
 ### Next (toward 1.0)
 
 | Item | Tracking |
 | ------ | ---------- |
-| Curated **official registry** depth + multi-OS first-use demos | 🔄 [#18](https://github.com/tonythethompson/numan/issues/18), [catalog-compat](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md), [intake roadmap](docs/registry-intake-roadmap.md) |
+| Curated **official registry** depth + multi-OS first-use demos | 🔄 [#18](https://github.com/numan-cli/numan/issues/18), [catalog-compat](https://github.com/numan-cli/numan-registry/blob/main/docs/catalog-compat.md), [intake roadmap](docs/registry-intake-roadmap.md) |
 | Cross-platform **fresh-install** dogfooding + lifecycle evidence | 🔄 `init` → `registry sync` → `search` → `install` → `activate` → `doctor` on Linux, macOS, Windows |
 | Ship **0.2.0** (`setup nu` redesign + `numan use`) | ✅ [CHANGELOG](CHANGELOG.md) |
-| Cut **0.2.1** (`update --self`, install-only honesty, `try` script fallback) | ✅ [v0.2.1](https://github.com/tonythethompson/numan/releases/tag/v0.2.1) |
-| Cut **0.2.2** (ARM release assets, `try` UX redesign, intake provenance/tiers, Nu 0.114 extract cap fix) | ✅ [v0.2.2](https://github.com/tonythethompson/numan/releases/tag/v0.2.2) |
+| Cut **0.2.1** (`update --self`, install-only honesty, `try` script fallback) | ✅ [v0.2.1](https://github.com/numan-cli/numan/releases/tag/v0.2.1) |
+| Cut **0.2.2** (ARM release assets, `try` UX redesign, intake provenance/tiers, Nu 0.114 extract cap fix) | ✅ [v0.2.2](https://github.com/numan-cli/numan/releases/tag/v0.2.2) |
 
 **1.0** when the [unified gate](docs/plans/consolidated-multi-repo-roadmap.md#unified-10-gate) is green and there are no open P0/P1 issues on the core install/activate/update/remove lifecycle.
 
@@ -505,8 +505,8 @@ For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 
 | Item | Tracking |
 | ------ | ---------- |
-| Source builds (clone and build each require explicit consent, separate scopes) | [#20](https://github.com/tonythethompson/numan/issues/20) / Phase 5.2 |
-| Active-plugin **update** default-on (today: exact `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` opt-in) | [#22](https://github.com/tonythethompson/numan/issues/22) / [active-plugin-gate.md](docs/active-plugin-gate.md) |
+| Source builds (clone and build each require explicit consent, separate scopes) | [#20](https://github.com/numan-cli/numan/issues/20) / Phase 5.2 |
+| Active-plugin **update** default-on (today: exact `NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1` opt-in) | [#22](https://github.com/numan-cli/numan/issues/22) / [active-plugin-gate.md](docs/active-plugin-gate.md) |
 | Completions/scripts activation contracts | [docs/registry-intake-roadmap.md](docs/registry-intake-roadmap.md) |
 | Scoop manifest | Deferred (low demand) |
 
@@ -530,7 +530,7 @@ For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 
 To report a vulnerability in the Numan CLI, see [SECURITY.md](SECURITY.md).
 Registry catalog and signing incidents are covered by
-[numan-registry SECURITY.md](https://github.com/tonythethompson/numan-registry/blob/main/SECURITY.md).
+[numan-registry SECURITY.md](https://github.com/numan-cli/numan-registry/blob/main/SECURITY.md).
 
 ---
 
@@ -544,5 +544,5 @@ MIT — see [LICENSE](LICENSE).
 
 - [Nushell](https://www.nushell.sh/) — the shell numan packages for
 - [nupm](https://github.com/nushell/nupm) — Nushell’s built-in package manager; numan interoperates via import and drift detection
-- [numan-registry](https://github.com/tonythethompson/numan-registry) — signed official catalog ([catalog × Nu matrix](https://github.com/tonythethompson/numan-registry/blob/main/docs/catalog-compat.md))
-- [numan-plugins](https://github.com/tonythethompson/numan-plugins) — CI-built plugin binaries for source-only upstreams ([backlog](https://github.com/tonythethompson/numan-plugins/blob/main/docs/backlog.json))
+- [numan-registry](https://github.com/numan-cli/numan-registry) — signed official catalog ([catalog × Nu matrix](https://github.com/numan-cli/numan-registry/blob/main/docs/catalog-compat.md))
+- [numan-plugins](https://github.com/numan-cli/numan-plugins) — CI-built plugin binaries for source-only upstreams ([backlog](https://github.com/numan-cli/numan-plugins/blob/main/docs/backlog.json))

@@ -46,11 +46,11 @@ Then:
    git push origin "v${release_version}"
    ```
 
-6. The [Release workflow](https://github.com/tonythethompson/numan/actions/workflows/release.yml) waits for green CI on the tagged commit, runs preflight checks, then builds archives and publishes.
+6. The [Release workflow](https://github.com/numan-cli/numan/actions/workflows/release.yml) waits for green CI on the tagged commit, runs preflight checks, then builds archives and publishes.
 7. Confirm platform archives (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`, `aarch64-apple-darwin`), `SHA256SUMS`, and `SHA256SUMS.sig` on GitHub Releases.
 8. Confirm the **Publish to crates.io** job succeeds (requires Trusted Publishing / OIDC on crates.io).
 9. Confirm the [`Publish to WinGet`](../.github/workflows/winget.yml) workflow verifies the `winget-release-ready` artifact and published Windows release asset, then opens the update PR after the `v*.*.*` tag-triggered Release workflow completes (manual recovery: dispatch with required `release_tag`).
-10. Confirm the [`Publish to Homebrew tap`](../.github/workflows/homebrew.yml) workflow verifies the `homebrew-release-ready` artifact and pushes `Formula/numan.rb` to [`tonythethompson/homebrew-numan`](https://github.com/tonythethompson/homebrew-numan) (requires `HOMEBREW_TAP_TOKEN`; manual recovery: dispatch with required `release_tag`).
+10. Confirm the [`Publish to Homebrew tap`](../.github/workflows/homebrew.yml) workflow verifies the `homebrew-release-ready` artifact and pushes `Formula/numan.rb` to [`numan-cli/homebrew-numan`](https://github.com/numan-cli/homebrew-numan) (requires `HOMEBREW_TAP_TOKEN`; manual recovery: dispatch with required `release_tag`).
 11. After publication, update documentation only if it needs links that depend on newly created release pages or assets; do not use this step to repair README content already shipped in the crate or tag.
 
 **Do not tag until CI is green on `master`.** The release workflow gates on CI check results for tag pushes; pushing a tag on a failing commit blocks publication.

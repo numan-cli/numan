@@ -28,7 +28,7 @@ pub struct OfficialRegistry {
 /// the production values.
 pub const OFFICIAL_REGISTRY: OfficialRegistry = OfficialRegistry {
     name: "official",
-    production_url: "https://tonythethompson.github.io/numan-registry/index.json",
+    production_url: "https://numan-cli.github.io/numan-registry/index.json",
     key_id: "official-2026-07-01",
     public_key_b64: "1F0STZT/Fk4OiP/7Hqs3/MurixBKoe7GYVoCto2/mCc=",
 };

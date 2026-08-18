@@ -46,14 +46,14 @@ the `numan` repo.
 
 ## Installation
 
-From a checkout of `tonythethompson/numan` (this repo), copy the
+From a checkout of `numan-cli/numan` (this repo), copy the
 sibling artifacts into each sibling working tree. Do not run the `cp`
 lines from inside the sibling repo alone — the `cross-repo-mirror/`
 tree lives only in `numan`.
 
 ```bash
 # In the numan checkout:
-NUMAN_ROOT=$(pwd)   # path to tonythethompson/numan
+NUMAN_ROOT=$(pwd)   # path to numan-cli/numan
 CONTRACT_SHA=14f8e8c0934049c0030626b4a0d917255e988105
 SIBLING=numan-plugins   # or numan-registry
 SIBLING_ROOT=/path/to/$SIBLING
@@ -63,7 +63,7 @@ mkdir -p "$SIBLING_ROOT/scripts" "$SIBLING_ROOT/docs" "$SIBLING_ROOT/.github/wor
 # Fetch the pinned contract version of the drift script directly from
 # the contract SHA so the sibling repo never holds a stale copy.
 curl -sSfL \
-    "https://raw.githubusercontent.com/tonythethompson/numan/${CONTRACT_SHA}/scripts/check-roadmap-drift.py" \
+    "https://raw.githubusercontent.com/numan-cli/numan/${CONTRACT_SHA}/scripts/check-roadmap-drift.py" \
     -o "$SIBLING_ROOT/scripts/check-roadmap-drift.py"
 chmod +x "$SIBLING_ROOT/scripts/check-roadmap-drift.py"
 
@@ -76,7 +76,7 @@ cp "$NUMAN_ROOT/cross-repo-mirror/$SIBLING/.github/workflows/roadmap-drift.yml" 
 # matches sibling CI (which curls the same path from CONTRACT_SHA).
 mkdir -p "$SIBLING_ROOT/docs/plans"
 curl -sSfL \
-    "https://raw.githubusercontent.com/tonythethompson/numan/${CONTRACT_SHA}/docs/plans/consolidated-multi-repo-roadmap.md" \
+    "https://raw.githubusercontent.com/numan-cli/numan/${CONTRACT_SHA}/docs/plans/consolidated-multi-repo-roadmap.md" \
     -o "$SIBLING_ROOT/docs/plans/consolidated-multi-repo-roadmap.md"
 
 # Smoke-test locally before pushing (from the sibling working tree):

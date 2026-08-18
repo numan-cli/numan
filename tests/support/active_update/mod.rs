@@ -515,7 +515,7 @@ fn write_dual_version_registry(
     let package = Package {
         id,
         description: "Fixture dual-version plugin for active-update real-Nu matrix".to_string(),
-        repo: "https://github.com/tonythethompson/numan".to_string(),
+        repo: "https://github.com/numan-cli/numan".to_string(),
         package_type: PackageType::Plugin,
         tags: vec!["fixture".to_string(), "acceptance".to_string()],
         versions: vec![mk_version(1, 0, 0), mk_version(2, 0, 0)],

@@ -166,7 +166,7 @@ pub fn active_plugin_mutation_gated(package_id: &str) -> String {
 Run `numan deactivate {package_id}`, then `numan remove {package_id}`. \
 Active-plugin remove stays gated (Issue #22); \
 `remove --force` does not bypass plugin activation \
-(https://github.com/tonythethompson/numan/issues/22)."
+(https://github.com/numan-cli/numan/issues/22)."
     )
 }
 
@@ -180,7 +180,7 @@ pub fn active_plugin_mutation_gated_doctor_message(package_id: &str) -> String {
 active remove stays gated (deactivate first). Active update is opt-in via \
 NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 exactly (default off): \
 deactivate→upgrade→activate \
-(https://github.com/tonythethompson/numan/issues/22)."
+(https://github.com/numan-cli/numan/issues/22)."
     )
 }
 
@@ -192,7 +192,7 @@ update orchestration is disabled by default. \
 Set NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 exactly to enable \
 deactivate→update→activate, or run `numan deactivate {package_id}` first \
 then `numan update {package_id}` while inactive \
-(https://github.com/tonythethompson/numan/issues/22)."
+(https://github.com/numan-cli/numan/issues/22)."
     )
 }
 
