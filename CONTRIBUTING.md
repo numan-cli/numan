@@ -10,7 +10,7 @@ Thank you for your interest in contributing to Numan. This guide covers the work
 ## Getting started
 
 ```bash
-git clone https://github.com/tonythethompson/numan.git
+git clone https://github.com/numan-cli/numan.git
 cd numan
 cargo build
 cargo test
@@ -101,7 +101,7 @@ See [docs/nupm-compatibility.md](docs/nupm-compatibility.md) for the nupm intero
 
 ## Reporting issues
 
-Open a [GitHub issue](https://github.com/tonythethompson/numan/issues) with:
+Open a [GitHub issue](https://github.com/numan-cli/numan/issues) with:
 
 - Numan version (`numan --version` or commit SHA)
 - OS and architecture

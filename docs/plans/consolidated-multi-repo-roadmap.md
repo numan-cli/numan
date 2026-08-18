@@ -3,8 +3,8 @@
 **Authority:** This is the single cross-repo plan for remaining work toward Numan 1.0.
 Repo-local roadmaps keep operational detail and should link here:
 
-- [`numan-plugins/docs/roadmap.md`](https://github.com/tonythethompson/numan-plugins/blob/master/docs/roadmap.md)
-- [`numan-registry/docs/roadmap.md`](https://github.com/tonythethompson/numan-registry/blob/main/docs/roadmap.md)
+- [`numan-plugins/docs/roadmap.md`](https://github.com/numan-cli/numan-plugins/blob/main/docs/roadmap.md)
+- [`numan-registry/docs/roadmap.md`](https://github.com/numan-cli/numan-registry/blob/main/docs/roadmap.md)
 - Prior client draft: [`2026-07-29-remaining-roadmap.md`](2026-07-29-remaining-roadmap.md) (superseded by this doc)
 - Intake automation endgame: [`docs/registry-intake-roadmap.md`](../registry-intake-roadmap.md)
 
@@ -38,7 +38,7 @@ Repo-local roadmaps keep operational detail and should link here:
 - Source-tree `registry/index.json.sig` remains a placeholder by design.
 - Intake tooling: spec scaffold, SHA256 download, schema/validate, secrets scan, preflight, Numan parser check, manifest/index Nu-constraint lint.
 - Stage 1 lifecycle evidence is mandatory for activatable package promotion.
-- Live candidate truth: [`intake-candidates.md`](https://github.com/tonythethompson/numan-registry/blob/main/docs/intake-candidates.md) (synced from `docs/intake-state.json`).
+- Live candidate truth: [`intake-candidates.md`](https://github.com/numan-cli/numan-registry/blob/main/docs/intake-candidates.md) (synced from `docs/intake-state.json`).
 
 ### Plugins (`numan-plugins`)
 
@@ -128,17 +128,51 @@ Move a candidate from `docs/backlog.json` → `manifest.json` `active[]` only wh
 - [ ] Exact-version Nu command-discovery smoke succeeds where practical
 - [ ] No existing `numan-plugins` release tag/assets for that package version
 - [ ] README active list and backlog notes updated in the same PR
+- [x] Merge Windows Recheck `shell: bash` fix ([PR #8](https://github.com/numan-cli/numan-plugins/pull/8)).
+- [x] Dispatch `Build and release plugins` workflow on `master` with package list:
+      `nu_plugin_file`, `nu_plugin_highlight`, `nu_plugin_regex`,
+      `nu_plugin_dns`, `nu_plugin_skim`, `nu_plugin_desktop_notifications`,
+      `nu_plugin_port_extension`
+- [x] Verify release draft creation, all target assets uploaded, `SHA256SUMS`
+      present, release published.
+- [x] Verify `windows-recheck.yml` run against published Windows zip assets (must
+      pass, not soft-fail).
+- [x] Merge release upload-by-id fix ([numan-plugins#12](https://github.com/numan-cli/numan-plugins/pull/12)) so future waves avoid the softprops draft race.
 
-### Wave 2 research queue (`numan-plugins`)
+### B. `numan-registry` — intake and staging
 
-Source: `docs/backlog.json`. Research before promoting:
+- [x] Run `scripts/add-package.py` for each new plugin spec from published release assets.
+- [x] Run `scripts/validate.py` (schema + canonical SHA256 + hash integrity).
+- [x] Run `cargo run --manifest-path tools/numan-parser-check/Cargo.toml -- registry/index.json`.
+- [x] Run `python3 scripts/lint-manifest-index.py --index registry/index.json --manifest <path-to-numan-plugins-manifest.json>`.
+- [x] Run `python3 scripts/lifecycle-prove.py --numan <path> --nu <path> --packages ...` and commit stdout to `docs/acceptance/` or PR description.
+- [x] Update `docs/intake-candidates.md` and `docs/catalog-compat.md`.
+- [x] Open PR with specs, index diff, intake doc updates, and test evidence ([numan-registry#32](https://github.com/numan-cli/numan-registry/pull/32)).
+- [x] Verify staging workflow passes on PR (`.github/workflows/staging.yml`).
+- [x] Merge PR to `main`.
+- [x] Dispatch production only after validation is green and reviewer approval exists ([run 30600799679](https://github.com/numan-cli/numan-registry/actions/runs/30600799679)).
+- [x] Verify production deployment: `https://numan-cli.github.io/numan-registry/index.json` matches signed staging output and verifies with `keys/official.pub`.
 
-- [x] `devyn/nu_plugin_dbus` — `PRE_0_112` (nu-plugin 0.101.0; libdbus; not Windows)
-- [x] `PhotonBursted/nu_plugin_vec` — `PRE_0_112` (nu-plugin 0.105.1; pure Rust; Windows expected)
-- [x] `drbrain/nu_plugin_prometheus` — promoted to `active[]` as `v0.12.0` ([numan-plugins#15](https://github.com/tonythethompson/numan-plugins/pull/15); nu-plugin 0.114.1, commit `3fed1d93…`). Windows locked green; `aarch64-unknown-linux-gnu` excluded after openssl-sys cross failure ([#16](https://github.com/tonythethompson/numan-plugins/pull/16)). Build re-dispatched; registry intake after successful release specs.
-- [x] `fdncred/nu_plugin_emoji` — **PROMOTED** v0.23.0 (nu-plugin 0.114.0; pure Rust; [numan-plugins#17](https://github.com/tonythethompson/numan-plugins/pull/17), [numan-registry#36](https://github.com/tonythethompson/numan-registry/pull/36); lifecycle-prove OK Windows/Nu 0.114.1)
-- [x] `fdncred/nu_plugin_json_path` — **PROMOTED** v0.24.0 (nu-plugin 0.114.0; pure Rust; [numan-plugins#17](https://github.com/tonythethompson/numan-plugins/pull/17), [numan-registry#36](https://github.com/tonythethompson/numan-registry/pull/36); lifecycle-prove OK Windows/Nu 0.114.1)
-- [x] `fdncred/nu_plugin_parquet` — **PROMOTED** v0.24.0 (nu-plugin 0.114.0; pure Rust; [numan-plugins#17](https://github.com/tonythethompson/numan-plugins/pull/17), [numan-registry#36](https://github.com/tonythethompson/numan-registry/pull/36); lifecycle-prove OK Windows/Nu 0.114.1)
+### C. `numan` — client smoke test
+
+- [x] `numan registry sync` against production official registry.
+- [x] `numan search` shows newly cataloged plugins.
+- [x] `numan install <plugin>` downloads, verifies SHA256, extracts, updates lockfile.
+- [x] `numan activate <plugin>` registers with Nushell without error.
+- [x] `numan doctor` reports healthy state.
+
+---
+
+## P1 High-Value Track: Complete Nu 0.114 Modernization Wave
+
+**Goal:** Expand Linux/macOS catalog depth with pure-Rust plugins updated to Nu 0.114.x.
+
+### 1. `numan-plugins` Manifest Update & Build (Nu 0.114 batch)
+
+- [x] `drbrain/nu_plugin_prometheus` — promoted to `active[]` as `v0.12.0` ([numan-plugins#15](https://github.com/numan-cli/numan-plugins/pull/15); nu-plugin 0.114.1, commit `3fed1d93…`). Windows locked green; `aarch64-unknown-linux-gnu` excluded after openssl-sys cross failure ([#16](https://github.com/numan-cli/numan-plugins/pull/16)). Build re-dispatched; registry intake after successful release specs.
+- [x] `fdncred/nu_plugin_emoji` — **PROMOTED** v0.23.0 (nu-plugin 0.114.0; pure Rust; [numan-plugins#17](https://github.com/numan-cli/numan-plugins/pull/17), [numan-registry#36](https://github.com/numan-cli/numan-registry/pull/36); lifecycle-prove OK Windows/Nu 0.114.1)
+- [x] `fdncred/nu_plugin_json_path` — **PROMOTED** v0.24.0 (nu-plugin 0.114.0; pure Rust; [numan-plugins#17](https://github.com/numan-cli/numan-plugins/pull/17), [numan-registry#36](https://github.com/numan-cli/numan-registry/pull/36); lifecycle-prove OK Windows/Nu 0.114.1)
+- [x] `fdncred/nu_plugin_parquet` — **PROMOTED** v0.24.0 (nu-plugin 0.114.0; pure Rust; [numan-plugins#17](https://github.com/numan-cli/numan-plugins/pull/17), [numan-registry#36](https://github.com/numan-cli/numan-registry/pull/36); lifecycle-prove OK Windows/Nu 0.114.1)
 - [x] `yybit/nu_plugin_compress` — `PRE_0_112` (nu-plugin 0.103.0; tag 0.2.5 exists but too old)
 - [x] `JosephTLyons/nu_plugin_units` — `PRE_0_112` (nu-plugin 0.106.1; tag v0.1.8 exists but too old)
 - [ ] `galuszkak/nu_plugin_bigquery` — peeked: tag `v0.2.0` pins nu-plugin 0.112.2 (eligible Nu minor) but needs Google credentials for meaningful lifecycle proof
@@ -211,7 +245,7 @@ Stage 1 (lifecycle harness) is done. Remaining stages follow [`docs/registry-int
 
 - [x] Actionable errors: missing metadata, duplicate targets, unknown triples, unsupported archive suffixes, missing activation declarations, malformed Nu constraints, source provenance mismatches
 - [x] Deterministic lint output for before/after PR comparison
-- [x] PR template asks for lint, parser-check, and lifecycle evidence ([numan-registry#31](https://github.com/tonythethompson/numan-registry/pull/31))
+- [x] PR template asks for lint, parser-check, and lifecycle evidence ([numan-registry#31](https://github.com/numan-cli/numan-registry/pull/31))
 
 ### Stage 3: Repo discovery
 
@@ -375,11 +409,11 @@ Nu version that has the plugins they need, and switching is instant.
 
 ## Suggested Execution Order
 
-1. **Done:** Wave 1 end-to-end (plugins build → [registry#32](https://github.com/tonythethompson/numan-registry/pull/32) → lifecycle-prove → production → client smoke). Plugins release upload-by-id fix ([#12](https://github.com/tonythethompson/numan-plugins/pull/12)) merged.
-2. **Done:** `nu_plugin_prometheus@v0.12.0` + Nu 0.114 batch (`nu_plugin_emoji@0.23.0`, `nu_plugin_json_path@0.24.0`, `nu_plugin_parquet@0.24.0`) — built, registry intake ([#36](https://github.com/tonythethompson/numan-registry/pull/36)), production live, lifecycle-prove OK on Windows/Nu 0.114.1.
+1. **Done:** Wave 1 end-to-end (plugins build → [registry#32](https://github.com/numan-cli/numan-registry/pull/32) → lifecycle-prove → production → client smoke). Plugins release upload-by-id fix ([#12](https://github.com/numan-cli/numan-plugins/pull/12)) merged.
+2. **Done:** `nu_plugin_prometheus@v0.12.0` + Nu 0.114 batch (`nu_plugin_emoji@0.23.0`, `nu_plugin_json_path@0.24.0`, `nu_plugin_parquet@0.24.0`) — built, registry intake ([#36](https://github.com/numan-cli/numan-registry/pull/36)), production live, lifecycle-prove OK on Windows/Nu 0.114.1.
 3. **Next:** Continue catalog growth from backlog; keep client compat UX and doctor honest against new packages.
 4. **Parallel (non-blocking):** Intake-candidates / outreach maintenance; winget release monitoring.
-5. **Done:** Intake Stages 3–6 ([numan-registry#37](https://github.com/tonythethompson/numan-registry/pull/37) merged 2026-07-31).
+5. **Done:** Intake Stages 3–6 ([numan-registry#37](https://github.com/numan-cli/numan-registry/pull/37) merged 2026-07-31).
 6. **Later:** Install-only activation contracts; active-update default-on decision; Phase 5.2 source builds only after intake is steady.
 7. **1.0:** When the unified gate above is green.
 8. **Post-1.0 (optional):** Thin TTY-only TUI browse/pick only after the 1.0 gate is green; CLI remains complete without it.

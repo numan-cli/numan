@@ -73,5 +73,5 @@ network.
 See also: [docs/active-plugin-gate.md](../active-plugin-gate.md).
 
 The exact-opt-in lifecycle path passed on Ubuntu, Windows, and macOS in
-[workflow run 30429081756](https://github.com/tonythethompson/numan/actions/runs/30429081756)
+[workflow run 30429081756](https://github.com/numan-cli/numan/actions/runs/30429081756)
 (commit `05eb89d`, after the fixture fixes in `8706bfe`).
