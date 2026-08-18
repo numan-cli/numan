@@ -1,28 +1,47 @@
 {
-  "name": "numan-cli workspace",
-  "image": "mcr.microsoft.com/devcontainers/universal:2-linux",
+  "name": "Numan Full Workspace",
+  "image": "mcr.microsoft.com/devcontainers/universal:latest",
   "customizations": {
     "codespaces": {
       "repositories": {
         "numan-cli/numan": {
-          "permissions": "write-all"
-        },
-        "numan-cli/numan-registry": {
-          "permissions": "write-all"
+          "permissions": {
+            "contents": "write",
+            "pull_requests": "write",
+            "issues": "write"
+          }
         },
         "numan-cli/numan-plugins": {
-          "permissions": "write-all"
+          "permissions": {
+            "contents": "write",
+            "pull_requests": "write",
+            "issues": "write"
+          }
+        },
+        "numan-cli/numan-registry": {
+          "permissions": {
+            "contents": "write",
+            "pull_requests": "write",
+            "issues": "write"
+          }
         }
       }
     },
     "vscode": {
       "extensions": [
         "rust-lang.rust-analyzer",
+        "vadimcn.vscode-lldb",
         "tamasfe.even-better-toml",
         "ms-python.python",
-        "nushell.nushell"
-      ]
+        "nushell.nushell",
+        "github.vscode-github-actions"
+      ],
+      "settings": {
+        "rust-analyzer.check.command": "clippy",
+        "files.trimTrailingWhitespace": true,
+        "editor.formatOnSave": true
+      }
     }
   },
-  "postCreateCommand": "cd /workspaces && (test -d numan-plugins || git clone https://github.com/numan-cli/numan-plugins.git) && (test -d numan-registry || git clone https://github.com/numan-cli/numan-registry.git) && python3 -m pip install cryptography jsonschema"
+  "postCreateCommand": "bash -c 'cd /workspaces && (test -d numan-plugins || git clone https://github.com/numan-cli/numan-plugins.git) && (test -d numan-registry || git clone https://github.com/numan-cli/numan-registry.git) && python3 -m pip install --user cryptography jsonschema coverage'"
 }
