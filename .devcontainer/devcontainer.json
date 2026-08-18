@@ -1,0 +1,28 @@
+{
+  "name": "numan-cli workspace",
+  "image": "mcr.microsoft.com/devcontainers/universal:2-linux",
+  "customizations": {
+    "codespaces": {
+      "repositories": {
+        "numan-cli/numan": {
+          "permissions": "write-all"
+        },
+        "numan-cli/numan-registry": {
+          "permissions": "write-all"
+        },
+        "numan-cli/numan-plugins": {
+          "permissions": "write-all"
+        }
+      }
+    },
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "ms-python.python",
+        "nushell.nushell"
+      ]
+    }
+  },
+  "postCreateCommand": "cd /workspaces && (test -d numan-plugins || git clone https://github.com/numan-cli/numan-plugins.git) && (test -d numan-registry || git clone https://github.com/numan-cli/numan-registry.git) && python3 -m pip install cryptography jsonschema"
+}
