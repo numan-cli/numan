@@ -61,6 +61,6 @@ Canonical remove hint: `util::hints::active_plugin_mutation_gated`. Update disab
 | Ownership / name targeting | Lockfile `is_active_for` + binary file existence + unregister via absolute payload path (no msgpackz parse) |
 | Real-Nu smoke marker | `tests/plugin_lifecycle_real_nu.rs` (points at Stage 1 + update suite) |
 
-**Stage 1 covers deactivate→remove on Windows x86_64.** Active **update** real-Nu evidence lives in the fixture suite. The exact-opt-in lifecycle path passed Ubuntu, Windows, and macOS in [acceptance run 30429081756](https://github.com/tonythethompson/numan/actions/runs/30429081756) (commit `05eb89d`, after the fixture fixes in `8706bfe`). Official multi-version update e2e remains blocked until the production index publishes a second plugin version.
+**Stage 1 covers deactivate→remove on Windows x86_64.** Active **update** real-Nu evidence lives in the fixture suite. The exact-opt-in lifecycle path passed Ubuntu, Windows, and macOS in [acceptance run 30429081756](https://github.com/numan-cli/numan/actions/runs/30429081756) (commit `05eb89d`, after the fixture fixes in `8706bfe`). Official multi-version update e2e remains blocked until the production index publishes a second plugin version.
 
 See also: [docs/acceptance/official-registry-stage1.md](acceptance/official-registry-stage1.md), [docs/acceptance/active-plugin-update-real-nu.md](acceptance/active-plugin-update-real-nu.md).

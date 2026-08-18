@@ -13,11 +13,11 @@ After a GitHub Release is published (see [RELEASING.md](RELEASING.md)):
    `WINGET_TOKEN`) and opened/updated the winget-pkgs PR.
 3. Confirm [`Publish to Homebrew tap`](../.github/workflows/homebrew.yml) ran
    (requires `HOMEBREW_TAP_TOKEN`) and pushed `Formula/numan.rb` to
-   [`tonythethompson/homebrew-numan`](https://github.com/tonythethompson/homebrew-numan).
+   [`numan-cli/homebrew-numan`](https://github.com/numan-cli/homebrew-numan).
 4. Spot-check on a Mac or Linux Homebrew host:
 
    ```bash
-   brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan
+   brew tap numan-cli/numan https://github.com/numan-cli/homebrew-numan
    brew update
    brew install numan
    numan --version
@@ -34,10 +34,10 @@ python3 scripts/render_homebrew_formula.py --version X.Y.Z --sha256sums SHA256SU
 
 | Channel | Command |
 |---------|---------|
-| GitHub Release | Download archive from [Releases](https://github.com/tonythethompson/numan/releases) |
+| GitHub Release | Download archive from [Releases](https://github.com/numan-cli/numan/releases) |
 | crates.io | `cargo install numan-cli` |
-| From git | `cargo install --git https://github.com/tonythethompson/numan` |
-| Homebrew (tap) | `brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan && brew install numan` |
+| From git | `cargo install --git https://github.com/numan-cli/numan` |
+| Homebrew (tap) | `brew tap numan-cli/numan https://github.com/numan-cli/homebrew-numan && brew install numan` |
 | winget (community) | `winget install tonythethompson.numan` |
 
 ## Archive layout
@@ -59,10 +59,10 @@ Release archives extract to `numan-<version>-<target>/` containing the `numan`
 | Secret | Purpose |
 |--------|---------|
 | `WINGET_TOKEN` | Open winget-pkgs update PRs |
-| `HOMEBREW_TAP_TOKEN` | Push formula updates to `tonythethompson/homebrew-numan` |
+| `HOMEBREW_TAP_TOKEN` | Push formula updates to `numan-cli/homebrew-numan` |
 
 The Homebrew tap repository must stay **public**. Private visibility is why
-`brew tap tonythethompson/numan` previously failed for most users.
+`brew tap numan-cli/numan` previously failed for most users.
 
 If `brew update` fails with `Host key verification failed` for this tap, the
 local clone is on an SSH remote and can leave an old formula installed. Uninstall
@@ -70,9 +70,9 @@ the stale formula first so `brew untap` can proceed, then recover with:
 
 ```bash
 brew uninstall numan
-brew untap tonythethompson/numan
-brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan
-brew install tonythethompson/numan/numan
+brew untap numan-cli/numan
+brew tap numan-cli/numan https://github.com/numan-cli/homebrew-numan
+brew install numan-cli/numan/numan
 ```
 
 Scoop is not packaged yet; see [Phase7Plan.md](plans/Phase7Plan.md).
