@@ -453,8 +453,8 @@ cargo test                    # unit + hermetic integration tests
 cargo clippy -- -D warnings   # lint (CI-enforced)
 cargo fmt                     # format
 
-# Real-Nu acceptance tests (requires Nu 0.115+ on PATH)
-cargo test -- --ignored
+# Real-Nu acceptance tests (requires Nu 0.115 on PATH; portable suite)
+cargo test -- --ignored --skip acceptance_process_helper --skip stage1_official_registry --skip real_nu_active_update_
 ```
 
 CI runs tests, clippy, `rustfmt --check`, and real-Nu acceptance on Ubuntu, Windows, and macOS.

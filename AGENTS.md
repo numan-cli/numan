@@ -25,7 +25,7 @@ cargo test
 # active-plugin update matrix (`plugin_active_update_real_nu` / real_nu_active_update_*).
 # Full matrix: workflow `active-plugin-update-acceptance`, or
 #   cargo test --test plugin_active_update_real_nu -- --ignored --nocapture --test-threads=1
-cargo test -- --ignored
+cargo test -- --ignored --skip acceptance_process_helper --skip stage1_official_registry --skip real_nu_active_update_
 
 # Test single module
 cargo test core::platform
@@ -184,7 +184,7 @@ tests/
 3. `cargo test` — all tests must pass
 4. `cargo clippy -- -D warnings` — no warnings
 5. `cargo fmt --check` — formatting clean (use `cargo fmt` to repair)
-6. `cargo test -- --ignored` — portable real-Nu acceptance (requires Nu 0.115 on PATH; PR CI excludes Stage 1 and the active-plugin update matrix). Full active-plugin matrix: workflow `active-plugin-update-acceptance`
+6. `cargo test -- --ignored --skip acceptance_process_helper --skip stage1_official_registry --skip real_nu_active_update_` — portable real-Nu acceptance (requires Nu 0.115 on PATH; PR CI excludes Stage 1 and the active-plugin update matrix). Full active-plugin matrix: workflow `active-plugin-update-acceptance`
 7. Update AGENTS.md if structure/conventions change
 8. Open PR with description
 
