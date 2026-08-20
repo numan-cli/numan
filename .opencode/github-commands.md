@@ -11,22 +11,16 @@ The workflow probes and selects the agent model per command (see `.github/workfl
 
 | Command      | Primary model                          | Fallback chain                                                                                |
 | ------------ | -------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `/oc review` | `cloudflare-workers-ai/@cf/zai-org/glm-5.2` (CF-first) | `opencode/gpt-5.6-luna` (`variant: max`) → `opencode/big-pickle` → `opencode/nemotron-3-ultra-free` → `opencode/nemotron-3.5-lightning-free` → `opencode/deepseek-v4-flash` → `alibaba-token-plan/qwen3.8-max` → `alibaba/qwen3.8-max` → `opencode/nemotron-3-ultra` |
-| `/oc fix`    | `cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731` (CF-first) | `opencode/big-pickle` → `opencode/nemotron-3-ultra-free` → `opencode/nemotron-3.5-lightning-free` → `opencode/deepseek-v4-flash` → `alibaba-token-plan/qwen3.8-max` → `alibaba/qwen3.8-max` → `opencode/nemotron-3-ultra` |
+| `/oc review` | `cloudflare-workers-ai/@cf/zai-org/glm-5.2` (CF-first) | `cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813` → `opencode/big-pickle` → `opencode/nemotron-3-ultra-free` |
+| `/oc fix`    | `cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731` (CF-first) | `opencode/nemotron-3.5-lightning-free` → `opencode/big-pickle` → `opencode/nemotron-3-ultra-free` → `opencode/deepseek-v4-flash` |
 
 Each model is probed with a minimal request before the run; a disabled or unavailable model
 falls through to the next in the chain. The `opencode/*` models are probed through the
-opencode.ai `/zen` gateway; the two `alibaba/*` models are probed through their direct
-compatible-mode endpoints (`token-plan.ap-southeast-1.maas.aliyuncs.com` and
-`dashscope.aliyuncs.com`) behind the `ALIBABA_TOKEN_PLAN_API_KEY` / `DASHSCOPE_API_KEY`
-secrets. `/oc review` runs are short and judgment-heavy, so the cost-efficient
-`gpt-5.6-luna` runs with `max` reasoning effort to maximize finding quality while keeping
-per-run cost in the tens of cents; `/oc fix` runs are long agentic edit loops, where the
-free big-pickle keeps cost at $0. Note that `big-pickle` advertises no reasoning-effort
-variants, so `variant: max` is only applied when `gpt-5.6-luna` is actually selected — the
-probe clears it on any fallback. Review runs send code snippets to an OpenAI-hosted model —
-acceptable for public repos; keep in mind OpenAI may retain requests for evaluation
-purposes.
+opencode.ai `/zen` gateway; the Cloudflare models are probed through the Cloudflare Workers
+AI OpenAI-compatible endpoint behind the `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN`
+secrets. `/oc review` runs get a second Cloudflare model (`deepseek-v4-pro-0813`) before
+falling back to the free Zen chain; `/oc fix` runs lead with the free
+`nemotron-3.5-lightning-free`. No `variant` (reasoning-effort) is applied.
 
 ## Using context7
 
@@ -85,14 +79,14 @@ behavior below applies whether the review is triggered by `/oc review` or by PR 
     > Do NOT post the literal string `@…/finding.md` (or any `@path` token) as the body.
     > The `@file` shorthand only works when the `gh` CLI itself expands it; opencode's
     > review posting path does not, so an `@path` value leaks the path into the comment.
-     > Always ground the comment in the actual finding text.
+    > Always ground the comment in the actual finding text.
 
-     The `gh` calls you make run under the GitHub Actions token, so the review threads you
-     create appear as `github-actions[bot]`. Your final reply (step 3) is posted separately
-     as `opencode-agent[bot]`. That split is the intended design: individual threads as
-     `github-actions[bot]`, summary as `opencode-agent[bot]`.
+    The `gh` calls you make run under the GitHub Actions token, so the review threads you
+    create appear as `github-actions[bot]`. Your final reply (step 3) is posted separately
+    as `opencode-agent[bot]`. That split is the intended design: individual threads as
+    `github-actions[bot]`, summary as `opencode-agent[bot]`.
 
-     a. **Inline line comment** (preferred) — pins the finding to a line in the PR diff and
+    a. **Inline line comment** (preferred) — pins the finding to a line in the PR diff and
        creates a resolvable thread. Use the PR head SHA (`Head: { Sha: ... }` in the
        `<pull_request>` context) as `commit_id`, plus the file and line the finding is
        about. Use `gh` CLI with the `@` form ONLY when you are directly invoking `gh` in a
@@ -109,15 +103,15 @@ behavior below applies whether the review is triggered by `/oc review` or by PR 
 
        If you are posting through opencode's built-in review tooling instead, READ the
        `finding.md` file and pass its full contents as the `body` value — never the path.
-      **Never** pass `@path` as the body through opencode's built-in tooling.
+       **Never** pass `@path` as the body through opencode's built-in tooling.
 
        For a finding spanning a line range, add `-F start_line=<first line>` (and, for a
        deletion, `-f start_side=LEFT`).
 
-   b. **File-level comment** — if the exact line is unknown, or the line-comment call
-      returns a 422, post a **file-level** review comment (`subject_type=file`). This still
-      creates a resolvable thread and is the recommended fallback whenever you know the file
-      but not the precise line (same `body` rule applies):
+    b. **File-level comment** — if the exact line is unknown, or the line-comment call
+       returns a 422, post a **file-level** review comment (`subject_type=file`). This still
+       creates a resolvable thread and is the recommended fallback whenever you know the file
+       but not the precise line (same `body` rule applies):
 
        ```bash
        gh api repos/{owner}/{repo}/pulls/{pr_number}/comments \
@@ -126,8 +120,8 @@ behavior below applies whether the review is triggered by `/oc review` or by PR 
          -f subject_type=file
        ```
 
-   c. **Issue comment** (last resort, non-resolvable) — only if the file is not part of
-      the PR diff at all. Post **one issue comment per finding**:
+    c. **Issue comment** (last resort, non-resolvable) — only if the file is not part of
+       the PR diff at all. Post **one issue comment per finding**:
 
        ```bash
        gh api repos/{owner}/{repo}/issues/{pr_number}/comments -f body=@finding.md
@@ -139,10 +133,10 @@ behavior below applies whether the review is triggered by `/oc review` or by PR 
     drafting aid, but the posted `body` must be that file's **contents**, not its name. Post
     threads one at a time — this endpoint is secondary-rate-limited if you post too
     fast — and keep a list of the posted comment IDs/URLs and of which findings fell back to
-      an issue comment. If a `gh` call fails at every level for a finding, move on to
-      the next finding's comment; for any finding you truly cannot post, reference it (not
-      its body) in the summary's "Out of diff" section.
- 3. **Your final reply text** (what the action posts as the single `opencode-agent[bot]`
+    an issue comment. If a `gh` call fails at every level for a finding, move on to
+    the next finding's comment; for any finding you truly cannot post, reference it (not
+    its body) in the summary's "Out of diff" section.
+3. **Your final reply text** (what the action posts as the single `opencode-agent[bot]`
    summary comment) must be a **short summary index only — it must NOT contain finding
    bodies**. It is: overall assessment; one line per threaded finding with its file:line,
    severity, and a link to that finding's comment (both endpoint responses include the
@@ -150,7 +144,7 @@ behavior below applies whether the review is triggered by `/oc review` or by PR 
    issue comments (from step 2c) plus any finding with no diff location (e.g. missing
    tests, missing docs, cross-file concerns), each with severity and the file(s)/line(s) it
    covers. All finding detail lives in the per-finding comments posted in step 2.
- 4. Only trivial, non-actionable nits may be grouped — at most one small extra comment — and
+4. Only trivial, non-actionable nits may be grouped — at most one small extra comment — and
    never mixed with actionable findings. Every actionable finding is its own thread.
 
 ### Committing behavior — suggestions only
@@ -164,7 +158,7 @@ You are reviewing, not editing:
   fenced block so GitHub renders a one-click **Commit suggestion** button right in the
   comment:
 
-  ````
+  ````text
   ```suggestion
   <exact replacement lines — must match the current file content>
   ```
@@ -263,8 +257,8 @@ the current pull request.
      counts as addressed (addressed *as not valid*): reply on the thread with the reason and
      resolve it (step 3).
    - **Not an inline-resolvable thread but still contains real feedback to address** (e.g. a
-      timeline comment or a general review-body request) → address it with a commit too when
-      the feedback is valid, and record it in the summary.
+     timeline comment or a general review-body request) → address it with a commit too when
+     the feedback is valid, and record it in the summary.
 3. **Resolve addressed review threads.** A review thread (inline review comment chain) is
    resolvable; timeline comments are not. "Addressed" includes threads you **explicitly
    skip**: a comment judged not valid, already handled, or intentionally not applicable is
@@ -286,13 +280,13 @@ the current pull request.
    gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -F id=THREAD_ID
    ```
 
-    Write the reason to a temp file (`thread.md`) and pass `-f body=@thread.md` when it is
-    long, so multiline Markdown survives intact. **The `@` form is only valid when you invoke
-    the `gh` CLI directly in a shell** (the `@` must immediately follow `=` with no
-    surrounding quotes/spaces). If you post through opencode's built-in review tooling, READ
-    the file and pass its contents as the `body` — never the literal `@path` string, which
-    would leak the path into the reply. Only leave open a thread you genuinely could
-    not address — no fix and no justification — and say why in the summary.
+   Write the reason to a temp file (`thread.md`) and pass `-f body=@thread.md` when it is
+   long, so multiline Markdown survives intact. **The `@` form is only valid when you invoke
+   the `gh` CLI directly in a shell** (the `@` must immediately follow `=` with no
+   surrounding quotes/spaces). If you post through opencode's built-in review tooling, READ
+   the file and pass its contents as the `body` — never the literal `@path` string, which
+   would leak the path into the reply. Only leave open a thread you genuinely could
+   not address — no fix and no justification — and say why in the summary.
 4. **Your final reply text IS the single summary comment** (the action posts it). Do NOT post
    extra per-finding comments. The summary must cover **everything**:
    - **Fixed** — for each addressed item: the change made (file:line) and whether its thread

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Manually push packaging/homebrew/numan.rb to tonythethompson/homebrew-numan.
+# Manually push packaging/homebrew/numan.rb to numan-cli/homebrew-numan.
 # Prefer the Publish to Homebrew tap workflow once HOMEBREW_TAP_TOKEN is set
 # on the numan repo.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FORMULA_SRC="${ROOT}/packaging/homebrew/numan.rb"
-TAP_REPO="${TAP_REPO:-tonythethompson/homebrew-numan}"
+TAP_REPO="${TAP_REPO:-numan-cli/homebrew-numan}"
 WORKDIR="${TMPDIR:-/tmp}/homebrew-numan-sync-$$"
 
 if ! command -v gh >/dev/null 2>&1; then

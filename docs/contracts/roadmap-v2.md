@@ -2,8 +2,8 @@
 
 > **Status:** Active. The cross-repo guardrail is frozen at this version.
 > **Tag:** `numan-roadmap-contract/v1`
-> **Authoritative repo:** [`tonythethompson/numan`](https://github.com/tonythethompson/numan)
-> **Frozen at commit:** see `CONTRACT_SHA` in `.github/workflows/ci.yml` (must equal the peeled `numan-roadmap-contract/v1` tag)
+> **Authoritative repo:** [`numan-cli/numan`](https://github.com/numan-cli/numan)
+> **Frozen at commit:** see `CONTRACT_SHA` in `.github/workflows/ci.yml` (must equal the peeled `numan-roadmap-contract/v2` tag)
 
 This document is the single source of truth for what is "shipped" vs
 "aspirational" across the three Numan repos — `numan`, `numan-plugins`,
@@ -31,8 +31,8 @@ audit" pass to undo the worst of it.
 
 v1 fixes this by:
 
-1. **Naming a single authority.** `numan-roadmap-contract/v1` in
-   [`tonythethompson/numan`](https://github.com/tonythethompson/numan)
+1. **Naming a single authority.** `numan-roadmap-contract/v2` in
+   [`numan-cli/numan`](https://github.com/numan-cli/numan)
    is the only document the sibling repos treat as truth.
 2. **Pinning the authority via tag + immutable SHA.** Workflows pin both
    `CONTRACT_TAG` (human handle, e.g. `numan-roadmap-contract/v1`) and

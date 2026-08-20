@@ -16,16 +16,9 @@ jobs:
   opencode:
     if: |
       github.event_name == 'pull_request' ||
-      (github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request != null) &&
-      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
-      (startsWith(github.event.comment.body, '/oc ') ||
-      github.event.comment.body == '/oc' ||
-      startsWith(github.event.comment.body, '/opencode ') ||
-      github.event.comment.body == '/opencode' ||
-      contains(github.event.comment.body, ' /oc ') ||
-      endsWith(github.event.comment.body, ' /oc') ||
-      contains(github.event.comment.body, ' /opencode ') ||
-      endsWith(github.event.comment.body, ' /opencode'))
+      ((github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request != null) &&
+       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
+       (contains(github.event.comment.body, '/oc') || contains(github.event.comment.body, '/opencode')))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -63,13 +56,8 @@ jobs:
             local url="https://opencode.ai/zen/v1/chat/completions"
             local body="{\"model\":\"${id}\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":1}"
             local auth="Authorization: Bearer ${OPENCODE_API_KEY}"
-            local extra=()
-            if [[ "${id}" == "gpt-5.6-luna" ]]; then
-              url="https://opencode.ai/zen/v1/responses"
-              body="{\"model\":\"${id}\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"ping\"}]}],\"max_output_tokens\":1}"
-            fi
             curl -sf --max-time 15 -X POST "${url}" \
-              -H "${auth}" "${extra[@]}" -H "Content-Type: application/json" \
+              -H "${auth}" -H "Content-Type: application/json" \
               -d "${body}" >/dev/null 2>&1
           }
 
@@ -80,7 +68,7 @@ jobs:
           fi
 
           # Cloudflare Workers AI is the primary provider:
-          #   review -> GLM 5.2, fix -> DeepSeek V4 Flash.
+          #   review -> GLM 5.2 (DeepSeek V4 Pro as CF fallback), fix -> DeepSeek V4 Flash.
           if [[ "${IS_REVIEW}" == "true" ]]; then
             CF_MODEL="@cf/zai-org/glm-5.2"
             echo "::notice::Review requested - Cloudflare Workers AI primary: GLM 5.2 (${CF_MODEL})"
@@ -112,7 +100,8 @@ jobs:
                   "cloudflare-workers-ai": {
                     "models": {
                       "@cf/zai-org/glm-5.2": { "name": "GLM 5.2" },
-                      "@cf/deepseek-ai/deepseek-v4-flash-0731": { "name": "DeepSeek V4 Flash" }
+                      "@cf/deepseek-ai/deepseek-v4-flash-0731": { "name": "DeepSeek V4 Flash" },
+                      "@cf/deepseek-ai/deepseek-v4-pro-0813": { "name": "DeepSeek V4 Pro" }
                     }
                   }
                 },
@@ -146,98 +135,62 @@ jobs:
               >/dev/null 2>&1
           }
 
-          if [[ -n "${CLOUDFLARE_API_TOKEN:-}" && -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] && probe_cf "${CF_MODEL}"; then
-            MODEL="cloudflare-workers-ai/${CF_MODEL}"
-            VARIANT=""
-            CONFIG_JSON="$(emit_config "${MODEL}" true)"
+          choose() {
+            local model="$1"
+            local variant="${2:-}"
+            local cf="${3:-false}"
+            local config_json
+            config_json="$(emit_config "${model}" "${cf}")"
             {
-              echo "model=${MODEL}"
-              echo "variant=${VARIANT}"
+              echo "model=${model}"
+              echo "variant=${variant}"
               echo "config<<EOF"
-              echo "${CONFIG_JSON}"
+              echo "${config_json}"
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
             exit 0
-          fi
-          echo "::warning::Cloudflare Workers AI unavailable (or secrets missing) - falling back to OpenCode Zen chain"
+          }
 
-          MODEL="opencode/gpt-5.6-luna"
-          VARIANT="max"
+          if [[ -n "${CLOUDFLARE_API_TOKEN:-}" && -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] && probe_cf "${CF_MODEL}"; then
+            choose "cloudflare-workers-ai/${CF_MODEL}" "" true
+          fi
+          echo "::warning::Cloudflare Workers AI primary unavailable (or secrets missing) - checking fallback"
+
           if [[ "${IS_REVIEW}" == "true" ]]; then
-            if probe_zen gpt-5.6-luna; then
-              CONFIG_JSON="$(emit_config "${MODEL}" false)"
-              { echo "model=${MODEL}"; echo "variant=${VARIANT}"; echo "config<<EOF"; echo "${CONFIG_JSON}"; echo "EOF"; } >> "$GITHUB_OUTPUT"
-              exit 0
+            # Review gets a second Cloudflare model before falling back to the Zen chain.
+            CF_FALLBACK="@cf/deepseek-ai/deepseek-v4-pro-0813"
+            if [[ -n "${CLOUDFLARE_API_TOKEN:-}" && -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] && probe_cf "${CF_FALLBACK}"; then
+              choose "cloudflare-workers-ai/${CF_FALLBACK}" "" true
             fi
-            echo "::warning::Review model (opencode/gpt-5.6-luna) unavailable - falling back to big-pickle"
-            MODEL="opencode/big-pickle"
-            VARIANT=""
+            echo "::warning::Cloudflare Workers AI review fallback unavailable - falling back to OpenCode Zen chain"
+            if probe_zen big-pickle; then
+              choose "opencode/big-pickle"
+            fi
+            echo "::warning::big-pickle unavailable - trying free fallback (nemotron-3-ultra-free)"
+            if probe_zen nemotron-3-ultra-free; then
+              choose "opencode/nemotron-3-ultra-free"
+            fi
+            echo "::error::All review models unavailable"
+            exit 1
           fi
 
-          if probe_zen big-pickle; then
-            CONFIG_JSON="$(emit_config "${MODEL}" false)"
-            { echo "model=${MODEL}"; echo "variant=${VARIANT}"; echo "config<<EOF"; echo "${CONFIG_JSON}"; echo "EOF"; } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "::warning::Primary model (${MODEL}) unavailable - trying free fallback (nemotron-3-ultra-free)"
-          MODEL="opencode/nemotron-3-ultra-free"
-          VARIANT=""
-          if probe_zen nemotron-3-ultra-free; then
-            CONFIG_JSON="$(emit_config "${MODEL}" false)"
-            { echo "model=${MODEL}"; echo "variant=${VARIANT}"; echo "config<<EOF"; echo "${CONFIG_JSON}"; echo "EOF"; } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "::warning::Nemotron 3 Ultra free unavailable - trying free fallback (nemotron-3.5-lightning-free)"
-          MODEL="opencode/nemotron-3.5-lightning-free"
-          VARIANT=""
+          # Fix chain: nemotron-3.5-lightning-free -> big-pickle -> nemotron-3-ultra-free -> deepseek-v4-flash.
           if probe_zen nemotron-3.5-lightning-free; then
-            CONFIG_JSON="$(emit_config "${MODEL}" false)"
-            { echo "model=${MODEL}"; echo "variant=${VARIANT}"; echo "config<<EOF"; echo "${CONFIG_JSON}"; echo "EOF"; } >> "$GITHUB_OUTPUT"
-            exit 0
+            choose "opencode/nemotron-3.5-lightning-free"
           fi
-          echo "::warning::Nemotron 3.5 Lightning free unavailable - trying free fallback (deepseek-v4-flash)"
-          MODEL="opencode/deepseek-v4-flash"
-          VARIANT=""
+          echo "::warning::Nemotron 3.5 Lightning free unavailable - trying big-pickle"
+          if probe_zen big-pickle; then
+            choose "opencode/big-pickle"
+          fi
+          echo "::warning::big-pickle unavailable - trying free fallback (nemotron-3-ultra-free)"
+          if probe_zen nemotron-3-ultra-free; then
+            choose "opencode/nemotron-3-ultra-free"
+          fi
+          echo "::warning::Nemotron 3 Ultra free unavailable - trying deepseek-v4-flash"
           if probe_zen deepseek-v4-flash; then
-            CONFIG_JSON="$(emit_config "${MODEL}" false)"
-            { echo "model=${MODEL}"; echo "variant=${VARIANT}"; echo "config<<EOF"; echo "${CONFIG_JSON}"; echo "EOF"; } >> "$GITHUB_OUTPUT"
-            exit 0
+            choose "opencode/deepseek-v4-flash"
           fi
-          echo "::warning::DeepSeek V4 Flash unavailable - falling back to alibaba-token-plan"
-          MODEL="alibaba-token-plan/qwen3.8-max"
-          VARIANT=""
-          if curl -sf --max-time 15 \
-            -X POST "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions" \
-            -H "Authorization: Bearer ${ALIBABA_TOKEN_PLAN_API_KEY}" \
-            -H "Content-Type: application/json" \
-            -d '{"model":"qwen3.8-max","messages":[{"role":"user","content":"ping"}],"max_tokens":1}' \
-            >/dev/null 2>&1; then
-            CONFIG_JSON="$(emit_config "${MODEL}" false)"
-            { echo "model=${MODEL}"; echo "variant=${VARIANT}"; echo "config<<EOF"; echo "${CONFIG_JSON}"; echo "EOF"; } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "::warning::alibaba-token-plan unavailable - trying DashScope"
-          MODEL="alibaba/qwen3.8-max"
-          VARIANT=""
-          if curl -sf --max-time 15 \
-            -X POST "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions" \
-            -H "Authorization: Bearer ${DASHSCOPE_API_KEY}" \
-            -H "Content-Type: application/json" \
-            -d '{"model":"qwen3.8-max","messages":[{"role":"user","content":"ping"}],"max_tokens":1}' \
-            >/dev/null 2>&1; then
-            CONFIG_JSON="$(emit_config "${MODEL}" false)"
-            { echo "model=${MODEL}"; echo "variant=${VARIANT}"; echo "config<<EOF"; echo "${CONFIG_JSON}"; echo "EOF"; } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "::warning::DashScope unavailable - trying paid Nemotron 3 Ultra"
-          MODEL="opencode/nemotron-3-ultra"
-          VARIANT=""
-          if probe_zen nemotron-3-ultra; then
-            CONFIG_JSON="$(emit_config "${MODEL}" false)"
-            { echo "model=${MODEL}"; echo "variant=${VARIANT}"; echo "config<<EOF"; echo "${CONFIG_JSON}"; echo "EOF"; } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "::error::All models unavailable"
+          echo "::error::All fix models unavailable"
           exit 1
 
       - name: Get opencode version and asset
@@ -285,11 +238,13 @@ jobs:
         id: run_opencode
         shell: bash
         env:
+          USE_GITHUB_TOKEN: "true"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ALIBABA_TOKEN_PLAN_API_KEY: ${{ secrets.ALIBABA_TOKEN_PLAN_API_KEY }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENCODE_CONFIG_CONTENT: ${{ steps.probe.outputs.config }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_TOKEN }}

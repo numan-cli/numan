@@ -7,7 +7,7 @@ review; digests and bottle stanzas may lag until the next tagged release whose
 `SHA256SUMS` include every required archive. Today it still matches the
 pre-Linux-ARM contract (macOS ARM + Linux x86_64 only) because no published
 release yet ships `aarch64-unknown-linux-gnu`. The live tap is
-[`tonythethompson/homebrew-numan`](https://github.com/tonythethompson/homebrew-numan)
+[`numan-cli/homebrew-numan`](https://github.com/numan-cli/homebrew-numan)
 (tap with the HTTPS remote below), updated by the publish workflow after each
 `v*.*.*` release.
 
@@ -17,11 +17,11 @@ Prefer the explicit HTTPS remote so `brew update` does not depend on SSH host
 keys or GitHub SSH auth:
 
 ```bash
-brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan
+brew tap numan-cli/numan https://github.com/numan-cli/homebrew-numan
 brew install numan
 ```
 
-`brew tap tonythethompson/numan` alone also works when Homebrew clones over
+`brew tap numan-cli/numan` alone also works when Homebrew clones over
 HTTPS (the usual default for public taps).
 
 The tap repository **must be public**. A private tap is the main reason earlier
@@ -40,17 +40,17 @@ reinstalling:
 
 ```bash
 brew uninstall numan
-brew untap tonythethompson/numan
-brew tap tonythethompson/numan https://github.com/tonythethompson/homebrew-numan
-brew install tonythethompson/numan/numan
+brew untap numan-cli/numan
+brew tap numan-cli/numan https://github.com/numan-cli/homebrew-numan
+brew install numan-cli/numan/numan
 ```
 
 Or keep the tap and only fix the remote:
 
 ```bash
-git -C "$(brew --repo tonythethompson/numan)" remote set-url origin https://github.com/tonythethompson/homebrew-numan.git
+git -C "$(brew --repo numan-cli/numan)" remote set-url origin https://github.com/numan-cli/homebrew-numan.git
 brew update
-brew reinstall tonythethompson/numan/numan
+brew reinstall numan-cli/numan/numan
 ```
 
 If git still rewrites HTTPS to SSH, check for `url.*.insteadOf` rules:
@@ -108,7 +108,7 @@ formula installs `./numan` (not `./numan-*/numan`).
 
 | Secret | Where | Purpose |
 |--------|--------|---------|
-| `HOMEBREW_TAP_TOKEN` | `numan` repo Actions secrets | PAT with `contents:write` on `tonythethompson/homebrew-numan` so the publish workflow can push formula updates |
+| `HOMEBREW_TAP_TOKEN` | `numan` repo Actions secrets | PAT with `contents:write` on `numan-cli/homebrew-numan` so the publish workflow can push formula updates |
 
 Without `HOMEBREW_TAP_TOKEN`, the Homebrew publish job fails closed (does not
 silently skip).

@@ -111,7 +111,7 @@ jobs:
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             -H "User-Agent: numan-ci" \
-            "https://api.github.com/repos/tonythethompson/numan/git/refs/tags/${CONTRACT_TAG}")
+            "https://api.github.com/repos/numan-cli/numan/git/refs/tags/${CONTRACT_TAG}")
           if [ "$status" = "404" ]; then
             echo "::warning::Tag $CONTRACT_TAG does not exist yet; skipping SHA resolution check."
             exit 0
@@ -140,7 +140,7 @@ jobs:
       - name: Fetch consolidated roadmap from pin (numan@${{ env.CONTRACT_SHA }})
         run: |
           curl --fail-with-body --silent --show-error --location \
-            https://raw.githubusercontent.com/tonythethompson/numan/$CONTRACT_SHA/docs/plans/consolidated-multi-repo-roadmap.md \
+            https://raw.githubusercontent.com/numan-cli/numan/$CONTRACT_SHA/docs/plans/consolidated-multi-repo-roadmap.md \
             -o /tmp/consolidated-roadmap.md
           diff -u docs/plans/consolidated-multi-repo-roadmap.md /tmp/consolidated-roadmap.md \
             || (echo "::error::Local consolidated roadmap diverges from $CONTRACT_SHA."; \
@@ -149,7 +149,7 @@ jobs:
       - name: Fetch drift script from pin (numan@${{ env.CONTRACT_SHA }})
         run: |
           curl --fail-with-body --silent --show-error --location \
-            https://raw.githubusercontent.com/tonythethompson/numan/$CONTRACT_SHA/scripts/check-roadmap-drift.py \
+            https://raw.githubusercontent.com/numan-cli/numan/$CONTRACT_SHA/scripts/check-roadmap-drift.py \
             -o /tmp/check-roadmap-drift.py
           diff -u scripts/check-roadmap-drift.py /tmp/check-roadmap-drift.py \
             || (echo "::error::Local drift script diverges from $CONTRACT_SHA."; \
@@ -158,7 +158,7 @@ jobs:
       - name: Fetch contract doc from pin (numan@${{ env.CONTRACT_SHA }})
         run: |
           curl --fail-with-body --silent --show-error --location \
-            https://raw.githubusercontent.com/tonythethompson/numan/$CONTRACT_SHA/docs/contracts/roadmap-v1.md \
+            https://raw.githubusercontent.com/numan-cli/numan/$CONTRACT_SHA/docs/contracts/roadmap-v1.md \
             -o /tmp/roadmap-v1.md
           diff -u docs/contracts/roadmap-v1.md /tmp/roadmap-v1.md \
             || (echo "::error::Local contract doc diverges from $CONTRACT_SHA."; \
@@ -173,7 +173,7 @@ jobs:
           # This step only documents those repositories; it does not
           # invoke a cross-repo workflow_call. Install drop-ins from
           # cross-repo-mirror/ (see README.md) or scripts/bump-contract.sh.
-          echo "see https://github.com/tonythethompson/numan-plugins and https://github.com/tonythethompson/numan-registry for mirrors"
+          echo "see https://github.com/numan-cli/numan-plugins and https://github.com/numan-cli/numan-registry for mirrors"
 
   msrv:
     name: MSRV (1.88)
@@ -207,6 +207,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  script-tests:
+    name: Script tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - run: python -m unittest discover -s scripts
 
   real-nu-acceptance:
     name: Real-Nu acceptance (${{ matrix.os }})

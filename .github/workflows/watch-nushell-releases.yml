@@ -46,38 +46,44 @@ jobs:
           BRANCH="feat/nu-release-${VERSION}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b "${BRANCH}"
 
-          git add .github/latest-nu-version.json docs/nushell-releases.md
-          git commit -m "feat(release): track official Nushell ${VERSION} release"
-          git push origin "${BRANCH}" --force
+          # Check for existing PR first — do not overwrite maintainer work
+          EXISTING_PR=$(gh pr list --head "${BRANCH}" --state open --json url --jq '.[0].url // empty')
+          if [ -n "${EXISTING_PR}" ]; then
+            echo "PR already exists for ${BRANCH}: ${EXISTING_PR}; leaving branch untouched."
+            PR_URL="${EXISTING_PR}"
+          else
+            git checkout -b "${BRANCH}"
+            git add .github/latest-nu-version.json docs/nushell-releases.md
+            git commit -m "feat(release): track official Nushell ${VERSION} release"
+            git push origin "${BRANCH}" --force-with-lease
 
-          PR_BODY=$(cat <<EOF
-          ## Official Nushell ${VERSION} Released
+            PR_BODY=$(cat <<EOF
+            ## Official Nushell ${VERSION} Released
 
-          A new official Nushell release has been published.
+            A new official Nushell release has been published.
 
-          - **Release Notes**: ${GITHUB_URL}
-          - **Changelog / Blog**: ${BLOG_URL}
+            - **Release Notes**: ${GITHUB_URL}
+            - **Changelog / Blog**: ${BLOG_URL}
 
-          ### Ecosystem Checklist
-          - [ ] Review breaking engine/protocol changes affecting plugins
-          - [ ] Audit \`numan-maintained/*\` fork dependencies (\`Cargo.toml\`)
-          - [ ] Update \`manifest.json\` active plugin versions in \`numan-plugins\`
-          - [ ] Rebuild & test active plugins for Nu ${VERSION} band
-          - [ ] Update \`numan\` CI acceptance matrix (\`.github/workflows/ci.yml\`)
+            ### Ecosystem Checklist
+            - [ ] Review breaking engine/protocol changes affecting plugins
+            - [ ] Audit \`numan-maintained/*\` fork dependencies (\`Cargo.toml\`)
+            - [ ] Update \`manifest.json\` active plugin versions in \`numan-plugins\`
+            - [ ] Rebuild & test active plugins for Nu ${VERSION} band
+            - [ ] Update \`numan\` CI acceptance matrix (\`.github/workflows/ci.yml\`)
 
-          _Automated by \`.github/workflows/watch-nushell-releases.yml\`._
-          EOF
-          )
+            _Automated by \`.github/workflows/watch-nushell-releases.yml\`._
+            EOF
+            )
 
-          PR_URL=$(gh pr create \
-            --title "feat(release): track official Nushell ${VERSION} release" \
-            --body "${PR_BODY}" \
-            --head "${BRANCH}" \
-            --base master)
-
-          echo "Created PR: ${PR_URL}"
+            PR_URL=$(gh pr create \
+              --title "feat(release): track official Nushell ${VERSION} release" \
+              --body "${PR_BODY}" \
+              --head "${BRANCH}" \
+              --base master)
+            echo "Created PR: ${PR_URL}"
+          fi
 
           # Enable auto-merge
           gh pr merge "${PR_URL}" --auto --squash || echo "Auto-merge could not be enabled; manual merge required."

@@ -19,7 +19,7 @@ use crate::util::fs_safety::assert_not_symlink;
 
 const RELEASES_LATEST: &str = "https://api.github.com/repos/nushell/nushell/releases/latest";
 const RELEASES_TAGS_BASE: &str = "https://api.github.com/repos/nushell/nushell/releases/tags/";
-const USER_AGENT: &str = "numan-cli (https://github.com/tonythethompson/numan)";
+const USER_AGENT: &str = "numan-cli (https://github.com/numan-cli/numan)";
 
 /// Official Nushell release archives (nu + bundled plugins) exceeded 256 MiB
 /// uncompressed as of 0.114.1 (~279 MiB on linux-gnu). Cap with headroom; we

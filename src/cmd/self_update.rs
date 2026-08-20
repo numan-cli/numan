@@ -11,8 +11,8 @@ use crate::core::platform::{Arch, Env, Os, Platform};
 use crate::install::download::download_file;
 use crate::install::extract::{extract_archive, ArchiveFormat, ExtractConfig};
 
-const RELEASES_LATEST: &str = "https://api.github.com/repos/tonythethompson/numan/releases/latest";
-const USER_AGENT: &str = "numan-cli (https://github.com/tonythethompson/numan)";
+const RELEASES_LATEST: &str = "https://api.github.com/repos/numan-cli/numan/releases/latest";
+const USER_AGENT: &str = "numan-cli (https://github.com/numan-cli/numan)";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Ed25519 public key (standard base64) that must sign `SHA256SUMS` for
@@ -355,7 +355,7 @@ pub fn execute_with_client(
         .with_context(|| {
             format!(
                 "Release {tag} has no asset named '{asset_name}'. \
-                 Check https://github.com/tonythethompson/numan/releases"
+                 Check https://github.com/numan-cli/numan/releases"
             )
         })?;
     let sums_url = assets
