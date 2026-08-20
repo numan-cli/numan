@@ -16,16 +16,9 @@ jobs:
   opencode:
     if: |
       github.event_name == 'pull_request' ||
-      (github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request != null) &&
-      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
-      (startsWith(github.event.comment.body, '/oc ') ||
-      github.event.comment.body == '/oc' ||
-      startsWith(github.event.comment.body, '/opencode ') ||
-      github.event.comment.body == '/opencode' ||
-      contains(github.event.comment.body, ' /oc ') ||
-      endsWith(github.event.comment.body, ' /oc') ||
-      contains(github.event.comment.body, ' /opencode ') ||
-      endsWith(github.event.comment.body, ' /opencode'))
+      ((github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request != null) &&
+       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
+       (contains(github.event.comment.body, '/oc') || contains(github.event.comment.body, '/opencode')))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -285,11 +278,13 @@ jobs:
         id: run_opencode
         shell: bash
         env:
+          USE_GITHUB_TOKEN: "true"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ALIBABA_TOKEN_PLAN_API_KEY: ${{ secrets.ALIBABA_TOKEN_PLAN_API_KEY }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENCODE_CONFIG_CONTENT: ${{ steps.probe.outputs.config }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_TOKEN }}
