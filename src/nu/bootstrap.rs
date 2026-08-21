@@ -299,8 +299,11 @@ pub fn install_from_archive(
     Ok(dest)
 }
 
-/// Copy all extracted files from `src_dir` into `dest_dir`, skipping `skip_file`
-/// (which has already been copied as the nu binary).
+/// Copy extracted `nu_plugin_*` files from `src_dir` into `dest_dir`, skipping
+/// `skip_file` (which has already been copied as the nu binary). Only files
+/// whose name starts with `nu_plugin_` are copied; other archive contents
+/// (README, LICENSE, etc.) are intentionally excluded to keep the version
+/// directory clean.
 fn copy_extracted_files(src_dir: &Path, dest_dir: &Path, skip_file: &Path) -> Result<()> {
     let entries = std::fs::read_dir(src_dir)
         .with_context(|| format!("Failed to read extracted directory '{}'", src_dir.display()))?;
@@ -315,6 +318,11 @@ fn copy_extracted_files(src_dir: &Path, dest_dir: &Path, skip_file: &Path) -> Re
             Some(n) => n,
             None => continue,
         };
+        // Only copy plugin binaries (nu_plugin_*); skip non-plugin files
+        // like README.txt, LICENSE, etc.
+        if !file_name.to_string_lossy().starts_with("nu_plugin_") {
+            continue;
+        }
         let dest_path = dest_dir.join(file_name);
         std::fs::copy(&path, &dest_path).with_context(|| {
             format!(
@@ -444,6 +452,15 @@ fn discover_bundled_plugins(root: &Path, version_dir: &Path, nu_version: &str) -
 
     let mut lockfile = Lockfile::load(root)?;
     for (package_id, entry) in discovered {
+        // Skip entries that already exist with a non-bundled origin.
+        // This respects a user's explicit registry install over automatic
+        // bundled extraction (e.g. "nushell/polars" installed from the
+        // registry should not be silently overwritten).
+        if let Some(existing) = lockfile.packages.get(&package_id) {
+            if existing.origin.as_deref() != Some(BUNDLED_NU_ORIGIN) {
+                continue;
+            }
+        }
         lockfile.packages.insert(package_id, entry);
     }
     lockfile.save(root)?;
@@ -1578,6 +1595,49 @@ mod tests {
     }
 
     #[test]
+    fn install_from_archive_full_skips_non_plugin_files() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let zip_path = root.join("nu-with-extras.zip");
+
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zip = ZipWriter::new(file);
+            let options = SimpleFileOptions::default();
+            let nu_inner = format!("nu-0.0.0-test/{}", nu_binary_name());
+            zip.start_file(&nu_inner, options).unwrap();
+            zip.write_all(b"fake nu binary").unwrap();
+            zip.start_file("nu-0.0.0-test/nu_plugin_polars", options)
+                .unwrap();
+            zip.write_all(b"polars binary").unwrap();
+            zip.start_file("nu-0.0.0-test/README.txt", options).unwrap();
+            zip.write_all(b"readme content").unwrap();
+            zip.start_file("nu-0.0.0-test/LICENSE", options).unwrap();
+            zip.write_all(b"license content").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let installed = install_from_archive(&zip_path, root, "0.0.0-filter", false).unwrap();
+        assert!(installed.is_file());
+
+        let version_dir = version_manager::version_install_dir(root, "0.0.0-filter");
+        // Plugin must be present
+        assert!(
+            version_dir.join("nu_plugin_polars").exists(),
+            "plugin binary must be copied"
+        );
+        // Non-plugin files must NOT be present
+        assert!(
+            !version_dir.join("README.txt").exists(),
+            "README.txt must not be copied to version directory"
+        );
+        assert!(
+            !version_dir.join("LICENSE").exists(),
+            "LICENSE must not be copied to version directory"
+        );
+    }
+
+    #[test]
     fn discover_bundled_plugins_writes_lockfile_entries() {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
@@ -1631,6 +1691,164 @@ mod tests {
         assert_eq!(query.source, "binary");
         assert_eq!(query.origin.as_deref(), Some(BUNDLED_NU_ORIGIN));
         assert_eq!(query.executable_path.as_deref(), Some("nu_plugin_query"));
+    }
+
+    #[test]
+    fn discover_bundled_plugins_skips_existing_registry_entry() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Pre-populate a lockfile entry with a registry origin for nushell/polars
+        let mut lockfile = Lockfile::load(root).unwrap();
+        lockfile.packages.insert(
+            "nushell/polars".to_string(),
+            LockfileEntry {
+                version: "0.114.0".to_string(),
+                package_type: "plugin".to_string(),
+                source: "binary".to_string(),
+                target: None,
+                artifact_url: Some("https://registry.example.com/polars.tar.gz".to_string()),
+                artifact_sha256: Some("registry_sha256_value".to_string()),
+                executable_path: Some("nu_plugin_polars".to_string()),
+                archive_root: None,
+                include: None,
+                entry: None,
+                installed_at: "0000000000000001".to_string(),
+                nu_version_at_install: Some("0.114.0".to_string()),
+                activation: None,
+                registry_url: Some("https://registry.example.com".to_string()),
+                registry_revision: Some("abc123".to_string()),
+                index_sha256: None,
+                signing_key_fingerprint: Some("fingerprint123".to_string()),
+                git_url: None,
+                git_rev: None,
+                cargo_name: None,
+                cargo_lock_sha256: None,
+                built_sha256: None,
+                payload_path: "packages/plugin/nushell/polars/0.114.0-abcd1234".to_string(),
+                revision_id: None,
+                payload_sha256: None,
+                executable_sha256: Some("original_sha".to_string()),
+                selection_reason: None,
+                origin: Some("registry:official".to_string()),
+                module_activation: None,
+                module_import_mode: None,
+                locked_dependencies: std::collections::BTreeMap::new(),
+            },
+        );
+        lockfile.save(root).unwrap();
+
+        // Create a version directory with a polars plugin binary
+        let version_dir = version_manager::version_install_dir(root, "0.114.0");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::fs::write(version_dir.join("nu_plugin_polars"), b"bundled polars").unwrap();
+        std::fs::write(version_dir.join("nu_plugin_query"), b"bundled query").unwrap();
+
+        // Run discovery - should skip polars (registry origin) but add query
+        discover_bundled_plugins(root, &version_dir, "0.114.0").unwrap();
+
+        // Verify nushell/polars was NOT overwritten
+        let lockfile = Lockfile::load(root).unwrap();
+        let polars = lockfile
+            .packages
+            .get("nushell/polars")
+            .expect("polars entry must still exist");
+        assert_eq!(
+            polars.origin.as_deref(),
+            Some("registry:official"),
+            "registry origin must be preserved"
+        );
+        assert_eq!(
+            polars.executable_sha256.as_deref(),
+            Some("original_sha"),
+            "original SHA must be preserved"
+        );
+        assert_eq!(
+            polars.artifact_sha256.as_deref(),
+            Some("registry_sha256_value"),
+            "registry artifact SHA must be preserved"
+        );
+        assert_eq!(
+            polars.signing_key_fingerprint.as_deref(),
+            Some("fingerprint123"),
+            "signing key fingerprint must be preserved"
+        );
+
+        // Verify nushell/query WAS added (no pre-existing entry)
+        let query = lockfile
+            .packages
+            .get("nushell/query")
+            .expect("query entry must be created");
+        assert_eq!(query.origin.as_deref(), Some(BUNDLED_NU_ORIGIN));
+        assert_eq!(query.executable_path.as_deref(), Some("nu_plugin_query"));
+    }
+
+    #[test]
+    fn discover_bundled_plugins_overwrites_existing_bundled_entry() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Pre-populate a lockfile entry with a bundled origin for nushell/polars
+        let mut lockfile = Lockfile::load(root).unwrap();
+        lockfile.packages.insert(
+            "nushell/polars".to_string(),
+            LockfileEntry {
+                version: "0.113.0".to_string(),
+                package_type: "plugin".to_string(),
+                source: "binary".to_string(),
+                target: None,
+                artifact_url: None,
+                artifact_sha256: None,
+                executable_path: Some("nu_plugin_polars".to_string()),
+                archive_root: None,
+                include: None,
+                entry: None,
+                installed_at: "0000000000000001".to_string(),
+                nu_version_at_install: Some("0.113.0".to_string()),
+                activation: None,
+                registry_url: None,
+                registry_revision: None,
+                index_sha256: None,
+                signing_key_fingerprint: None,
+                git_url: None,
+                git_rev: None,
+                cargo_name: None,
+                cargo_lock_sha256: None,
+                built_sha256: None,
+                payload_path: "tools/nushell/0.113.0".to_string(),
+                revision_id: None,
+                payload_sha256: None,
+                executable_sha256: Some("old_bundled_sha".to_string()),
+                selection_reason: None,
+                origin: Some(BUNDLED_NU_ORIGIN.to_string()),
+                module_activation: None,
+                module_import_mode: None,
+                locked_dependencies: std::collections::BTreeMap::new(),
+            },
+        );
+        lockfile.save(root).unwrap();
+
+        // Create a version directory with updated polars binary
+        let version_dir = version_manager::version_install_dir(root, "0.114.0");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::fs::write(version_dir.join("nu_plugin_polars"), b"newer polars").unwrap();
+
+        // Run discovery - should update the existing bundled entry
+        discover_bundled_plugins(root, &version_dir, "0.114.0").unwrap();
+
+        // Verify nushell/polars WAS updated (same bundled origin)
+        let lockfile = Lockfile::load(root).unwrap();
+        let polars = lockfile
+            .packages
+            .get("nushell/polars")
+            .expect("polars entry");
+        assert_eq!(polars.origin.as_deref(), Some(BUNDLED_NU_ORIGIN));
+        assert_eq!(polars.version, "0.114.0");
+        let expected_sha = integrity::compute_sha256(b"newer polars");
+        assert_eq!(
+            polars.executable_sha256.as_deref(),
+            Some(expected_sha.as_str())
+        );
     }
 
     /// Manual smoke: `NUMAN_SMOKE_NU_ARCHIVE=/path/to/nu-*.tar.gz cargo test --lib \
