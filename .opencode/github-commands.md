@@ -11,22 +11,16 @@ The workflow probes and selects the agent model per command (see `.github/workfl
 
 | Command      | Primary model                          | Fallback chain                                                                                |
 | ------------ | -------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `/oc review` | `cloudflare-workers-ai/@cf/zai-org/glm-5.2` (CF-first) | `opencode/gpt-5.6-luna` (`variant: max`) → `opencode/big-pickle` → `opencode/nemotron-3-ultra-free` → `opencode/nemotron-3.5-lightning-free` → `opencode/deepseek-v4-flash` → `alibaba-token-plan/qwen3.8-max` → `alibaba/qwen3.8-max` → `opencode/nemotron-3-ultra` |
-| `/oc fix`    | `cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731` (CF-first) | `opencode/big-pickle` → `opencode/nemotron-3-ultra-free` → `opencode/nemotron-3.5-lightning-free` → `opencode/deepseek-v4-flash` → `alibaba-token-plan/qwen3.8-max` → `alibaba/qwen3.8-max` → `opencode/nemotron-3-ultra` |
+| `/oc review` | `cloudflare-workers-ai/@cf/zai-org/glm-5.2` (CF-first) | `cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813` → `opencode/big-pickle` → `opencode/nemotron-3-ultra-free` |
+| `/oc fix`    | `cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731` (CF-first) | `opencode/nemotron-3.5-lightning-free` → `opencode/big-pickle` → `opencode/nemotron-3-ultra-free` → `opencode/deepseek-v4-flash` |
 
 Each model is probed with a minimal request before the run; a disabled or unavailable model
 falls through to the next in the chain. The `opencode/*` models are probed through the
-opencode.ai `/zen` gateway; the two `alibaba/*` models are probed through their direct
-compatible-mode endpoints (`token-plan.ap-southeast-1.maas.aliyuncs.com` and
-`dashscope.aliyuncs.com`) behind the `ALIBABA_TOKEN_PLAN_API_KEY` / `DASHSCOPE_API_KEY`
-secrets. `/oc review` runs are short and judgment-heavy, so the cost-efficient
-`gpt-5.6-luna` runs with `max` reasoning effort to maximize finding quality while keeping
-per-run cost in the tens of cents; `/oc fix` runs are long agentic edit loops, where the
-free big-pickle keeps cost at $0. Note that `big-pickle` advertises no reasoning-effort
-variants, so `variant: max` is only applied when `gpt-5.6-luna` is actually selected — the
-probe clears it on any fallback. Review runs send code snippets to an OpenAI-hosted model —
-acceptable for public repos; keep in mind OpenAI may retain requests for evaluation
-purposes.
+opencode.ai `/zen` gateway; the Cloudflare models are probed through the Cloudflare Workers
+AI OpenAI-compatible endpoint behind the `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN`
+secrets. `/oc review` runs get a second Cloudflare model (`deepseek-v4-pro-0813`) before
+falling back to the free Zen chain; `/oc fix` runs lead with the free
+`nemotron-3.5-lightning-free`. No `variant` (reasoning-effort) is applied.
 
 ## Using context7
 
