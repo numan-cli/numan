@@ -86,7 +86,7 @@ where
 
 pub fn install_pinned_nu_and_refresh(root: &Path, pin: &str) -> Result<()> {
     setup::execute_nu(
-        &NuSetupArgs::install(Some(pin.to_string()), true, false, true),
+        &NuSetupArgs::install(Some(pin.to_string()), true, false, true, false),
         root,
     )
     .with_context(|| format!("Failed to install managed Nu {pin}"))?;

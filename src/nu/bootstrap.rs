@@ -11,6 +11,7 @@ use crate::install::download::download_file;
 use crate::install::extract::{extract_archive, ArchiveFormat, ExtractConfig};
 use crate::nu::paths::validate_nushell_binary;
 use crate::nu::version_manager;
+use crate::state::lockfile::{Lockfile, LockfileEntry, BUNDLED_NU_ORIGIN};
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 #[cfg(unix)]
 use crate::util::atomic::write_bytes_atomic;
@@ -71,11 +72,15 @@ fn nu_binary_name() -> &'static str {
     }
 }
 
-fn nu_release_extract_config() -> ExtractConfig {
+fn nu_release_extract_config(minimal: bool) -> ExtractConfig {
     ExtractConfig {
-        // Official releases ship nu plus large bundled plugins (e.g. polars).
-        // Managed install only needs the shell binary.
-        include: Some(vec![format!("**/{}", nu_binary_name())]),
+        // When minimal is true, filter to just the shell binary (old behavior).
+        // When minimal is false, extract everything (nu + bundled plugins).
+        include: if minimal {
+            Some(vec![format!("**/{}", nu_binary_name())])
+        } else {
+            None
+        },
         max_uncompressed_bytes: Some(NU_RELEASE_MAX_UNCOMPRESSED_BYTES),
         ..ExtractConfig::default()
     }
@@ -216,7 +221,12 @@ fn make_executable(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> Result<PathBuf> {
+pub fn install_from_archive(
+    archive_path: &Path,
+    root: &Path,
+    version: &str,
+    minimal: bool,
+) -> Result<PathBuf> {
     let format = archive_format_for_url(
         archive_path
             .file_name()
@@ -234,7 +244,7 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
     extract_archive(
         archive_path,
         &extract_root,
-        &nu_release_extract_config(),
+        &nu_release_extract_config(minimal),
         format,
     )
     .with_context(|| format!("Failed to extract '{}'", archive_path.display()))?;
@@ -258,6 +268,7 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
     })?;
     let dest = version_manager::version_binary(root, &normalized);
 
+    // Copy the nu binary
     std::fs::copy(&source, &dest).with_context(|| {
         format!(
             "Failed to copy Nushell binary from '{}' to '{}'",
@@ -266,6 +277,14 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
         )
     })?;
     make_executable(&dest)?;
+
+    // When not in minimal mode, copy all other extracted files (plugins etc.)
+    // into the versioned directory alongside the nu binary.
+    if !minimal {
+        let extract_subdir = source.parent().unwrap_or(&extract_root);
+        copy_extracted_files(extract_subdir, &dest_dir, &source)?;
+    }
+
     // Keep the legacy VERSION marker for backwards compat with tooling that
     // greps for it, but under the versioned dir so it never shadows a sibling
     // version's marker. Write the normalized version so `detect_legacy_version`
@@ -280,12 +299,155 @@ pub fn install_from_archive(archive_path: &Path, root: &Path, version: &str) -> 
     Ok(dest)
 }
 
+/// Copy all extracted files from `src_dir` into `dest_dir`, skipping `skip_file`
+/// (which has already been copied as the nu binary).
+fn copy_extracted_files(src_dir: &Path, dest_dir: &Path, skip_file: &Path) -> Result<()> {
+    let entries = std::fs::read_dir(src_dir)
+        .with_context(|| format!("Failed to read extracted directory '{}'", src_dir.display()))?;
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        // Skip the nu binary (already copied) and directories
+        if path == skip_file || !path.is_file() {
+            continue;
+        }
+        let file_name = match path.file_name() {
+            Some(n) => n,
+            None => continue,
+        };
+        let dest_path = dest_dir.join(file_name);
+        std::fs::copy(&path, &dest_path).with_context(|| {
+            format!(
+                "Failed to copy '{}' to '{}'",
+                path.display(),
+                dest_path.display()
+            )
+        })?;
+        make_executable(&dest_path)?;
+    }
+    Ok(())
+}
+
 struct ExtractCleanup(PathBuf);
 
 impl Drop for ExtractCleanup {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+/// Format current timestamp as a zero-padded Unix-seconds string (matches the
+/// install-transaction lockfile timestamp shape).
+fn now_timestamp() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("{secs:016}")
+}
+
+/// Scan the installed version directory for `nu_plugin_*` binaries bundled
+/// with the official Nushell release and record them in the lockfile with the
+/// `bundled:nu` origin. These plugins are already on disk, so no registry
+/// install flow is needed; they become discoverable and activatable via
+/// `numan activate`. Not auto-activated.
+///
+/// The version directory (`tools/nushell/<version>/`) is scanned; each
+/// `nu_plugin_*` file is hashed and written as a `type = "plugin"`,
+/// `source = "binary"` lockfile entry keyed as `nushell/<plugin_name>`.
+fn discover_bundled_plugins(root: &Path, version_dir: &Path, nu_version: &str) -> Result<()> {
+    let entries = match std::fs::read_dir(version_dir) {
+        Ok(e) => e,
+        // No directory means nothing to discover (e.g. minimal install path).
+        Err(_) => return Ok(()),
+    };
+
+    let mut discovered: Vec<(String, LockfileEntry)> = Vec::new();
+    let payload_path = version_dir
+        .strip_prefix(root)
+        .with_context(|| {
+            format!(
+                "Version directory '{}' is not under root '{}'",
+                version_dir.display(),
+                root.display()
+            )
+        })?
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("nu_plugin_") {
+            continue;
+        }
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+
+        // Strip a platform suffix (`.exe` on Windows) then the `nu_plugin_`
+        // prefix to derive the plugin short name.
+        let stripped = name.strip_suffix(".exe").unwrap_or(&name);
+        let plugin_name = match stripped.strip_prefix("nu_plugin_") {
+            Some(n) if !n.is_empty() => n,
+            _ => continue,
+        };
+        let package_id = format!("nushell/{plugin_name}");
+
+        let bytes = std::fs::read(entry.path()).with_context(|| {
+            format!(
+                "Failed to read bundled plugin binary '{}'",
+                entry.path().display()
+            )
+        })?;
+        let sha = integrity::compute_sha256(&bytes);
+
+        let lockfile_entry = LockfileEntry {
+            version: nu_version.to_string(),
+            package_type: "plugin".to_string(),
+            source: "binary".to_string(),
+            target: None,
+            artifact_url: None,
+            artifact_sha256: None,
+            executable_path: Some(name.clone()),
+            archive_root: None,
+            include: None,
+            entry: None,
+            installed_at: now_timestamp(),
+            nu_version_at_install: Some(nu_version.to_string()),
+            activation: None,
+            registry_url: None,
+            registry_revision: None,
+            index_sha256: None,
+            signing_key_fingerprint: None,
+            git_url: None,
+            git_rev: None,
+            cargo_name: None,
+            cargo_lock_sha256: None,
+            built_sha256: None,
+            payload_path: payload_path.clone(),
+            revision_id: None,
+            payload_sha256: None,
+            executable_sha256: Some(sha),
+            selection_reason: None,
+            origin: Some(BUNDLED_NU_ORIGIN.to_string()),
+            module_activation: None,
+            module_import_mode: None,
+            locked_dependencies: std::collections::BTreeMap::new(),
+        };
+        discovered.push((package_id, lockfile_entry));
+    }
+
+    if discovered.is_empty() {
+        return Ok(());
+    }
+
+    let mut lockfile = Lockfile::load(root)?;
+    for (package_id, entry) in discovered {
+        lockfile.packages.insert(package_id, entry);
+    }
+    lockfile.save(root)?;
+    Ok(())
 }
 
 fn verify_downloaded_archive(path: &Path, asset: &GitHubAsset) -> Result<()> {
@@ -316,16 +478,26 @@ fn verify_downloaded_archive(path: &Path, asset: &GitHubAsset) -> Result<()> {
     Ok(())
 }
 
-pub fn install_latest(root: &Path, platform: &Platform) -> Result<PathBuf> {
-    install_release(root, platform, None)
+pub fn install_latest(root: &Path, platform: &Platform, minimal: bool) -> Result<PathBuf> {
+    install_release(root, platform, None, minimal)
 }
 
 /// Download and install a specific Nushell release tag (e.g. `0.113.1`).
-pub fn install_version(root: &Path, platform: &Platform, version: &str) -> Result<PathBuf> {
-    install_release(root, platform, Some(version))
+pub fn install_version(
+    root: &Path,
+    platform: &Platform,
+    version: &str,
+    minimal: bool,
+) -> Result<PathBuf> {
+    install_release(root, platform, Some(version), minimal)
 }
 
-fn install_release(root: &Path, platform: &Platform, version: Option<&str>) -> Result<PathBuf> {
+fn install_release(
+    root: &Path,
+    platform: &Platform,
+    version: Option<&str>,
+    minimal: bool,
+) -> Result<PathBuf> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .user_agent(USER_AGENT)
@@ -335,7 +507,7 @@ fn install_release(root: &Path, platform: &Platform, version: Option<&str>) -> R
         Some(v) => fetch_release_by_tag(&client, v)?,
         None => fetch_latest_release(&client)?,
     };
-    install_from_github_release(root, platform, &release)
+    install_from_github_release(root, platform, &release, minimal)
 }
 
 /// Install from an already-fetched GitHub release (avoids a second API call
@@ -344,6 +516,7 @@ fn install_from_github_release(
     root: &Path,
     platform: &Platform,
     release: &GitHubRelease,
+    minimal: bool,
 ) -> Result<PathBuf> {
     let asset = select_release_asset(release, platform)?;
 
@@ -355,7 +528,7 @@ fn install_from_github_release(
     download_file(&asset.browser_download_url, &archive_path)?;
     verify_downloaded_archive(&archive_path, asset)?;
 
-    let installed = install_from_archive(&archive_path, root, &release.tag_name)?;
+    let installed = install_from_archive(&archive_path, root, &release.tag_name, minimal)?;
     validate_nushell_binary(&installed).with_context(|| {
         format!(
             "Installed Nushell binary at '{}' failed validation",
@@ -786,6 +959,9 @@ pub struct NuSetupOptions {
     pub skip_path: bool,
     /// When set, download this release tag instead of latest.
     pub version: Option<String>,
+    /// When `true`, extract only the `nu` binary from the release archive,
+    /// skipping bundled plugins. Default `false` extracts everything.
+    pub minimal: bool,
     /// When `true`, the caller has already collected destructive-step consent
     /// (e.g. `cmd::setup::execute_use_path` / `execute_use_existing` already
     /// prompted for both the managed-tree deletion and the PATH add). The
@@ -807,8 +983,9 @@ pub fn execute_nu_setup(
 ) -> Result<PathBuf> {
     if let Some(ref version) = options.version {
         let version = version.clone();
+        let minimal = options.minimal;
         return execute_nu_setup_with_installer(root, platform, options, move |r, p| {
-            install_version(r, p, &version)
+            install_version(r, p, &version, minimal)
         });
     }
     // Unpinned (latest) flow:
@@ -834,8 +1011,9 @@ pub fn execute_nu_setup(
         version: Some(tag),
         ..options.clone()
     };
+    let minimal = options.minimal;
     execute_nu_setup_with_installer(root, platform, &pinned_opts, move |r, p| {
-        install_from_github_release(r, p, &release)
+        install_from_github_release(r, p, &release, minimal)
     })
 }
 
@@ -975,6 +1153,12 @@ where
                 normalized
             )
         })?;
+
+        // Discover bundled plugins when full extraction mode was used.
+        if !options.minimal {
+            let version_dir = version_manager::version_install_dir(root, normalized);
+            discover_bundled_plugins(root, &version_dir, normalized)?;
+        }
     }
 
     // With the versioned layout the binary lives at
@@ -1166,7 +1350,7 @@ mod tests {
             zip.finish().unwrap();
         }
 
-        let installed = install_from_archive(&zip_path, root, "0.0.0-test").unwrap();
+        let installed = install_from_archive(&zip_path, root, "0.0.0-test", false).unwrap();
         // Installs land in the VERSIONED layout, never the legacy
         // single-binary path (which is migration-only now).
         assert_eq!(
@@ -1275,7 +1459,8 @@ mod tests {
             NU_RELEASE_MAX_UNCOMPRESSED_BYTES > 279 * 1024 * 1024,
             "cap must clear known official Nu release sizes"
         );
-        let cfg = nu_release_extract_config();
+        // minimal=true preserves the old filter behavior
+        let cfg = nu_release_extract_config(true);
         assert_eq!(
             cfg.max_uncompressed_bytes,
             Some(NU_RELEASE_MAX_UNCOMPRESSED_BYTES)
@@ -1284,10 +1469,17 @@ mod tests {
             cfg.include.as_ref().unwrap(),
             &vec![format!("**/{}", nu_binary_name())]
         );
+        // minimal=false extracts everything
+        let cfg_full = nu_release_extract_config(false);
+        assert_eq!(
+            cfg_full.max_uncompressed_bytes,
+            Some(NU_RELEASE_MAX_UNCOMPRESSED_BYTES)
+        );
+        assert!(cfg_full.include.is_none());
     }
 
     #[test]
-    fn install_from_archive_skips_bundled_plugin_payloads() {
+    fn install_from_archive_minimal_skips_bundled_plugin_payloads() {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
         let zip_path = root.join("nu-with-plugins.zip");
@@ -1326,11 +1518,119 @@ mod tests {
             "bundled plugin must not be written to disk"
         );
 
-        let installed = install_from_archive(&zip_path, root, "0.0.0-plugins").unwrap();
+        // With minimal=true, install_from_archive only extracts the nu binary
+        let installed = install_from_archive(&zip_path, root, "0.0.0-plugins", true).unwrap();
         assert_eq!(
             std::fs::read(&installed).unwrap(),
             b"fake nu binary".as_slice()
         );
+        // Plugin must NOT be present in the version directory
+        let version_dir = version_manager::version_install_dir(root, "0.0.0-plugins");
+        assert!(
+            !version_dir.join("nu_plugin_polars").exists(),
+            "minimal install must not extract bundled plugin"
+        );
+    }
+
+    #[test]
+    fn install_from_archive_full_extracts_bundled_plugins() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let zip_path = root.join("nu-with-plugins.zip");
+
+        let plugin_content = vec![0xCAu8; 1024];
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zip = ZipWriter::new(file);
+            let options = SimpleFileOptions::default();
+            let nu_inner = format!("nu-0.0.0-test/{}", nu_binary_name());
+            zip.start_file(&nu_inner, options).unwrap();
+            zip.write_all(b"fake nu binary").unwrap();
+            zip.start_file("nu-0.0.0-test/nu_plugin_polars", options)
+                .unwrap();
+            zip.write_all(&plugin_content).unwrap();
+            zip.start_file("nu-0.0.0-test/nu_plugin_formats", options)
+                .unwrap();
+            zip.write_all(b"formats content").unwrap();
+            zip.finish().unwrap();
+        }
+
+        // With minimal=false (default), all files are extracted
+        let installed = install_from_archive(&zip_path, root, "0.0.0-full", false).unwrap();
+        assert_eq!(
+            std::fs::read(&installed).unwrap(),
+            b"fake nu binary".as_slice()
+        );
+        // Plugins must be present in the version directory
+        let version_dir = version_manager::version_install_dir(root, "0.0.0-full");
+        assert!(
+            version_dir.join("nu_plugin_polars").exists(),
+            "full install must extract bundled plugin polars"
+        );
+        assert!(
+            version_dir.join("nu_plugin_formats").exists(),
+            "full install must extract bundled plugin formats"
+        );
+        assert_eq!(
+            std::fs::read(version_dir.join("nu_plugin_polars")).unwrap(),
+            plugin_content
+        );
+    }
+
+    #[test]
+    fn discover_bundled_plugins_writes_lockfile_entries() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let zip_path = root.join("nu-with-plugins.zip");
+
+        let plugin_content = b"fake polars binary";
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zip = ZipWriter::new(file);
+            let options = SimpleFileOptions::default();
+            let nu_inner = format!("nu-0.0.0-test/{}", nu_binary_name());
+            zip.start_file(&nu_inner, options).unwrap();
+            zip.write_all(b"fake nu binary").unwrap();
+            zip.start_file("nu-0.0.0-test/nu_plugin_polars", options)
+                .unwrap();
+            zip.write_all(plugin_content).unwrap();
+            zip.start_file("nu-0.0.0-test/nu_plugin_query", options)
+                .unwrap();
+            zip.write_all(b"fake query binary").unwrap();
+            zip.finish().unwrap();
+        }
+
+        // Full extraction
+        install_from_archive(&zip_path, root, "0.114.0", false).unwrap();
+
+        // Run discovery
+        let version_dir = version_manager::version_install_dir(root, "0.114.0");
+        discover_bundled_plugins(root, &version_dir, "0.114.0").unwrap();
+
+        // Verify lockfile entries
+        let lockfile = Lockfile::load(root).unwrap();
+        let polars = lockfile
+            .packages
+            .get("nushell/polars")
+            .expect("polars entry");
+        assert_eq!(polars.package_type, "plugin");
+        assert_eq!(polars.source, "binary");
+        assert_eq!(polars.origin.as_deref(), Some(BUNDLED_NU_ORIGIN));
+        assert_eq!(polars.executable_path.as_deref(), Some("nu_plugin_polars"));
+        assert_eq!(polars.payload_path, "tools/nushell/0.114.0");
+        assert_eq!(polars.version, "0.114.0");
+        assert!(polars.executable_sha256.is_some());
+        let expected_sha = integrity::compute_sha256(plugin_content);
+        assert_eq!(
+            polars.executable_sha256.as_deref(),
+            Some(expected_sha.as_str())
+        );
+
+        let query = lockfile.packages.get("nushell/query").expect("query entry");
+        assert_eq!(query.package_type, "plugin");
+        assert_eq!(query.source, "binary");
+        assert_eq!(query.origin.as_deref(), Some(BUNDLED_NU_ORIGIN));
+        assert_eq!(query.executable_path.as_deref(), Some("nu_plugin_query"));
     }
 
     /// Manual smoke: `NUMAN_SMOKE_NU_ARCHIVE=/path/to/nu-*.tar.gz cargo test --lib \
@@ -1348,7 +1648,7 @@ mod tests {
             archive.display()
         );
         let dir = TempDir::new().unwrap();
-        let installed = install_from_archive(&archive, dir.path(), "0.114.1").unwrap();
+        let installed = install_from_archive(&archive, dir.path(), "0.114.1", false).unwrap();
         assert!(installed.is_file());
         assert!(installed.ends_with(nu_binary_name()));
         // Must be the real shell binary, not a tiny plugin stub.
@@ -1369,6 +1669,7 @@ mod tests {
             force: false,
             skip_path: true,
             version: Some("0.113.1".to_string()),
+            minimal: false,
             // Install path doesn't enter `register_existing_nu`, but the
             // initializer needs this field for the struct to compile.
             caller_consented_destructive: false,
@@ -1428,6 +1729,7 @@ mod tests {
             force: false,
             skip_path: true,
             version: Some("0.114.0".to_string()),
+            minimal: false,
             caller_consented_destructive: false,
             is_tty: None,
         };
@@ -1480,6 +1782,7 @@ mod tests {
             force: false,
             skip_path: true,
             version: Some("0.113.0".to_string()),
+            minimal: false,
             caller_consented_destructive: false,
             is_tty: None,
         };
@@ -1527,6 +1830,7 @@ mod tests {
             force: false,
             skip_path: true,
             version: Some("0.113.0".to_string()),
+            minimal: false,
             caller_consented_destructive: false,
             is_tty: None,
         };
@@ -1549,6 +1853,7 @@ mod tests {
             force: false,
             skip_path: true,
             version: Some("0.113.1".to_string()),
+            minimal: false,
             caller_consented_destructive: false,
             is_tty: Some(false),
         };
@@ -1578,6 +1883,7 @@ mod tests {
             force: false,
             skip_path: true,
             version: None,
+            minimal: false,
             caller_consented_destructive: false,
             is_tty: Some(false),
         };
@@ -1642,6 +1948,7 @@ mod tests {
             force: false,
             skip_path: true,
             version: None,
+            minimal: false,
             caller_consented_destructive: false,
             is_tty: Some(false),
         };
