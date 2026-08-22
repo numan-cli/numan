@@ -234,35 +234,62 @@ critical path until intake Stages 1–2 are boring.
 
 ---
 
-## 7. numan-plugins backlog rubric (summary)
+## 7. Priority list: third-party plugins with real install friction
 
-Gates before scoring:
+Keep the catalog focus on what people actually have trouble installing. Do not
+compete with plugins or commands that already ship with Nu (see §8).
 
-1. `NO_RELEASE` → ask upstream for a tag (Lane 1), do not build from floating tip
-2. Tags targeting pre-0.112 Nu → defer (forces bad pins for new users)
+Priority candidates (re-verify each upstream `Cargo.toml` Nu pin and archive
+shape before promotion):
 
-Scoring (max 14): Demand 0–4, Build cost 0–3, Nu currency 0–3, Platform 0–2,
-Maintenance 0–2.
+- `yybit/nu_plugin_compress`: archive compression (zstd/gzip/bzip2/xz)
+- `Neuron-Mr-White/nu_plugin_terminal_qr` (or `FMotalleb/nu_plugin_qr_maker`)
+  : terminal QR codes
+- `kaathewisegit/nugins` (`nu_plugin_endecode`): extra `encode`/`decode`
+  schemes (nugins monorepo, crate at `endecode/`)
+- `JosephTLyons/nu_plugin_units`: common unit conversions
+- `ArmoredPony/nu_plugin_hashes`: extended hash functions
+- `amtoine/nu_plugin_kdl`: KDL format support
+- `cptpiepmatz/nu-jupyter-kernel` (`crates/nu_plugin_plotters`): chart
+  plotting; or `Euphrasiologist/nu_plugin_plot` if it remains the better
+  maintained plotting option
+- `devyn/nu_plugin_dbus`: Linux D-Bus interface
 
-**Batch 1 candidates (from strategy pass; re-verify each `Cargo.toml` Nu pin
-before promotion):** skim, clipboard, desktop_notifications, image.
+These are not all 0.114-ready; the goal is to remove install friction through
+upstream outreach, commit-snapshot intake where there is no tag, or a
+`numan-maintained` fork under ADR 0001 when the maintainer has moved on.
 
-**Gated / defer:** plot and compress (NO_RELEASE → upstream tag requests);
-dbus (Linux-only + libdbus); audio_hook (stale Nu tag).
+Gated / defer: `audio_hook` (stale Nu tag); `from_beancount`, `nuts`, `vec`
+and other pre-0.112 plugins unless a Nu-bumped tag or approved fork appears.
 
 Source of truth for backlog data: `numan-plugins/docs/backlog.json`.
 
 ---
 
-## 8. Relationship to core plugins
+## 8. Official / bundled plugins and native commands (not via numan)
 
-**Detect and offer activate-only.** Do not compete on install. Do not ignore.
+Numan does not install, distribute, or compete with the plugins and commands
+that ship with Nu or that have become experimental native commands. Those come
+from the user's Nu channel, package manager, or `cargo install nushell`, not
+from the Numan registry.
 
-`search polars` → row labeled `core (ships with Nu)`, install disabled,
-activation offered via same plugin-registry path. `doctor` reports
-present-and-registered / present-unregistered / absent, and for absent points
-at the user's Nu channel (or `cargo install nu_plugin_polars`) without owning
-install. Revisit install only if a major Nu channel ships without core plugins.
+Core / bundled plugins that ship with Nu releases:
+`nu_plugin_polars`, `nu_plugin_query`, `nu_plugin_formats`,
+`nu_plugin_gstat`, `nu_plugin_inc`.
+
+Experimental native commands that replace earlier plugins:
+`clip` / `clipboard` (Nushell 0.111+; supersedes `FMotalleb/nu_plugin_clipboard`).
+
+**Policy for `search`, `info`, `install`:**
+
+- Label these as `core (ships with Nu)` or `native command`.
+- `numan install` does not offer them.
+- `numan activate` may register a binary already present beside `nu` or on
+  `NU_PLUGIN_DIRS`, but it does not download or own the install.
+- `numan doctor` may report present/registered/unregistered; for absent core
+  plugins it points the user to their Nu channel (or `cargo install
+  nu_plugin_polars`, etc.) without owning the install.
+- Revisit only if a major Nu channel ships without core plugins.
 
 ---
 

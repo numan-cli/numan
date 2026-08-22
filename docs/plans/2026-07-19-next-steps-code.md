@@ -118,11 +118,20 @@
 
 ## Workstream C — Catalog depth Batch 1 (Bet 1)
 
-### Task C1: Re-verify Batch 1 Nu pins in upstream Cargo.toml
+### Task C1: Re-verify priority plugin Nu pins in upstream Cargo.toml
 
 **Repo:** numan-plugins (read + notes)
 
-- [ ] For candidates `idanarye/nu_plugin_skim`, `FMotalleb/nu_plugin_clipboard`, `FMotalleb/nu_plugin_desktop_notifications`, `FMotalleb/nu_plugin_image`: record actual `nu-plugin` / `nu-protocol` versions from upstream tag.
+- [ ] For the priority candidates from the six-month strategy audit
+  (`yybit/nu_plugin_compress`, `Neuron-Mr-White/nu_plugin_terminal_qr` /
+  `FMotalleb/nu_plugin_qr_maker`, `kaathewisegit/nugins` (`nu_plugin_endecode`),
+  `JosephTLyons/nu_plugin_units`, `ArmoredPony/nu_plugin_hashes`,
+  `amtoine/nu_plugin_kdl`, `cptpiepmatz/nu-jupyter-kernel`
+  (`crates/nu_plugin_plotters`) / `Euphrasiologist/nu_plugin_plot`,
+  `devyn/nu_plugin_dbus`): record actual `nu-plugin` / `nu-protocol` versions,
+  tag status, and archive shape from each upstream tag or commit.
+- [ ] Do not include core / bundled Nu plugins or the `clip` / `clipboard`
+  native command in this catalog work; those ship with Nu (see Task D1).
 - [ ] Drop any that fail gates (pre-0.112, NO_RELEASE, broken Windows, etc.) into deferred notes in `docs/backlog.json` or intake-state.
 - [ ] Commit notes only if backlog metadata changes.
 
@@ -164,8 +173,8 @@
 
 **Repo:** numan
 
-- [ ] Define static table of core plugin ids/names (polars, formats, gstat, query, inc) in a small module (e.g. `src/core/core_plugins.rs`) or const in `search.rs`.
-- [ ] Failing test: `search polars` returns a row labeled `core (ships with Nu)` and does not offer install as a registry package.
+- [ ] Define static table of core plugin ids/names (`polars`, `formats`, `gstat`, `query`, `inc`) and the `clip` / `clipboard` native command in a small module (e.g. `src/core/core_plugins.rs`) or const in `search.rs`.
+- [ ] Failing test: `search polars` returns a row labeled `core (ships with Nu)` and does not offer install as a registry package; `search clip` is labeled `native command (ships with Nu)`.
 - [ ] `activate` path: if binary present beside Nu / on `NU_PLUGIN_DIRS`, allow register via existing activate machinery; otherwise doctor/info points to Nu channel.
 - [ ] Commit: `Detect core Nu plugins in search without owning install`
 
