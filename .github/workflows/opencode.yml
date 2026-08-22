@@ -20,7 +20,7 @@ jobs:
        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
        (contains(github.event.comment.body, '/oc') || contains(github.event.comment.body, '/opencode')))
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     permissions:
       id-token: write
       contents: write
@@ -259,8 +259,19 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # Absolute wall-clock deadline for agent work, ~5 minutes before the
+          # 90-minute job timeout. `timeout` SIGTERMs opencode at the deadline so
+          # it can finish the current task and post, with a kill-after backstop so
+          # a stuck agent cannot eat into the remaining headroom. Both attempts
+          # share the same deadline, so the retry never overruns the job.
+          STEP_DEADLINE=$(( $(date +%s) + 5100 ))   # 85 minutes from now
+
           run_opencode() {
-            opencode github run
+            local budget=$(( STEP_DEADLINE - $(date +%s) ))
+            if (( budget <= 0 )); then
+              return 124
+            fi
+            timeout --signal=TERM --kill-after=60 "${budget}" opencode github run
           }
 
           if run_opencode; then
