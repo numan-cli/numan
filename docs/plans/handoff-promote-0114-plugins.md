@@ -52,7 +52,7 @@ Research → Promote to manifest → Build dispatch → Spec download → Regist
 - No existing `numan-plugins` release tag for that version (immutability)
 
 **Already researched and blocked (skip these):**
-- `PRE_0_112`: clipboard (0.110), dbus (0.101), audio_hook (0.110), vec (0.105), from_beancount (0.76), nuts (0.110)
+- `PRE_0_112`: clipboard (0.110; superseded by Nushell 0.111+ core `clip` command, not a numan candidate), dbus (0.101), audio_hook (0.110), vec (0.105), from_beancount (0.76), nuts (0.110)
 - `PROMOTED` (skip; already shipped): skim, highlight, desktop_notifications, image, port_extension, prometheus; Wave 1 Nu 0.114 (`highlight`, `port_extension`, `regex`, `file`, `hcl`); Wave 2 Nu 0.114 (`ulid`, `jwalk`, `strutils`, `query_git`, `nutext`). Use this fixed name list for this revision (do not re-derive Wave membership by intersecting or unioning `backlog.json` with `manifest.json` `active[]`).
 - `nu_plugin_bigquery`: nu-plugin 0.112.2 (eligible minor) but needs Google creds for lifecycle proof — skip unless you can prove without credentials
 
