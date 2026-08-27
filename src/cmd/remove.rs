@@ -4,7 +4,7 @@ use std::io::IsTerminal;
 use std::path::Path;
 
 use crate::state::lifecycle_journal::{LifecycleOp, LifecycleStage, PendingLifecycle};
-use crate::state::lockfile::{Lockfile, LockfileEntry};
+use crate::state::lockfile::{Lockfile, LockfileEntry, BUNDLED_NU_ORIGIN};
 use crate::state::nupm_import::NupmImportsFile;
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::fs_safety::acquire_mutation_lock;
@@ -55,6 +55,7 @@ fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> 
     };
 
     ensure_plugin_not_active(&entry, &args.package)?;
+    ensure_not_bundled_plugin(&entry, &args.package)?;
     if !args.force && entry.module_activation.is_some() {
         bail!(
             "Package '{}' is currently active as a module. \
@@ -89,6 +90,7 @@ fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> 
         ),
     };
     ensure_plugin_not_active(&entry, &args.package)?;
+    ensure_not_bundled_plugin(&entry, &args.package)?;
     if !args.force && entry.module_activation.is_some() {
         bail!(
             "Package '{}' is currently active as a module. \
@@ -187,6 +189,17 @@ fn ensure_plugin_not_active(entry: &LockfileEntry, pkg_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Refuse remove when the entry is a bundled-Nu plugin whose payload directory
+/// is shared with the managed Nu install (data-loss guard; `remove_dir_all`
+/// would wipe the whole `tools/nushell/<version>/` tree). `--force` does not
+/// bypass this check.
+fn ensure_not_bundled_plugin(entry: &LockfileEntry, pkg_id: &str) -> Result<()> {
+    if entry.origin.as_deref() == Some(BUNDLED_NU_ORIGIN) {
+        bail!("{}", hints::bundled_plugin_remove_gated(pkg_id));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,6 +286,75 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("owner/pkg"));
         assert!(msg.contains("Issue #22"));
+    }
+
+    #[test]
+    fn ensure_not_bundled_plugin_refuses_bundled_origin() {
+        let entry = LockfileEntry {
+            origin: Some(BUNDLED_NU_ORIGIN.to_string()),
+            ..base_entry()
+        };
+        let err = ensure_not_bundled_plugin(&entry, "nushell/polars").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("nushell/polars"));
+        assert!(msg.contains("bundled Nushell plugin"));
+        assert!(msg.contains("numan setup nu remove"));
+    }
+
+    #[test]
+    fn ensure_not_bundled_plugin_allows_registry_origin() {
+        let entry = LockfileEntry {
+            origin: Some("registry:official".to_string()),
+            ..base_entry()
+        };
+        ensure_not_bundled_plugin(&entry, "owner/pkg").unwrap();
+    }
+
+    #[test]
+    fn execute_refuses_bundled_plugin_without_touching_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // A bundled plugin entry shares the versioned Nu payload directory with
+        // the nu binary itself and every other bundled plugin.
+        let version_dir = root.join("tools/nushell/0.114.0");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::fs::write(version_dir.join("nu"), b"fake nu binary").unwrap();
+        std::fs::write(version_dir.join("nu_plugin_polars"), b"fake polars").unwrap();
+
+        let mut lockfile = Lockfile::empty();
+        let mut entry = base_entry();
+        entry.version = "0.114.0".to_string();
+        entry.executable_path = Some("nu_plugin_polars".to_string());
+        entry.payload_path = "tools/nushell/0.114.0".to_string();
+        entry.origin = Some(BUNDLED_NU_ORIGIN.to_string());
+        lockfile
+            .packages
+            .insert("nushell/polars".to_string(), entry);
+        lockfile.save(root).unwrap();
+
+        // Even --force must not bypass the bundled guard: remove_dir_all on the
+        // shared payload would destroy the entire managed Nu install.
+        let err = execute_with_tty(
+            &RemoveArgs {
+                package: "nushell/polars".to_string(),
+                yes: true,
+                force: true,
+            },
+            root,
+            false,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("bundled Nushell plugin"));
+        assert!(msg.contains("numan setup nu remove"));
+
+        // The shared payload (nu binary + bundled plugin) and lockfile entry
+        // must be untouched.
+        assert!(version_dir.join("nu").is_file());
+        assert!(version_dir.join("nu_plugin_polars").is_file());
+        let reloaded = Lockfile::load(root).unwrap();
+        assert!(reloaded.packages.contains_key("nushell/polars"));
     }
 
     #[test]

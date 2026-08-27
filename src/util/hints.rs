@@ -205,6 +205,23 @@ pub fn active_plugin_update_list_note(permitted: bool) -> &'static str {
     }
 }
 
+/// Hint when a bundled-Nu plugin (origin `bundled:nu`) is targeted by
+/// `numan remove`.
+///
+/// Bundled plugin lockfile entries share the versioned Nu payload directory
+/// (`tools/nushell/<version>/`) with the `nu` binary and every other bundled
+/// plugin. `remove`'s `remove_dir_all` on that shared payload would destroy
+/// the whole managed install, so removal is refused outright and the user is
+/// pointed at the managed-Nu removal path.
+pub fn bundled_plugin_remove_gated(package_id: &str) -> String {
+    format!(
+        "Package '{package_id}' is a bundled Nushell plugin (extracted by `numan setup nu`). \
+Removing it would delete the shared version directory holding the `nu` binary and every other \
+bundled plugin. Remove the whole managed Nu with `numan setup nu remove`, or reinstall with \
+`numan setup nu --minimal` to skip bundled plugins."
+    )
+}
+
 /// Doctor `fix` field for `activation.plugin_mutation_gated`.
 ///
 /// Aligned with [`active_plugin_mutation_gated`], [`active_plugin_update_disabled`],
