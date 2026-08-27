@@ -13,7 +13,8 @@ let loader_config_file = ($nu.config-path | path dirname | path join 'loader-con
 
 let aidnem_loader_configs: list<record> = if ($loader_config_file | path exists) {
   try {
-    let cfg = (open $loader_config_file)
+    # The config is stored as nuon data in a .nu file, so read it raw and parse it.
+    let cfg = (open --raw $loader_config_file | from nuon)
     if ($cfg | describe | str starts-with "list") {
       $cfg
     } else {

@@ -785,6 +785,22 @@ where
         return execute_loader_remove(&loader_config_path, tool_name, root);
     }
 
+    // Migrate inline configs that older loader.nu versions stored directly in
+    // the engine script, so upgrading to loader-config.nu isolation preserves them.
+    if loader_path.is_file() && !loader_config_path.exists() {
+        if let Ok(existing) = std::fs::read_to_string(&loader_path) {
+            let inline = extract_inline_loader_configs(&existing);
+            if !inline.is_empty() {
+                write_loader_config(&loader_config_path, &inline)?;
+                println!(
+                    "Migrated {} inline tool config(s) from the existing loader.nu to '{}'.",
+                    inline.len(),
+                    loader_config_path.display()
+                );
+            }
+        }
+    }
+
     // Install/update loader engine file
     install_loader_file(&loader_path, args)?;
 
@@ -835,7 +851,31 @@ pub fn read_loader_config(config_path: &Path) -> Result<Vec<LoaderConfigEntry>> 
     }
     let content = std::fs::read_to_string(config_path)
         .with_context(|| format!("Failed to read '{}'", config_path.display()))?;
-    Ok(parse_loader_config(&content))
+    parse_loader_config(&content)
+}
+
+/// Extract `aidnem_loader_configs` entries that older loader.nu versions
+/// stored inline (before the loader-config.nu isolation), best-effort.
+fn extract_inline_loader_configs(loader_content: &str) -> Vec<LoaderConfigEntry> {
+    let mut line_idx = None;
+    for (idx, line) in loader_content.lines().enumerate() {
+        if line.contains("aidnem_loader_configs") && !line.trim_start().starts_with('#') {
+            line_idx = Some(idx);
+            break;
+        }
+    }
+    let Some(idx) = line_idx else {
+        return Vec::new();
+    };
+    let rest = loader_content
+        .lines()
+        .skip(idx)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let Some(open) = rest.find('[') else {
+        return Vec::new();
+    };
+    parse_loader_config(&rest[open..]).unwrap_or_default()
 }
 
 /// Validate a tool name for use in loader config and autoload file paths.
@@ -859,101 +899,159 @@ fn validate_tool_name(name: &str) -> Result<()> {
 /// Reserved tool name that must not be overwritten by loader add/remove.
 const RESERVED_LOADER_NAMES: &[&str] = &["numan"];
 
-pub fn parse_loader_config(content: &str) -> Vec<LoaderConfigEntry> {
+pub fn parse_loader_config(content: &str) -> Result<Vec<LoaderConfigEntry>> {
+    let chars: Vec<char> = content.chars().collect();
     let mut entries = Vec::new();
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('#') || trimmed.starts_with("//") {
-            continue;
-        }
-        if let Some(entry) = parse_loader_record_line(trimmed) {
-            entries.push(entry);
+    let mut i = 0usize;
+    while i < chars.len() {
+        match chars[i] {
+            '[' | ']' | ',' => {
+                i += 1;
+            }
+            '#' => skip_line(&chars, &mut i),
+            '/' if chars.get(i + 1) == Some(&'/') => skip_line(&chars, &mut i),
+            c if c.is_whitespace() => {
+                i += 1;
+            }
+            '{' => match parse_record(&chars, &mut i) {
+                Some(entry) => entries.push(entry),
+                None => {
+                    bail!("Malformed loader config record at character {i}.");
+                }
+            },
+            c => {
+                bail!(
+                    "Unexpected content in loader config at character {i}: '{c}'. \
+                     Expected a nuon list of {{ name: '...', command: \"...\" }} records."
+                );
+            }
         }
     }
-    entries
+    Ok(entries)
 }
 
-fn parse_loader_record_line(line: &str) -> Option<LoaderConfigEntry> {
-    let name_idx = line.find("name:")?;
-    let after_name = &line[name_idx + 5..].trim_start();
-    let name_quote = after_name.chars().next()?;
-    if name_quote != '\'' && name_quote != '"' {
-        return None;
+/// Scan forward past a `#` / `//` line comment.
+fn skip_line(chars: &[char], i: &mut usize) {
+    while let Some(c) = chars.get(*i) {
+        if *c == '\n' {
+            *i += 1;
+            break;
+        }
+        *i += 1;
     }
+}
 
-    let mut name = String::new();
-    let mut rest = &after_name[name_quote.len_utf8()..];
+/// Skip whitespace, comments, and record separators.
+fn skip_trivia(chars: &[char], i: &mut usize) {
     loop {
-        match rest.chars().next()? {
-            '\\' if name_quote == '"' => {
-                rest = &rest[1..];
-                match rest.chars().next()? {
-                    '\\' => {
-                        name.push('\\');
-                        rest = &rest[1..];
-                    }
-                    '"' => {
-                        name.push('"');
-                        rest = &rest[1..];
-                    }
-                    c => {
-                        name.push('\\');
-                        name.push(c);
-                        rest = &rest[c.len_utf8()..];
-                    }
-                }
-            }
-            c if c == name_quote => {
-                rest = &rest[name_quote.len_utf8()..];
-                break;
-            }
-            c => {
-                name.push(c);
-                rest = &rest[c.len_utf8()..];
-            }
+        match chars.get(*i) {
+            Some(c) if c.is_whitespace() || *c == ',' => *i += 1,
+            Some('#') => skip_line(chars, i),
+            Some('/') if chars.get(*i + 1) == Some(&'/') => skip_line(chars, i),
+            _ => break,
         }
     }
+}
 
-    let cmd_idx = rest.find("command:")?;
-    let after_cmd = &rest[cmd_idx + 8..].trim_start();
-    let cmd_quote = after_cmd.chars().next()?;
-    if cmd_quote != '\'' && cmd_quote != '"' {
-        return None;
-    }
-
-    let mut command = String::new();
-    let mut cmd_rest = &after_cmd[cmd_quote.len_utf8()..];
+/// Parse a `{ name: <str>, command: <str> }` record that may span multiple lines.
+fn parse_record(chars: &[char], i: &mut usize) -> Option<LoaderConfigEntry> {
+    debug_assert_eq!(chars.get(*i), Some(&'{'));
+    *i += 1;
+    let mut name = None;
+    let mut command = None;
     loop {
-        match cmd_rest.chars().next()? {
-            '\\' if cmd_quote == '"' => {
-                cmd_rest = &cmd_rest[1..];
-                match cmd_rest.chars().next()? {
-                    '\\' => {
-                        command.push('\\');
-                        cmd_rest = &cmd_rest[1..];
-                    }
-                    '"' => {
-                        command.push('"');
-                        cmd_rest = &cmd_rest[1..];
-                    }
-                    c => {
-                        command.push('\\');
-                        command.push(c);
-                        cmd_rest = &cmd_rest[c.len_utf8()..];
-                    }
-                }
-            }
-            c if c == cmd_quote => {
+        skip_trivia(chars, i);
+        match chars.get(*i) {
+            None => return None,
+            Some('}') => {
+                *i += 1;
                 break;
             }
-            c => {
-                command.push(c);
-                cmd_rest = &cmd_rest[c.len_utf8()..];
-            }
+            Some(_) => {}
+        }
+        let key = read_ident(chars, i)?;
+        skip_trivia(chars, i);
+        if chars.get(*i) != Some(&':') {
+            return None;
+        }
+        *i += 1;
+        skip_trivia(chars, i);
+        let value = read_string(chars, i)?;
+        match key.as_str() {
+            "name" => name = Some(value),
+            "command" => command = Some(value),
+            _ => {}
         }
     }
+    Some(LoaderConfigEntry {
+        name: name?,
+        command: command?,
+    })
+}
 
-    Some(LoaderConfigEntry { name, command })
+/// Read an ASCII identifier (nuon record key).
+fn read_ident(chars: &[char], i: &mut usize) -> Option<String> {
+    let start = *i;
+    while let Some(c) = chars.get(*i) {
+        if c.is_ascii_alphanumeric() || *c == '_' {
+            *i += 1;
+        } else {
+            break;
+        }
+    }
+    if *i == start {
+        None
+    } else {
+        Some(chars[start..*i].iter().collect())
+    }
+}
+
+/// Read a single- or double-quoted string, honoring escapes in double quotes.
+fn read_string(chars: &[char], i: &mut usize) -> Option<String> {
+    let quote = *chars.get(*i)?;
+    if quote != '\'' && quote != '"' {
+        return None;
+    }
+    *i += 1;
+    let mut out = String::new();
+    loop {
+        let c = *chars.get(*i)?;
+        if c == quote {
+            *i += 1;
+            break;
+        }
+        if c == '\\' && quote == '"' {
+            *i += 1;
+            let esc = *chars.get(*i)?;
+            match esc {
+                '\\' => {
+                    out.push('\\');
+                    *i += 1;
+                }
+                '"' => {
+                    out.push('"');
+                    *i += 1;
+                }
+                'n' => {
+                    out.push('\n');
+                    *i += 1;
+                }
+                't' => {
+                    out.push('\t');
+                    *i += 1;
+                }
+                _ => {
+                    out.push('\\');
+                    out.push(esc);
+                    *i += 1;
+                }
+            }
+        } else {
+            out.push(c);
+            *i += 1;
+        }
+    }
+    Some(out)
 }
 
 pub fn render_loader_config(entries: &[LoaderConfigEntry]) -> String {
@@ -1063,6 +1161,22 @@ fn execute_loader_clean(loader_config_path: &Path, root: Option<&Path>) -> Resul
 
     let mut removed = 0;
     for e in &entries {
+        // Names come from a user-editable file; validate before joining to the
+        // cache path so a crafted entry cannot escape vendor/autoload.
+        if let Err(err) = validate_tool_name(&e.name) {
+            eprintln!(
+                "Warning: skipping invalid tool name '{}' in loader config: {err:#}",
+                e.name
+            );
+            continue;
+        }
+        if RESERVED_LOADER_NAMES.contains(&e.name.as_str()) {
+            eprintln!(
+                "Warning: skipping reserved tool name '{}' (Numan-managed file).",
+                e.name
+            );
+            continue;
+        }
         let target = autoload_dir.join(format!("{}.nu", e.name));
         if target.is_file() {
             match std::fs::remove_file(&target) {
@@ -1182,8 +1296,29 @@ fn execute_loader_add(
 
     let mut entries = read_loader_config(loader_config_path)?;
     if let Some(existing) = entries.iter_mut().find(|e| e.name == name) {
-        existing.command = command.clone();
-        println!("Updated '{}' command in loader config.", name);
+        if existing.command != command {
+            // The cached autoload file encodes the old command; purge it so the
+            // loader regenerates it from the updated configuration.
+            if let Some(autoload_dir) = resolve_vendor_autoload_dir(root) {
+                let target = autoload_dir.join(format!("{name}.nu"));
+                if target.is_file() {
+                    match std::fs::remove_file(&target) {
+                        Ok(()) => println!(
+                            "Removed stale cache '{}' (command changed).",
+                            target.display()
+                        ),
+                        Err(err) => eprintln!(
+                            "Warning: failed to remove stale cache '{}': {err:#}",
+                            target.display()
+                        ),
+                    }
+                }
+            }
+            existing.command = command.clone();
+            println!("Updated '{}' command in loader config.", name);
+        } else {
+            println!("'{}' is already configured with this command.", name);
+        }
     } else {
         entries.push(LoaderConfigEntry {
             name: name.clone(),
@@ -1542,8 +1677,58 @@ mod tests {
         ];
 
         let rendered = render_loader_config(&entries);
-        let parsed = parse_loader_config(&rendered);
+        let parsed = parse_loader_config(&rendered).unwrap();
         assert_eq!(entries, parsed);
+    }
+
+    #[test]
+    fn loader_config_parses_multiline_records() {
+        let content = "\
+# header comment
+[
+  {
+    name: 'starship',
+    command: 'starship init nu', // inline comment
+  },
+  {
+    name: 'custom',
+    command: \"echo \\\"quoted\\\"\",
+  },
+]
+";
+        let parsed = parse_loader_config(content).unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                LoaderConfigEntry {
+                    name: "starship".to_string(),
+                    command: "starship init nu".to_string(),
+                },
+                LoaderConfigEntry {
+                    name: "custom".to_string(),
+                    command: "echo \"quoted\"".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn loader_config_rejects_malformed_content() {
+        let err = parse_loader_config("this is not a list")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Unexpected content") || err.contains("Malformed"),
+            "got: {err}"
+        );
+
+        let err = parse_loader_config("[ { name: 'only-name' } ]")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Malformed"),
+            "record without command must fail, got: {err}"
+        );
     }
 
     #[test]

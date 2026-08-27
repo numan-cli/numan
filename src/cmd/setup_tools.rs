@@ -8,6 +8,7 @@ use crate::core::platform::{Arch, Env, Os, Platform};
 use crate::install::download::download_file;
 use crate::install::extract::{extract_archive, ArchiveFormat, ExtractConfig};
 use crate::nu::bootstrap::{persist_path_dir, prepend_process_path};
+use crate::util::fs_safety::assert_not_symlink;
 
 const USER_AGENT: &str = "numan-cli (https://github.com/tonythethompson/numan)";
 
@@ -188,11 +189,7 @@ fn matches_tool_asset(tool: &ToolPreset, asset_name: &str, platform: &Platform) 
                 Env::Musl => {
                     name.contains("aarch64-unknown-linux-musl") && name.ends_with(".tar.gz")
                 }
-                _ => {
-                    (name.contains("aarch64-unknown-linux-gnu")
-                        || name.contains("aarch64-unknown-linux-musl"))
-                        && name.ends_with(".tar.gz")
-                }
+                _ => name.contains("aarch64-unknown-linux-gnu") && name.ends_with(".tar.gz"),
             },
             (Os::Macos, Arch::X86_64) => name.contains("x86_64-apple-darwin.tar.gz"),
             (Os::Macos, Arch::Aarch64) => name.contains("aarch64-apple-darwin.tar.gz"),
@@ -205,21 +202,13 @@ fn matches_tool_asset(tool: &ToolPreset, asset_name: &str, platform: &Platform) 
                 Env::Musl => {
                     name.contains("x86_64-unknown-linux-musl") && name.ends_with(".tar.gz")
                 }
-                _ => {
-                    (name.contains("x86_64-unknown-linux-gnu")
-                        || name.contains("x86_64-unknown-linux-musl"))
-                        && name.ends_with(".tar.gz")
-                }
+                _ => name.contains("x86_64-unknown-linux-gnu") && name.ends_with(".tar.gz"),
             },
             (Os::Linux, Arch::Aarch64) => match platform.env {
                 Env::Musl => {
                     name.contains("aarch64-unknown-linux-musl") && name.ends_with(".tar.gz")
                 }
-                _ => {
-                    (name.contains("aarch64-unknown-linux-gnu")
-                        || name.contains("aarch64-unknown-linux-musl"))
-                        && name.ends_with(".tar.gz")
-                }
+                _ => name.contains("aarch64-unknown-linux-gnu") && name.ends_with(".tar.gz"),
             },
             (Os::Macos, Arch::X86_64) => name.contains("x86_64-apple-darwin.tar.gz"),
             (Os::Macos, Arch::Aarch64) => name.contains("aarch64-apple-darwin.tar.gz"),
@@ -458,38 +447,44 @@ fn make_executable(_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Depth limit for locating a binary inside an extracted archive.
+const EXTRACTED_BINARY_MAX_DEPTH: usize = 4;
+
 fn find_extracted_binary(extract_dir: &Path, expected_name: &str) -> Result<PathBuf> {
     let bin_target = binary_file_name(expected_name);
-    let direct = extract_dir.join(&bin_target);
-    if direct.is_file() {
-        return Ok(direct);
-    }
+    let mut found = None;
+    walk_for_binary(extract_dir, &bin_target, 0, &mut found)?;
+    found.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Could not find '{}' in extracted archive at '{}'",
+            bin_target,
+            extract_dir.display()
+        )
+    })
+}
 
-    // Search 2 levels deep
-    for entry in std::fs::read_dir(extract_dir)? {
+fn walk_for_binary(
+    dir: &Path,
+    target: &str,
+    depth: usize,
+    found: &mut Option<PathBuf>,
+) -> Result<()> {
+    if found.is_some() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let p = entry.path();
-        if p.is_file() && p.file_name().and_then(|n| n.to_str()) == Some(&bin_target) {
-            return Ok(p);
-        }
-        if p.is_dir() {
-            for sub in std::fs::read_dir(&p)? {
-                let sub = sub?;
-                let sub_p = sub.path();
-                if sub_p.is_file()
-                    && sub_p.file_name().and_then(|n| n.to_str()) == Some(&bin_target)
-                {
-                    return Ok(sub_p);
-                }
+        if p.is_file() {
+            if p.file_name().and_then(|n| n.to_str()) == Some(target) {
+                *found = Some(p);
+                return Ok(());
             }
+        } else if p.is_dir() && depth < EXTRACTED_BINARY_MAX_DEPTH {
+            walk_for_binary(&p, target, depth + 1, found)?;
         }
     }
-
-    bail!(
-        "Could not find '{}' in extracted archive at '{}'",
-        bin_target,
-        extract_dir.display()
-    )
+    Ok(())
 }
 
 /// Download and install a tool preset from GitHub into `$NUMAN_ROOT/tools/bin`.
@@ -498,6 +493,14 @@ pub fn download_and_install_tool(
     root: &Path,
     platform: &Platform,
 ) -> Result<PathBuf> {
+    // Resolve to an absolute root so relative roots never produce relative
+    // PATH entries that resolve against a future shell's working directory.
+    std::fs::create_dir_all(root)
+        .with_context(|| format!("Failed to create Numan root directory '{}'", root.display()))?;
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve Numan root '{}'", root.display()))?;
+
     let release = fetch_latest_release(tool.github_repo)?;
     let asset = release
         .assets
@@ -512,6 +515,7 @@ pub fn download_and_install_tool(
 
     let cache_dir = root.join("tools").join(".cache");
     std::fs::create_dir_all(&cache_dir)?;
+    assert_not_symlink(&cache_dir, "tool cache directory")?;
     let sanitized_name = Path::new(&asset.name)
         .file_name()
         .and_then(|n| n.to_str())
@@ -526,12 +530,14 @@ pub fn download_and_install_tool(
         );
     }
     let download_dest = cache_dir.join(&sanitized_name);
+    assert_not_symlink(&download_dest, "tool download target")?;
 
     println!(
         "Downloading {} {} ({})…",
         tool.display_name, release.tag_name, asset.name
     );
     download_file(&asset.browser_download_url, &download_dest)?;
+    assert_not_symlink(&download_dest, "tool download target")?;
 
     // Validate downloaded file size when the release metadata provides one.
     if asset.size > 0 {
@@ -569,11 +575,18 @@ pub fn download_and_install_tool(
     if let Some(sha) = expected_sha {
         crate::core::integrity::verify_and_report(&download_dest, &sha, tool.display_name)?;
         println!("Verified SHA-256 integrity: sha256:{sha}");
+    } else {
+        println!(
+            "No SHA-256 digest available for {}; skipping integrity verification.",
+            tool.display_name
+        );
     }
 
-    let bin_dir = tools_bin_dir(root);
+    let bin_dir = tools_bin_dir(&root);
     std::fs::create_dir_all(&bin_dir)?;
+    assert_not_symlink(&bin_dir, "tool bin directory")?;
     let final_dest = bin_dir.join(binary_file_name(tool.binary_name));
+    assert_not_symlink(&final_dest, "tool binary destination")?;
 
     if tool.is_direct_binary {
         std::fs::copy(&download_dest, &final_dest).with_context(|| {
@@ -594,12 +607,13 @@ pub fn download_and_install_tool(
             format!("Unsupported archive format for tool asset '{}'", asset.name)
         })?;
 
-        extract_archive(
-            &download_dest,
-            &extract_dir,
-            &ExtractConfig::default(),
-            format,
-        )?;
+        let mut config = ExtractConfig::default();
+        // Mise releases exceed the default 100 MiB extraction cap.
+        if tool.name == "mise" {
+            config.max_uncompressed_bytes = Some(512 * 1024 * 1024);
+        }
+
+        extract_archive(&download_dest, &extract_dir, &config, format)?;
 
         let extracted_bin = find_extracted_binary(&extract_dir, tool.binary_name)?;
         std::fs::copy(&extracted_bin, &final_dest).with_context(|| {
@@ -806,6 +820,11 @@ mod tests {
         ));
         assert!(matches_tool_asset(
             zoxide,
+            "zoxide-0.10.0-x86_64-unknown-linux-gnu.tar.gz",
+            &linux_x64_gnu
+        ));
+        assert!(!matches_tool_asset(
+            zoxide,
             "zoxide-0.10.0-x86_64-unknown-linux-musl.tar.gz",
             &linux_x64_gnu
         ));
@@ -819,6 +838,56 @@ mod tests {
             "zoxide-0.10.0-x86_64-unknown-linux-gnu.tar.gz",
             &linux_x64_musl
         ));
+    }
+
+    #[test]
+    fn test_asset_matching_starship_aarch64_libc() {
+        let linux_arm64_gnu = Platform {
+            triple: "aarch64-unknown-linux-gnu".to_string(),
+            os: Os::Linux,
+            arch: Arch::Aarch64,
+            env: crate::core::platform::Env::Gnu,
+        };
+        let linux_arm64_musl = Platform {
+            triple: "aarch64-unknown-linux-musl".to_string(),
+            os: Os::Linux,
+            arch: Arch::Aarch64,
+            env: crate::core::platform::Env::Musl,
+        };
+        let starship = find_preset("starship").unwrap();
+
+        assert!(matches_tool_asset(
+            starship,
+            "starship-aarch64-unknown-linux-gnu.tar.gz",
+            &linux_arm64_gnu
+        ));
+        assert!(!matches_tool_asset(
+            starship,
+            "starship-aarch64-unknown-linux-musl.tar.gz",
+            &linux_arm64_gnu
+        ));
+        assert!(matches_tool_asset(
+            starship,
+            "starship-aarch64-unknown-linux-musl.tar.gz",
+            &linux_arm64_musl
+        ));
+        assert!(!matches_tool_asset(
+            starship,
+            "starship-aarch64-unknown-linux-gnu.tar.gz",
+            &linux_arm64_musl
+        ));
+    }
+
+    #[test]
+    fn test_find_extracted_binary_deep_path() {
+        let dir = tempfile::tempdir().unwrap();
+        // Replicates mise's `mise/bin/mise` layout (3 levels deep).
+        let nested = dir.path().join("mise").join("bin");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("mise"), b"fake").unwrap();
+
+        let found = find_extracted_binary(dir.path(), "mise").unwrap();
+        assert_eq!(found, nested.join("mise"));
     }
 
     #[test]

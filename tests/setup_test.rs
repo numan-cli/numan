@@ -5,6 +5,20 @@ use numan_cli::cmd::setup::{
     parse_loader_config, read_loader_config, render_loader_config, LoaderArgs, LoaderConfigEntry,
 };
 
+/// Write a minimal `nu_state/paths.json` so loader flows can resolve the
+/// vendor autoload directory without probing a real Nu binary.
+fn write_paths_json(root: &std::path::Path, autoload: &std::path::Path) {
+    let nu_state = root.join("nu_state");
+    std::fs::create_dir_all(&nu_state).unwrap();
+    let json = format!(
+        r#"{{"nu_executable":"/usr/bin/nu","nu_version":"0.113.1","plugin_registry_path":"/tmp/p.json","nu_executable_hash":"abc","platform":"x86_64-unknown-linux-gnu","data_dir":"{}","vendor_autoload_dirs":["{}"],"vendor_autoload_dir":"{}"}}"#,
+        autoload.display(),
+        autoload.display(),
+        autoload.display()
+    );
+    std::fs::write(nu_state.join("paths.json"), json).unwrap();
+}
+
 #[test]
 fn setup_loader_install_and_configure_without_live_nu() {
     let dir = tempfile::tempdir().unwrap();
@@ -237,6 +251,103 @@ fn loader_config_roundtrip_with_escaping() {
     ];
 
     let rendered = render_loader_config(&entries);
-    let parsed = parse_loader_config(&rendered);
+    let parsed = parse_loader_config(&rendered).unwrap();
     assert_eq!(entries, parsed);
+}
+
+#[test]
+fn setup_loader_clean_skips_invalid_and_reserved_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.nu");
+    std::fs::write(&config_path, "# user config\n").unwrap();
+    let root = dir.path().join("numan-root");
+    let autoload = dir.path().join("autoload");
+    std::fs::create_dir_all(&autoload).unwrap();
+    write_paths_json(&root, &autoload);
+
+    let loader_config_path = dir.path().join("loader-config.nu");
+    let entries = vec![
+        LoaderConfigEntry {
+            name: "starship".to_string(),
+            command: "starship init nu".to_string(),
+        },
+        // Crafted entry that would escape vendor/autoload if not validated.
+        LoaderConfigEntry {
+            name: "../victim".to_string(),
+            command: "echo bad".to_string(),
+        },
+        // Reserved Numan-managed name must never be deleted by --clean.
+        LoaderConfigEntry {
+            name: "numan".to_string(),
+            command: "echo numan".to_string(),
+        },
+    ];
+    std::fs::write(&loader_config_path, render_loader_config(&entries)).unwrap();
+
+    std::fs::write(autoload.join("starship.nu"), b"cache").unwrap();
+    std::fs::write(autoload.join("numan.nu"), b"managed").unwrap();
+    let victim = dir.path().join("victim.nu");
+    std::fs::write(&victim, b"outside").unwrap();
+
+    let clean_args = LoaderArgs {
+        clean: true,
+        yes: true,
+        ..Default::default()
+    };
+    execute_loader_with_probe_and_root(&clean_args, Some(&root), || Ok(config_path.clone()))
+        .unwrap();
+
+    assert!(
+        !autoload.join("starship.nu").exists(),
+        "valid entry cache should be removed"
+    );
+    assert!(
+        autoload.join("numan.nu").exists(),
+        "reserved numan.nu must not be deleted"
+    );
+    assert!(
+        victim.exists(),
+        "path-traversal name must not delete a file outside vendor/autoload"
+    );
+}
+
+#[test]
+fn setup_loader_add_purges_stale_cache_when_command_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.nu");
+    std::fs::write(&config_path, "# user config\n").unwrap();
+    let root = dir.path().join("numan-root");
+    let autoload = dir.path().join("autoload");
+    std::fs::create_dir_all(&autoload).unwrap();
+    write_paths_json(&root, &autoload);
+
+    let add_first = LoaderArgs {
+        add: Some("mytool=echo one".to_string()),
+        yes: true,
+        ..Default::default()
+    };
+    execute_loader_with_probe_and_root(&add_first, Some(&root), || Ok(config_path.clone()))
+        .unwrap();
+
+    // Simulate a cached autoload file generated from the old command.
+    let cache = autoload.join("mytool.nu");
+    std::fs::write(&cache, b"stale").unwrap();
+
+    let add_second = LoaderArgs {
+        add: Some("mytool=echo two".to_string()),
+        yes: true,
+        ..Default::default()
+    };
+    execute_loader_with_probe_and_root(&add_second, Some(&root), || Ok(config_path.clone()))
+        .unwrap();
+
+    let loader_config_path = dir.path().join("loader-config.nu");
+    let configs = read_loader_config(&loader_config_path).unwrap();
+    assert_eq!(configs.len(), 1);
+    assert_eq!(configs[0].name, "mytool");
+    assert_eq!(configs[0].command, "echo two");
+    assert!(
+        !cache.exists(),
+        "stale cache must be purged so the loader regenerates it"
+    );
 }
