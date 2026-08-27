@@ -252,7 +252,9 @@ shape before promotion):
 - `amtoine/nu_plugin_kdl`: KDL format support
 - `cptpiepmatz/nu-jupyter-kernel` (`crates/nu_plugin_plotters`): chart
   plotting; or `Euphrasiologist/nu_plugin_plot` if it remains the better
-  maintained plotting option
+  maintained plotting option. Note: the registry id will be the plotters
+  crate (`nu_plugin_plotters`), not the jupyter kernel — the kernel monorepo
+  is only the build source
 - `devyn/nu_plugin_dbus`: Linux D-Bus interface
 
 These are not all 0.114-ready; the goal is to remove install friction through
