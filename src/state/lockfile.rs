@@ -8,6 +8,10 @@ use crate::core::package::ModuleImportMode;
 use crate::nupm_compat::schema::NUPM_IMPORT_ORIGIN;
 use crate::util::atomic::write_json_atomic;
 
+/// Origin marker for plugins bundled with an official Nushell release archive
+/// and discovered automatically during `numan setup nu`.
+pub const BUNDLED_NU_ORIGIN: &str = "bundled:nu";
+
 /// Per-Nu-identity activation record stored on a plugin lockfile entry.
 ///
 /// A plugin is "currently active" only when this record's hash, version, and

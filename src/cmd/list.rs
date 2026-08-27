@@ -1,6 +1,6 @@
 use crate::nu::paths::NuPaths;
 use crate::nupm_compat::schema::NUPM_IMPORT_ORIGIN;
-use crate::state::lockfile::Lockfile;
+use crate::state::lockfile::{Lockfile, BUNDLED_NU_ORIGIN};
 use anyhow::Result;
 use std::io::Write;
 use std::path::Path;
@@ -36,6 +36,8 @@ fn execute_to(root: &Path, out: &mut dyn Write) -> Result<()> {
         };
         let origin_tag = if entry.origin.as_deref() == Some(NUPM_IMPORT_ORIGIN) {
             " (nupm import)"
+        } else if entry.origin.as_deref() == Some(BUNDLED_NU_ORIGIN) {
+            " (bundled with Nu)"
         } else {
             ""
         };
