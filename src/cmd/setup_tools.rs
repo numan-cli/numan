@@ -189,7 +189,13 @@ fn matches_tool_asset(tool: &ToolPreset, asset_name: &str, platform: &Platform) 
                 Env::Musl => {
                     name.contains("aarch64-unknown-linux-musl") && name.ends_with(".tar.gz")
                 }
-                _ => name.contains("aarch64-unknown-linux-gnu") && name.ends_with(".tar.gz"),
+                // Starship publishes only musl for aarch64 Linux; musl binaries
+                // are statically linked and run on glibc hosts.
+                _ => {
+                    (name.contains("aarch64-unknown-linux-gnu")
+                        || name.contains("aarch64-unknown-linux-musl"))
+                        && name.ends_with(".tar.gz")
+                }
             },
             (Os::Macos, Arch::X86_64) => name.contains("x86_64-apple-darwin.tar.gz"),
             (Os::Macos, Arch::Aarch64) => name.contains("aarch64-apple-darwin.tar.gz"),
@@ -208,7 +214,13 @@ fn matches_tool_asset(tool: &ToolPreset, asset_name: &str, platform: &Platform) 
                 Env::Musl => {
                     name.contains("aarch64-unknown-linux-musl") && name.ends_with(".tar.gz")
                 }
-                _ => name.contains("aarch64-unknown-linux-gnu") && name.ends_with(".tar.gz"),
+                // Zoxide publishes only musl for aarch64 Linux; musl binaries
+                // are statically linked and run on glibc hosts.
+                _ => {
+                    (name.contains("aarch64-unknown-linux-gnu")
+                        || name.contains("aarch64-unknown-linux-musl"))
+                        && name.ends_with(".tar.gz")
+                }
             },
             (Os::Macos, Arch::X86_64) => name.contains("x86_64-apple-darwin.tar.gz"),
             (Os::Macos, Arch::Aarch64) => name.contains("aarch64-apple-darwin.tar.gz"),
@@ -447,6 +459,29 @@ fn make_executable(_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Copy `src` to `dst` atomically via a same-directory temp file, so a
+/// partially-written executable is never visible at the destination.
+fn copy_file_atomic(src: &Path, dst: &Path) -> Result<()> {
+    let parent = dst.parent().unwrap_or_else(|| Path::new("."));
+    let tmp = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("Failed to create temp file in '{}'", parent.display()))?;
+    std::fs::copy(src, tmp.path()).with_context(|| {
+        format!(
+            "Failed to copy '{}' to staging file for '{}'",
+            src.display(),
+            dst.display()
+        )
+    })?;
+    tmp.persist(dst).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to atomically install '{}': {}",
+            dst.display(),
+            e.error
+        )
+    })?;
+    Ok(())
+}
+
 /// Depth limit for locating a binary inside an extracted archive.
 const EXTRACTED_BINARY_MAX_DEPTH: usize = 4;
 
@@ -589,13 +624,7 @@ pub fn download_and_install_tool(
     assert_not_symlink(&final_dest, "tool binary destination")?;
 
     if tool.is_direct_binary {
-        std::fs::copy(&download_dest, &final_dest).with_context(|| {
-            format!(
-                "Failed to copy {} to {}",
-                download_dest.display(),
-                final_dest.display()
-            )
-        })?;
+        copy_file_atomic(&download_dest, &final_dest)?;
     } else {
         let extract_dir = cache_dir.join(format!(".extract-{}", tool.name));
         if extract_dir.exists() {
@@ -616,13 +645,7 @@ pub fn download_and_install_tool(
         extract_archive(&download_dest, &extract_dir, &config, format)?;
 
         let extracted_bin = find_extracted_binary(&extract_dir, tool.binary_name)?;
-        std::fs::copy(&extracted_bin, &final_dest).with_context(|| {
-            format!(
-                "Failed to copy extracted binary from '{}' to '{}'",
-                extracted_bin.display(),
-                final_dest.display()
-            )
-        })?;
+        copy_file_atomic(&extracted_bin, &final_dest)?;
 
         let _ = std::fs::remove_dir_all(&extract_dir);
     }
@@ -861,7 +884,7 @@ mod tests {
             "starship-aarch64-unknown-linux-gnu.tar.gz",
             &linux_arm64_gnu
         ));
-        assert!(!matches_tool_asset(
+        assert!(matches_tool_asset(
             starship,
             "starship-aarch64-unknown-linux-musl.tar.gz",
             &linux_arm64_gnu
@@ -875,6 +898,25 @@ mod tests {
             starship,
             "starship-aarch64-unknown-linux-gnu.tar.gz",
             &linux_arm64_musl
+        ));
+    }
+
+    #[test]
+    fn test_asset_matching_zoxide_aarch64_musl_fallback() {
+        let linux_arm64_gnu = Platform {
+            triple: "aarch64-unknown-linux-gnu".to_string(),
+            os: Os::Linux,
+            arch: Arch::Aarch64,
+            env: crate::core::platform::Env::Gnu,
+        };
+        let zoxide = find_preset("zoxide").unwrap();
+
+        // Zoxide only publishes musl for aarch64 Linux; a GNU host must
+        // accept the statically-linked musl archive.
+        assert!(matches_tool_asset(
+            zoxide,
+            "zoxide-0.10.0-aarch64-unknown-linux-musl.tar.gz",
+            &linux_arm64_gnu
         ));
     }
 

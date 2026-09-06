@@ -311,6 +311,99 @@ fn setup_loader_clean_skips_invalid_and_reserved_names() {
     );
 }
 
+/// Locate a `nu` binary on PATH for real-Nu loader tests.
+#[cfg(any(unix, windows))]
+fn find_real_nu() -> Option<std::path::PathBuf> {
+    let name = if cfg!(windows) { "nu.exe" } else { "nu" };
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths).find_map(|dir| {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                Some(candidate)
+            } else {
+                None
+            }
+        })
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn find_real_nu() -> Option<std::path::PathBuf> {
+    None
+}
+
+/// Real-Nu regression test: the vendored loader must parse cleanly under a real
+/// Nu and actually generate caches for configured tools (this was broken twice:
+/// an `exit code` keyword nested in string interpolation and a `describe`
+/// returning `table` instead of `list` for a list of records).
+#[test]
+#[ignore = "requires real Nu binary on $PATH — run in platform acceptance job"]
+fn real_nu_loader_sources_config_and_generates_cache() {
+    let nu = match find_real_nu() {
+        Some(p) => p,
+        None => {
+            eprintln!("Skipping: Nu binary not found on PATH");
+            return;
+        }
+    };
+    let nu_dir = nu.parent().unwrap().to_path_buf();
+
+    let dir = tempfile::tempdir().unwrap();
+    let config_home = dir.path().join("config");
+    let data_home = dir.path().join("data");
+    let config_dir = config_home.join("nushell");
+    std::fs::create_dir_all(&config_dir).unwrap();
+
+    let loader_src = format!(
+        "{}/assets/nushell-loader/loader.nu",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let loader_path = config_dir.join("loader.nu");
+    std::fs::copy(&loader_src, &loader_path).unwrap();
+
+    std::fs::write(
+        config_dir.join("loader-config.nu"),
+        "[ { name: 'mytool', command: \"print 'hello from mytool'\" } ]\n",
+    )
+    .unwrap();
+
+    let mut cmd = std::process::Command::new(&nu);
+    cmd.arg("-n")
+        .arg("-c")
+        .arg(format!("source {}", loader_path.display()))
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env(
+            "PATH",
+            std::env::join_paths(std::iter::once(nu_dir).chain(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            )))
+            .unwrap(),
+        );
+    let output = cmd
+        .output()
+        .expect("Failed to spawn real Nu for loader test");
+
+    assert!(
+        output.status.success(),
+        "loader must parse and run under real Nu.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let cache = data_home.join("nushell").join("vendor/autoload/mytool.nu");
+    assert!(
+        cache.is_file(),
+        "loader must generate a cache for a configured tool. stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let cached = std::fs::read_to_string(&cache).unwrap();
+    assert!(
+        cached.contains("hello from mytool"),
+        "cache must contain the command output, got: {cached}"
+    );
+}
+
 #[test]
 fn setup_loader_add_purges_stale_cache_when_command_changes() {
     let dir = tempfile::tempdir().unwrap();

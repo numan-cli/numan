@@ -15,7 +15,8 @@ let aidnem_loader_configs: list<record> = if ($loader_config_file | path exists)
   try {
     # The config is stored as nuon data in a .nu file, so read it raw and parse it.
     let cfg = (open --raw $loader_config_file | from nuon)
-    if ($cfg | describe | str starts-with "list") {
+    # A list of records is described as a table, so accept both shapes.
+    if ($cfg | describe | str starts-with "list") or ($cfg | describe | str starts-with "table") {
       $cfg
     } else {
       []
@@ -44,7 +45,7 @@ for item in $aidnem_loader_configs {
         $res.stdout | save -f $target
         print $"[Aidnem Loader] Successfully cached ($item.name) -> ($target)"
       } else {
-        print -e $"[Aidnem Loader] Warning: Failed to generate ($item.name) (exit code ($res.exit_code))"
+        print -e $"[Aidnem Loader] Warning: Failed to generate ($item.name); exit code: ($res.exit_code)"
         if not ($res.stderr | is-empty) {
           print -e $"[Aidnem Loader] ($res.stderr)"
         }
@@ -56,7 +57,7 @@ for item in $aidnem_loader_configs {
 }
 
 def _aidnem_loader_completer [context: string, position: int]: nothing -> list<string> {
-  $aidnem_loader_configs | get -i name | default []
+  if ($aidnem_loader_configs | is-empty) { [] } else { $aidnem_loader_configs | get name }
 }
 
 # Remove a cached init file so that it will be regenerated on next startup.
