@@ -287,7 +287,7 @@ Experimental native commands that replace earlier plugins:
 
 **Policy for `search`, `info`, `install`:**
 
-- Label these as `core (ships with Nu)` or `native command`.
+- Label these as `core (ships with Nu)` for bundled plugins or `native command (ships with Nu)` for native commands.
 - `numan install` does not offer them.
 - `numan activate` may register a binary already present beside `nu` or on
   `NU_PLUGIN_DIRS`, but it does not download or own the install.

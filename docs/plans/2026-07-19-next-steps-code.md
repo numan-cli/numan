@@ -128,7 +128,7 @@
   `JosephTLyons/nu_plugin_units`, `ArmoredPony/nu_plugin_hashes`,
   `amtoine/nu_plugin_kdl`, `cptpiepmatz/nu-jupyter-kernel`
   (`crates/nu_plugin_plotters`; registry id is `nu_plugin_plotters`, not the
-  jupyter kernel) / `Euphrasiologist/nu_plugin_plot`,
+  jupyter kernel),
   `devyn/nu_plugin_dbus`): record actual `nu-plugin` / `nu-protocol` versions,
   tag status, and archive shape from each upstream tag or commit.
 - [ ] Do not include core / bundled Nu plugins or the `clip` / `clipboard`
