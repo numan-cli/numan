@@ -251,10 +251,13 @@ shape before promotion):
 - `ArmoredPony/nu_plugin_hashes`: extended hash functions
 - `amtoine/nu_plugin_kdl`: KDL format support
 - `cptpiepmatz/nu-jupyter-kernel` (`crates/nu_plugin_plotters`): chart
-  plotting; or `Euphrasiologist/nu_plugin_plot` if it remains the better
-  maintained plotting option. Note: the registry id will be the plotters
-  crate (`nu_plugin_plotters`), not the jupyter kernel — the kernel monorepo
-  is only the build source
+  plotting; or `Euphrasiologist/nu_plugin_plot` if it remains the better 
+  maintained plotting option
+  
+  **Note:** the registry id will be `nu_plugin_plotters` (the plotters crate 
+  from the monorepo's `crates/` directory), not `nu-jupyter-kernel`. The 
+  jupyter kernel repository is the build source, but the package being 
+  promoted is the plotters crate.
 - `devyn/nu_plugin_dbus`: Linux D-Bus interface
 
 These are not all 0.114-ready; the goal is to remove install friction through
