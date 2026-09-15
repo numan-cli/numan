@@ -664,7 +664,6 @@ pub fn download_and_install_tool(
             bin_dir.display()
         )
     })?;
-    if let Err(err) = persist_path_dir(&bin_dir) {
     persist_path_dir(&bin_dir).with_context(|| {
         format!(
             "Failed to persist '{}' on user PATH. The tool is available in this session, \
