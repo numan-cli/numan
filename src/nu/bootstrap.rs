@@ -1174,7 +1174,24 @@ where
         // Discover bundled plugins when full extraction mode was used.
         if !options.minimal {
             let version_dir = version_manager::version_install_dir(root, normalized);
-            discover_bundled_plugins(root, &version_dir, normalized)?;
+            if let Err(e) = discover_bundled_plugins(root, &version_dir, normalized) {
+                // Rollback: remove newly copied bundled binaries to prevent orphaned
+                // binaries without lockfile entries.
+                if let Ok(entries) = std::fs::read_dir(&version_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if path.is_file() && name.starts_with("nu_plugin_") {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                }
+                return Err(e).context(
+                    "Failed to discover bundled plugins. Newly copied plugin binaries \
+                     have been removed to prevent orphaned state. Re-run setup to retry, \
+                     or use --minimal to skip bundled plugin extraction."
+                );
+            }
         }
     }
 
