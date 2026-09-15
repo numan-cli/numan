@@ -1360,7 +1360,7 @@ fn execute_loader_detect(
             }
         } else if should_install && !is_configured {
             if let Some(r) = root {
-                println!("Installing missing preset '{}'…", preset.display_name);
+                println!("Installing missing tool '{}'…", preset.display_name);
                 match crate::cmd::setup_tools::download_and_install_tool(
                     preset,
                     r,
@@ -1374,10 +1374,8 @@ fn execute_loader_detect(
                         added_count += 1;
                     }
                     Err(err) => {
-                        eprintln!(
-                            "Warning: failed to install '{}': {err:#}",
-                            preset.display_name
-                        );
+                        // Report install failures (GitHub rate limit, network errors, etc.)
+                        eprintln!("Warning: failed to install '{}': {err:#}", preset.display_name);
                     }
                 }
             } else {
