@@ -234,6 +234,45 @@ fn setup_loader_detect_discovers_installed_tool() {
 }
 
 #[test]
+fn setup_loader_detect_rejects_non_executable() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("numan-root");
+    let config_path = dir.path().join("config.nu");
+    std::fs::write(&config_path, "# user config
+
+    // Plant a fake binary but mark it non-executable on Unix
+    let tools_bin = root.join("tools").join("bin");
+    std::fs::create_dir_all(&tools_bin).unwrap();
+    let fake_starship = tools_bin.join(if cfg!(windows) {
+        "starship.exe"
+    } else {
+        "starship"
+    });
+    std::fs::write(&fake_starship, b"fake").unwrap();
+    
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Make it non-executable
+        std::fs::set_permissions(&fake_starship, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    let detect_args = LoaderArgs {
+        detect: true,
+        yes: true,
+        ..Default::default()
+    };
+
+    execute_loader_with_probe_and_root(&detect_args, Some(&root), || Ok(config_path.clone()))
+        .unwrap();
+
+    let loader_config_path = dir.path().join("loader-config.nu");
+    let configs = read_loader_config(&loader_config_path).unwrap();
+    // Non-executable binary should not be detected
+    assert!(!configs.iter().any(|e| e.name == "starship"));
+}
+
+#[test]
 fn loader_config_roundtrip_with_escaping() {
     let entries = vec![
         LoaderConfigEntry {

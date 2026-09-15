@@ -25,7 +25,7 @@ cargo test -- --ignored --skip acceptance_process_helper --skip stage1_official_
 
 - `src/core/`: Platform detection, package models, version constraints, Ed25519 registry trust & SHA256 integrity.
 - `src/cmd/`: CLI subcommands (search, info, list, activate, deactivate, update, remove, doctor, snapshot, use, setup, nupm, try). 
-  - **`numan setup loader`**: Install nushell-loader integration for CLI tool init caching (starship, zoxide, carapace, etc.). Supports `--add <tool>`, `--remove <tool>`, `--detect` (auto-discover tools on PATH), `--status`, `--clean` (purge cache files), `--install` (auto-install missing tools from GitHub), `--force` (reinstall loader.nu), and `--configure` (append source line to config.nu). Isolated config in `loader-config.nu` preserves custom entries on upgrades.
+  - **`numan setup loader`**: Install nushell-loader integration for CLI tool init caching (starship, zoxide, carapace, etc.). Supports `--status` (display current status), `--detect` (auto-discover tools on PATH), `--add <tool>` (add preset or custom name=command), `--remove <tool>` (remove tool from config), `--clean` (purge cached autoload files), `--install` / `--install-missing` (auto-install missing tools from GitHub), `--force` (reinstall loader.nu), and `--configure` (append source line to config.nu). Isolated config in `loader-config.nu` preserves custom entries on upgrades.
 - `src/state/`: Lockfile v2, crash-recovery journals, activation profiles, mutation locking, snapshots & rollback.
 - `src/nu/`: Managed Nushell bootstrap, path resolution, version manager, module autoload generator.
 - `src/install/`: HTTP download, archive extraction, atomic install transactions.

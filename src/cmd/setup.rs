@@ -1371,7 +1371,11 @@ fn execute_loader_detect(
                             name: preset.name.to_string(),
                             command: preset.init_command.to_string(),
                         });
-                        added_count += 1;
+                        // Report install failures (GitHub rate limit, network errors, etc.)
+                        eprintln!(
+                            "Warning: failed to install '{}': {err:#}",
+                            preset.display_name
+                        );
                     }
                     Err(err) => {
                         // Report install failures (GitHub rate limit, network errors, etc.)

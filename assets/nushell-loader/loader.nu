@@ -7,8 +7,7 @@ let autoload_dir: path = $nu.data-dir | path join "vendor/autoload"
 mkdir $autoload_dir
 
 # Load tool configuration from loader-config.nu in the same directory as loader.nu.
-# Uses `open` at runtime instead of `source` so the path does not need to be a
-# parse-time constant (use const when available) and a missing config file is handled gracefully.
+# The path is a parse-time constant so the file can be sourced.
 const loader_config_file = ($nu.config-path | path dirname | path join 'loader-config.nu')
 
 let aidnem_loader_configs: list<record> = if ($loader_config_file | path exists) {

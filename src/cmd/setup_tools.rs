@@ -653,7 +653,17 @@ pub fn download_and_install_tool(
     make_executable(&final_dest)?;
 
     // Add tools bin to PATH
-    prepend_process_path(&bin_dir)?;
+    persist_path_dir(&bin_dir).with_context(|| {
+        format!(
+            "Failed to persist '{}' on user PATH. The tool is available in this session, \
+             but you must manually add the directory to your shell profile to persist {} \
+             in new shells. On Unix, export PATH=\"{}:$PATH\" in your shell rc; \
+             on Windows, update the user PATH environment variable.",
+            bin_dir.display(),
+            tool.binary_name,
+            bin_dir.display()
+        )
+    })?;
     if let Err(err) = persist_path_dir(&bin_dir) {
     persist_path_dir(&bin_dir).with_context(|| {
         format!(
