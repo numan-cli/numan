@@ -259,6 +259,12 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # Provide git credentials for the first opencode push. actions/checkout
+          # uses persist-credentials: false, so git has no token unless we set it
+          # explicitly. The same auth setup is reused in the salvage block below.
+          git config --local http.https://github.com/.extraheader \
+            "AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w 0)"
+
           # Absolute wall-clock deadline for agent work, ~5 minutes before the
           # 90-minute job timeout. `timeout` SIGTERMs opencode at the deadline so
           # it can finish the current task and post, with a kill-after backstop so
