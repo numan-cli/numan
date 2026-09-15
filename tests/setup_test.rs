@@ -291,40 +291,19 @@ fn setup_loader_clean_skips_invalid_and_reserved_names() {
 
     let clean_args = LoaderArgs {
         clean: true,
+        ..Default::default()
     };
     execute_loader_with_probe_and_root(&clean_args, Some(&root), || Ok(config_path.clone()))
         .unwrap();
 
     assert!(
         !autoload.join("starship.nu").exists(),
-        execute_loader_with_probe_and_root(&detect_args, Some(&root), || Ok(config_path.clone()))
-            .unwrap();
+        "valid cached entry must be removed"
+    );
     assert!(
-        let loader_config_path = dir.path().join("loader-config.nu");
-        let configs = read_loader_config(&loader_config_path).unwrap();
-        assert!(
-            !configs.iter().any(|e| e.name == "zoxide"),
-            "non-executable binary should not be detected"
-        );
-    }
-
-    #[cfg(not(unix))]
-    {
-        // Windows doesn't have the executable bit; binaries are always "executable"
-        let detect_args = LoaderArgs {
-            detect: true,
-            yes: true,
-            ..Default::default()
-        };
-        execute_loader_with_probe_and_root(&detect_args, Some(&root), || Ok(config_path.clone()))
-            .unwrap();
-        let loader_config_path = dir.path().join("loader-config.nu");
-        let configs = read_loader_config(&loader_config_path).unwrap();
-        assert!(
-            configs.iter().any(|e| e.name == "zoxide"),
-            "on Windows, all files are executable"
-        );
-    }
+        autoload.join("numan.nu").exists(),
+        "reserved Numan-managed cache must be preserved"
+    );
     assert!(
         victim.exists(),
         "path-traversal name must not delete a file outside vendor/autoload"
