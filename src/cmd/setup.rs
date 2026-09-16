@@ -81,6 +81,10 @@ pub struct NuSetupArgs {
     #[arg(long)]
     pub yes: bool,
 
+    /// Extract only the nu binary, skipping bundled plugins (polars, etc.)
+    #[arg(long)]
+    pub minimal: bool,
+
     // COMPAT: remove in v0.3.0 — hidden backward-compat flags
     #[arg(long, hide = true)]
     pub remove: bool,
@@ -117,13 +121,20 @@ pub enum NuAction {
 
 impl NuSetupArgs {
     /// Construct args for installing a managed Nu (latest or pinned).
-    pub fn install(version: Option<String>, force: bool, skip_path: bool, yes: bool) -> Self {
+    pub fn install(
+        version: Option<String>,
+        force: bool,
+        skip_path: bool,
+        yes: bool,
+        minimal: bool,
+    ) -> Self {
         Self {
             action: None,
             version,
             force,
             skip_path,
             yes,
+            minimal,
             remove: false,
             use_path: false,
             use_existing: None,
@@ -144,6 +155,7 @@ impl NuSetupArgs {
             force: false,
             skip_path: false,
             yes,
+            minimal: false,
             remove: false,
             use_path: false,
             use_existing: None,
@@ -158,6 +170,7 @@ impl NuSetupArgs {
             force: false,
             skip_path: false,
             yes,
+            minimal: false,
             remove: false,
             use_path: false,
             use_existing: None,
@@ -172,6 +185,7 @@ impl NuSetupArgs {
             force: false,
             skip_path,
             yes,
+            minimal: false,
             remove: false,
             use_path: false,
             use_existing: None,
@@ -186,6 +200,7 @@ impl NuSetupArgs {
             force: false,
             skip_path: false,
             yes,
+            minimal: false,
             remove: false,
             use_path: false,
             use_existing: None,
@@ -308,6 +323,7 @@ fn execute_nu_impl_locked(args: &NuSetupArgs, root: &Path) -> Result<()> {
                 force: args.force,
                 skip_path: args.skip_path,
                 version: args.version.clone(),
+                minimal: args.minimal,
                 caller_consented_destructive: false,
                 is_tty: None,
             };
@@ -451,6 +467,7 @@ fn execute_use_path(yes: bool, root: &Path, force: bool, opts: ExecuteUseOpts<'_
         force: false,
         skip_path: false,
         version: None,
+        minimal: false,
         // Hoist consent so register_existing_nu's inner PATH prompt is
         // suppressed -- only valid because the merged prompt above
         // collected consent for both the delete AND the PATH add.
@@ -545,6 +562,7 @@ fn execute_use_existing(
         force: false,
         skip_path: false,
         version: None,
+        minimal: false,
         // Hoist consent so register_existing_nu's inner PATH prompt is
         // suppressed -- only valid because the merged prompt above
         // collected consent for both the delete AND the PATH add.
@@ -1255,6 +1273,7 @@ mod tests {
             force: false,
             skip_path: false,
             yes: true,
+            minimal: false,
             remove: true,
             use_path: false,
             use_existing: None,
