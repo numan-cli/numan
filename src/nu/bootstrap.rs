@@ -1189,7 +1189,7 @@ where
                 return Err(e).context(
                     "Failed to discover bundled plugins. Newly copied plugin binaries \
                      have been removed to prevent orphaned state. Re-run setup to retry, \
-                     or use --minimal to skip bundled plugin extraction."
+                    or use --minimal to skip bundled plugin extraction.",
                 );
             }
         }
