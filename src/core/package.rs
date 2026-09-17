@@ -195,7 +195,7 @@ pub struct SourceInfo {
     pub rev: String,
     /// Cargo package name. Only set for Rust plugin sources; non-plugin
     /// (archive) sources carry `git`/`rev` provenance without it.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cargo_name: Option<String>,
     #[serde(default)]
     pub cargo_lock_sha256: Option<String>,
