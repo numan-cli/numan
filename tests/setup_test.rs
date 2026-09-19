@@ -238,7 +238,7 @@ fn setup_loader_detect_rejects_non_executable() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("numan-root");
     let config_path = dir.path().join("config.nu");
-    std::fs::write(&config_path, "# user config
+    std::fs::write(&config_path, "# user config\n").unwrap();
 
     // Plant a fake binary but mark it non-executable on Unix
     let tools_bin = root.join("tools").join("bin");
