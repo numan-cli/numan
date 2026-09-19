@@ -253,6 +253,27 @@ pub struct RegistryIndex {
     pub packages: Vec<Package>,
 }
 
+impl RegistryIndex {
+    /// Validate that all plugin packages have a cargo_name in their source.
+    ///
+    /// Archive sources (modules, scripts, completions) may omit cargo_name,
+    /// but plugin sources must provide it since they represent Rust crates.
+    pub fn validate_plugin_sources(&self) -> Result<()> {
+        for package in &self.packages {
+            if matches!(package.package_type, PackageType::Plugin) {
+                for version in &package.versions {
+                    if let Some(source) = &version.source {
+                        if source.cargo_name.is_none() {
+                            bail!("Plugin package {}/{} version {} is missing required cargo_name in source", package.id.owner, package.id.name, version.version);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
