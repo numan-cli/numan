@@ -10,6 +10,7 @@ use numan_cli::core::platform::Platform;
 use numan_cli::nu::bootstrap::{self, install_from_archive, NuSetupOptions};
 use numan_cli::nu::paths::{find_nu_executable_with_root, validate_nushell_binary};
 use numan_cli::nu::version_manager;
+use numan_cli::state::lockfile::{Lockfile, BUNDLED_NU_ORIGIN};
 use numan_cli::util::test_paths::PathRestoreGuard;
 use std::io::Write;
 use std::path::PathBuf;
@@ -36,7 +37,7 @@ fn managed_nu_is_discovered_after_install() {
         zip.finish().unwrap();
     }
 
-    install_from_archive(&zip_path, root, "0.0.0-test").unwrap();
+    install_from_archive(&zip_path, root, "0.0.0-test", false).unwrap();
     // Discovery keys off the active marker; `install_from_archive` alone does
     // not write it (the setup flow does). Mirror what `numan setup nu` does
     // so discovery can resolve the freshly installed versioned binary.
@@ -73,6 +74,7 @@ fn setup_nu_uses_injected_installer_without_network() {
             force: false,
             skip_path: true,
             version: Some("0.113.1".to_string()),
+            minimal: false,
             caller_consented_destructive: false,
             is_tty: None,
         },
@@ -110,7 +112,7 @@ fn execute_nu_command_short_circuits_pinned_install_without_network() {
     std::fs::write(&binary, b"fake nu").unwrap();
 
     execute_nu(
-        &NuSetupArgs::install(Some(version.to_string()), false, true, true),
+        &NuSetupArgs::install(Some(version.to_string()), false, true, true, false),
         root,
     )
     .unwrap();
@@ -314,6 +316,7 @@ fn setup_nu_rejects_use_existing_with_skip_path() {
         force: false,
         skip_path: true,
         yes: true,
+        minimal: false,
         remove: false,
         use_path: false,
         use_existing: None,
@@ -342,7 +345,7 @@ fn setup_nu_rejects_legacy_use_existing_with_skip_path() {
     let existing = root.join("nu");
     std::fs::write(&existing, b"fake nu").unwrap();
 
-    let mut args = NuSetupArgs::install(None, false, true, true);
+    let mut args = NuSetupArgs::install(None, false, true, true, false);
     args.use_existing = Some(existing);
 
     let err = execute_nu(&args, root).unwrap_err();
@@ -507,5 +510,239 @@ fn register_existing_nu_audit_text_is_stable() {
              for '{}' (caller has already gathered destructive-step consent).",
             empty_parent.display()
         )
+    );
+}
+
+// ---------------------------------------------------------------------------
+// --minimal flag CLI parse test
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cli_parse_minimal_flag() {
+    let args = parse_nu_args(&["--minimal"]);
+    assert!(args.minimal);
+    assert!(args.action.is_none());
+}
+
+#[test]
+fn cli_parse_minimal_flag_with_version() {
+    let args = parse_nu_args(&["--minimal", "0.114.0"]);
+    assert!(args.minimal);
+    assert_eq!(args.version.as_deref(), Some("0.114.0"));
+}
+
+// ---------------------------------------------------------------------------
+// Bundled plugin extraction and lockfile discovery integration tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn install_from_archive_full_writes_bundled_plugin_lockfile_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let zip_path = root.join("nu-with-plugins.zip");
+
+    let plugin_polars_content = b"fake polars plugin binary";
+    let plugin_formats_content = b"fake formats plugin binary";
+    {
+        let file = std::fs::File::create(&zip_path).unwrap();
+        let mut zip = ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+        let nu_inner = if cfg!(windows) {
+            "nu-0.114.0-test/nu.exe"
+        } else {
+            "nu-0.114.0-test/nu"
+        };
+        zip.start_file(nu_inner, options).unwrap();
+        zip.write_all(b"fake nu binary").unwrap();
+        zip.start_file("nu-0.114.0-test/nu_plugin_polars", options)
+            .unwrap();
+        zip.write_all(plugin_polars_content).unwrap();
+        zip.start_file("nu-0.114.0-test/nu_plugin_formats", options)
+            .unwrap();
+        zip.write_all(plugin_formats_content).unwrap();
+        zip.finish().unwrap();
+    }
+
+    // Full extraction (minimal=false)
+    let installed = install_from_archive(&zip_path, root, "0.114.0", false).unwrap();
+    assert!(installed.is_file());
+
+    // Simulate what execute_nu_setup_with_installer does after install
+    let version_dir = version_manager::version_install_dir(root, "0.114.0");
+    assert!(version_dir.join("nu_plugin_polars").exists());
+    assert!(version_dir.join("nu_plugin_formats").exists());
+
+    // Run bundled plugin discovery (public via the setup flow)
+    // Since discover_bundled_plugins is not directly public, test through the
+    // full setup flow using the injected installer pattern.
+    let platform = Platform::detect();
+    let _path_guard = PathRestoreGuard::new();
+    bootstrap::execute_nu_setup_with_installer(
+        root,
+        &platform,
+        &NuSetupOptions {
+            yes: true,
+            force: true,
+            skip_path: true,
+            version: Some("0.114.0".to_string()),
+            minimal: false,
+            caller_consented_destructive: false,
+            is_tty: None,
+        },
+        |r, _p| {
+            // Installer already ran above; just return the existing binary path
+            Ok(version_manager::version_binary(r, "0.114.0"))
+        },
+    )
+    .unwrap();
+
+    // Verify lockfile entries
+    let lockfile = Lockfile::load(root).unwrap();
+
+    let polars = lockfile
+        .packages
+        .get("nushell/polars")
+        .expect("polars lockfile entry must exist");
+    assert_eq!(polars.package_type, "plugin");
+    assert_eq!(polars.source, "binary");
+    assert_eq!(polars.origin.as_deref(), Some(BUNDLED_NU_ORIGIN));
+    assert_eq!(polars.executable_path.as_deref(), Some("nu_plugin_polars"));
+    assert_eq!(polars.payload_path, "tools/nushell/0.114.0");
+    assert_eq!(polars.version, "0.114.0");
+    assert!(polars.executable_sha256.is_some());
+
+    let formats = lockfile
+        .packages
+        .get("nushell/formats")
+        .expect("formats lockfile entry must exist");
+    assert_eq!(formats.package_type, "plugin");
+    assert_eq!(formats.source, "binary");
+    assert_eq!(formats.origin.as_deref(), Some(BUNDLED_NU_ORIGIN));
+    assert_eq!(
+        formats.executable_path.as_deref(),
+        Some("nu_plugin_formats")
+    );
+    assert_eq!(formats.payload_path, "tools/nushell/0.114.0");
+}
+
+#[test]
+fn install_from_archive_minimal_skips_bundled_plugins_in_lockfile() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let zip_path = root.join("nu-with-plugins.zip");
+
+    {
+        let file = std::fs::File::create(&zip_path).unwrap();
+        let mut zip = ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+        let nu_inner = if cfg!(windows) {
+            "nu-0.113.1-test/nu.exe"
+        } else {
+            "nu-0.113.1-test/nu"
+        };
+        zip.start_file(nu_inner, options).unwrap();
+        zip.write_all(b"fake nu binary").unwrap();
+        zip.start_file("nu-0.113.1-test/nu_plugin_polars", options)
+            .unwrap();
+        zip.write_all(b"plugin content").unwrap();
+        zip.finish().unwrap();
+    }
+
+    // Minimal extraction
+    let _path_guard = PathRestoreGuard::new();
+    let platform = Platform::detect();
+    bootstrap::execute_nu_setup_with_installer(
+        root,
+        &platform,
+        &NuSetupOptions {
+            yes: true,
+            force: false,
+            skip_path: true,
+            version: Some("0.113.1".to_string()),
+            minimal: true,
+            caller_consented_destructive: false,
+            is_tty: None,
+        },
+        |r, _p| {
+            // Minimal installer: only nu binary
+            install_from_archive(&zip_path, r, "0.113.1", true)
+        },
+    )
+    .unwrap();
+
+    // Lockfile should NOT have bundled plugin entries
+    let lockfile = Lockfile::load(root).unwrap();
+    assert!(
+        lockfile.packages.get("nushell/polars").is_none(),
+        "minimal install must not write bundled plugin lockfile entries"
+    );
+
+    // Plugin binary should NOT exist on disk
+    let version_dir = version_manager::version_install_dir(root, "0.113.1");
+    assert!(
+        !version_dir.join("nu_plugin_polars").exists(),
+        "minimal install must not place plugin binary on disk"
+    );
+}
+
+#[test]
+fn list_shows_bundled_with_nu_tag() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    // Create a lockfile with a bundled entry
+    let mut lockfile = Lockfile::load(root).unwrap();
+    lockfile.packages.insert(
+        "nushell/polars".to_string(),
+        numan_cli::state::lockfile::LockfileEntry {
+            version: "0.114.0".to_string(),
+            package_type: "plugin".to_string(),
+            source: "binary".to_string(),
+            target: None,
+            artifact_url: None,
+            artifact_sha256: None,
+            executable_path: Some("nu_plugin_polars".to_string()),
+            archive_root: None,
+            include: None,
+            entry: None,
+            installed_at: "0".to_string(),
+            nu_version_at_install: Some("0.114.0".to_string()),
+            activation: None,
+            registry_url: None,
+            registry_revision: None,
+            index_sha256: None,
+            signing_key_fingerprint: None,
+            git_url: None,
+            git_rev: None,
+            cargo_name: None,
+            cargo_lock_sha256: None,
+            built_sha256: None,
+            payload_path: "tools/nushell/0.114.0".to_string(),
+            revision_id: None,
+            payload_sha256: None,
+            executable_sha256: Some("abcdef".to_string()),
+            selection_reason: None,
+            origin: Some(BUNDLED_NU_ORIGIN.to_string()),
+            module_activation: None,
+            module_import_mode: None,
+            locked_dependencies: Default::default(),
+        },
+    );
+    lockfile.save(root).unwrap();
+
+    // Run `numan list` and capture output
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_numan"))
+        .args(["list", "--root", root.to_str().unwrap()])
+        .output()
+        .expect("failed to run numan list");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("(bundled with Nu)"),
+        "numan list must show (bundled with Nu) tag; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("nushell/polars"),
+        "numan list must show the bundled plugin; got: {stdout}"
     );
 }
