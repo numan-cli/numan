@@ -12,6 +12,7 @@ use crate::util::fs_safety::assert_not_symlink;
 
 const USER_AGENT: &str = "numan-cli (https://github.com/tonythethompson/numan)";
 
+/// Metadata describing a downloadable shell tool and how to initialize it.
 #[derive(Debug, Clone)]
 pub struct ToolPreset {
     pub name: &'static str,
@@ -23,6 +24,7 @@ pub struct ToolPreset {
     pub is_direct_binary: bool,
 }
 
+/// Built-in tool presets with platform-aware GitHub release asset matching.
 pub const KNOWN_TOOLS: &[ToolPreset] = &[
     ToolPreset {
         name: "starship",
@@ -89,15 +91,18 @@ pub const KNOWN_TOOLS: &[ToolPreset] = &[
     },
 ];
 
+/// Look up a built-in preset by name (case-insensitive).
 pub fn find_preset(name: &str) -> Option<&'static ToolPreset> {
     let lower = name.to_ascii_lowercase();
     KNOWN_TOOLS.iter().find(|t| t.name == lower)
 }
 
+/// The `$NUMAN_ROOT/tools/bin` directory where installed tool binaries live.
 pub fn tools_bin_dir(root: &Path) -> PathBuf {
     root.join("tools").join("bin")
 }
 
+/// Return the platform-appropriate executable filename for a tool base name.
 pub fn binary_file_name(base: &str) -> String {
     if cfg!(windows) && !base.ends_with(".exe") {
         format!("{base}.exe")
@@ -369,6 +374,8 @@ fn matches_checksum_filename(candidate: &str, asset_name: &str) -> bool {
     clean.ends_with(&format!("/{asset_name}")) || clean.ends_with(&format!("\\{asset_name}"))
 }
 
+/// Extract a SHA-256 hex digest for `asset_name` from checksum text in
+/// `sha256sums`, `shasum -a 256`, or bare-hash formats.
 pub fn parse_checksum_from_text(text: &str, asset_name: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
