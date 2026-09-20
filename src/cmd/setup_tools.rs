@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::core::platform::{Arch, Env, Os, Platform};
 use crate::install::download::download_file;
 use crate::install::extract::{extract_archive, ArchiveFormat, ExtractConfig};
-use crate::nu::bootstrap::{persist_path_dir, prepend_process_path};
+use crate::nu::bootstrap::persist_path_dir;
 use crate::util::fs_safety::assert_not_symlink;
 
 const USER_AGENT: &str = "numan-cli (https://github.com/tonythethompson/numan)";
@@ -653,17 +653,6 @@ pub fn download_and_install_tool(
     make_executable(&final_dest)?;
 
     // Add tools bin to PATH
-    persist_path_dir(&bin_dir).with_context(|| {
-        format!(
-            "Failed to persist '{}' on user PATH. The tool is available in this session, \
-             but you must manually add the directory to your shell profile to persist {} \
-             in new shells. On Unix, export PATH=\"{}:$PATH\" in your shell rc; \
-             on Windows, update the user PATH environment variable.",
-            bin_dir.display(),
-            tool.binary_name,
-            bin_dir.display()
-        )
-    })?;
     persist_path_dir(&bin_dir).with_context(|| {
         format!(
             "Failed to persist '{}' on user PATH. The tool is available in this session, \

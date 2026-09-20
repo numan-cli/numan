@@ -249,7 +249,7 @@ fn setup_loader_detect_rejects_non_executable() {
         "starship"
     });
     std::fs::write(&fake_starship, b"fake").unwrap();
-    
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
