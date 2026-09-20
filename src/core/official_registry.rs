@@ -281,6 +281,11 @@ pub fn verify_registry_index(
     let index: RegistryIndex = serde_json::from_value(value)
         .with_context(|| format!("Registry '{registry_name}' index failed schema validation"))?;
 
+    // Validate that all plugin packages have cargo_name in their source
+    index
+        .validate_plugin_sources()
+        .with_context(|| format!("Registry '{registry_name}' contains invalid plugin entries"))?;
+
     let trust_extension: RegistryTrustExtension = index.trust.clone().unwrap_or_default();
 
     // Validate that any successor keys are well-formed, but do not add them to

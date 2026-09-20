@@ -100,7 +100,9 @@ pub fn format_info(pkg: &Package, platform: &Platform, nu: Option<&NuVersion>) -
         if let Some(ref source) = ver.source {
             out.push_str(&format!("    source git:  {}\n", source.git));
             out.push_str(&format!("    source rev:  {}\n", source.rev));
-            out.push_str(&format!("    cargo_name:  {}\n", source.cargo_name));
+            if let Some(ref cargo_name) = source.cargo_name {
+                out.push_str(&format!("    cargo_name:  {cargo_name}\n"));
+            }
             if let Some(ref lock) = source.cargo_lock_sha256 {
                 out.push_str(&format!("    cargo_lock:  {lock}\n"));
             }
@@ -188,7 +190,7 @@ mod tests {
                 source: with_source.then_some(SourceInfo {
                     git: "https://github.com/cptpiepmatz/nu-plugin-highlight".into(),
                     rev: "v1.4.15+0.113.1".into(),
-                    cargo_name: "nu_plugin_highlight".into(),
+                    cargo_name: Some("nu_plugin_highlight".into()),
                     cargo_lock_sha256: None,
                     upstream: None,
                 }),
@@ -229,6 +231,16 @@ mod tests {
         );
         assert!(out.contains("source rev:  v1.4.15+0.113.1"), "{out}");
         assert!(out.contains("cargo_name:  nu_plugin_highlight"), "{out}");
+    }
+
+    #[test]
+    fn format_info_omits_cargo_name_for_archive_source() {
+        let mut pkg = sample_plugin(true);
+        pkg.package_type = PackageType::Module;
+        pkg.versions[0].source.as_mut().unwrap().cargo_name = None;
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(out.contains("source git:"), "{out}");
+        assert!(!out.contains("cargo_name:"), "{out}");
     }
 
     #[test]
