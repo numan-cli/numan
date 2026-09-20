@@ -193,7 +193,10 @@ pub struct TargetArtifact {
 pub struct SourceInfo {
     pub git: String,
     pub rev: String,
-    pub cargo_name: String,
+    /// Cargo package name. Only set for Rust plugin sources; non-plugin
+    /// (archive) sources carry `git`/`rev` provenance without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cargo_name: Option<String>,
     #[serde(default)]
     pub cargo_lock_sha256: Option<String>,
     /// Original upstream repo URL. Set only when this version is a
@@ -248,6 +251,27 @@ pub struct RegistryIndex {
     #[serde(default)]
     pub trust: Option<crate::core::official_registry::RegistryTrustExtension>,
     pub packages: Vec<Package>,
+}
+
+impl RegistryIndex {
+    /// Validate that all plugin packages have a cargo_name in their source.
+    ///
+    /// Archive sources (modules, scripts, completions) may omit cargo_name,
+    /// but plugin sources must provide it since they represent Rust crates.
+    pub fn validate_plugin_sources(&self) -> Result<()> {
+        for package in &self.packages {
+            if matches!(package.package_type, PackageType::Plugin) {
+                for version in &package.versions {
+                    if let Some(source) = &version.source {
+                        if source.cargo_name.is_none() {
+                            bail!("Plugin package {}/{} version {} is missing required cargo_name in source", package.id.owner, package.id.name, version.version);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -458,8 +482,31 @@ mod tests {
             "https://github.com/cptpiepmatz/nu-plugin-highlight"
         );
         assert_eq!(source.rev, "v1.4.15+0.113.1");
-        assert_eq!(source.cargo_name, "nu_plugin_highlight");
+        assert_eq!(source.cargo_name.as_deref(), Some("nu_plugin_highlight"));
         assert!(source.cargo_lock_sha256.is_none());
+    }
+
+    #[test]
+    fn parse_version_entry_with_archive_source_without_cargo_name() {
+        let json = r#"{
+            "version": "1.0.0",
+            "nu_version": ">=0.114.0",
+            "source": {
+                "git": "https://github.com/owner/cool-module",
+                "rev": "5a1ca2a5ceba60108a4ca6d45ec18d213abb5227"
+            },
+            "artifact": {
+                "kind": "archive",
+                "url": "https://example.com/p.tar.gz",
+                "sha256": "abc123",
+                "entry": "mod.nu"
+            }
+        }"#;
+        let entry: VersionEntry = serde_json::from_str(json).unwrap();
+        let source = entry.source.expect("source present");
+        assert_eq!(source.git, "https://github.com/owner/cool-module");
+        assert_eq!(source.rev, "5a1ca2a5ceba60108a4ca6d45ec18d213abb5227");
+        assert!(source.cargo_name.is_none());
     }
 
     #[test]
