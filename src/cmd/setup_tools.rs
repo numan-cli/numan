@@ -934,10 +934,11 @@ mod tests {
         // Replicates mise's `mise/bin/mise` layout (3 levels deep).
         let nested = dir.path().join("mise").join("bin");
         std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(nested.join("mise"), b"fake").unwrap();
+        let bin_name = binary_file_name("mise");
+        std::fs::write(nested.join(&bin_name), b"fake").unwrap();
 
         let found = find_extracted_binary(dir.path(), "mise").unwrap();
-        assert_eq!(found, nested.join("mise"));
+        assert_eq!(found, nested.join(bin_name));
     }
 
     #[test]
