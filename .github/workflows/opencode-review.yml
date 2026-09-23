@@ -20,7 +20,7 @@ jobs:
       pull-requests: write
       id-token: write
       actions: read
-    uses: tonythethompson/opencode-review-threads/.github/workflows/opencode-review.yml@e23b9ffded084693525c8b8caa62dd8d9e2b4f41 # v1.3.2
+    uses: tonythethompson/opencode-review-threads/.github/workflows/opencode-review.yml@d214b889869ec011abfc5fc738dd548660d4c00f # v1.4.0
     with:
       use-github-token: true
       models-review: >-
