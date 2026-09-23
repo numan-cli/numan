@@ -19,8 +19,9 @@ concurrency:
 jobs:
   opencode:
     if: >-
-      github.event_name == 'workflow_dispatch'
-      || contains('OWNER,MEMBER,COLLABORATOR,CONTRIBUTOR', github.event.comment.author_association)
+      !endsWith(github.actor, '[bot]')
+      && (github.event_name == 'workflow_dispatch'
+          || contains('OWNER,MEMBER,COLLABORATOR,CONTRIBUTOR', github.event.comment.author_association))
     permissions:
       contents: write
       issues: write
