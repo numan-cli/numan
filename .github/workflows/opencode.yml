@@ -18,6 +18,7 @@ concurrency:
 
 jobs:
   opencode:
+    timeout-minutes: 90
     if: >-
       !endsWith(github.actor, '[bot]')
       && (github.event_name == 'workflow_dispatch'
