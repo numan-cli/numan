@@ -42,6 +42,7 @@ jobs:
           ALIBABA_TOKEN_PLAN_API_KEY: ${{ secrets.ALIBABA_TOKEN_PLAN_API_KEY }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -61,20 +62,21 @@ jobs:
               -d "${body}" >/dev/null 2>&1
           }
 
+          probe_openrouter() {
+            local model="$1"
+            [[ -n "${OPENROUTER_API_KEY:-}" ]] || return 1
+            local url="https://openrouter.ai/api/v1/chat/completions"
+            local body="{\"model\":\"${model}\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":1}"
+            local auth="Authorization: Bearer ${OPENROUTER_API_KEY}"
+            curl -sf --max-time 15 -X POST "${url}" \
+              -H "${auth}" -H "Content-Type: application/json" \
+              -d "${body}" >/dev/null 2>&1
+          }
+
           # Decide task type: /oc review (or PR opened) vs /oc fix.
           IS_REVIEW=false
           if [[ "${TRIGGERED_BY_PR_OPEN}" == "true" ]] || [[ "${COMMENT}" =~ (^|[[:space:]])/(oc|opencode)[[:space:]]+review ]]; then
             IS_REVIEW=true
-          fi
-
-          # Cloudflare Workers AI is the primary provider:
-          #   review -> GLM 5.3 (DeepSeek V4 Pro as CF fallback), fix -> GLM 5.3 Flash (DeepSeek V4 Flash as CF fallback).
-          if [[ "${IS_REVIEW}" == "true" ]]; then
-            CF_MODEL="@cf/zai-org/glm-5.3"
-            echo "::notice::Review requested - Cloudflare Workers AI primary: GLM 5.3 (${CF_MODEL})"
-          else
-            CF_MODEL="@cf/zai-org/glm-5.3-flash"
-            echo "::notice::Fix requested - Cloudflare Workers AI primary: GLM 5.3 Flash (${CF_MODEL})"
           fi
 
           # Emit the inline opencode config. OPENCODE_CONFIG_CONTENT is the highest-priority
@@ -102,7 +104,10 @@ jobs:
                       "@cf/zai-org/glm-5.3": { "name": "GLM 5.3" },
                       "@cf/zai-org/glm-5.3-flash": { "name": "GLM 5.3 Flash" },
                       "@cf/deepseek-ai/deepseek-v4-flash-0731": { "name": "DeepSeek V4 Flash" },
-                      "@cf/deepseek-ai/deepseek-v4-pro-0813": { "name": "DeepSeek V4 Pro" }
+                      "@cf/deepseek-ai/deepseek-v4-pro-0813": { "name": "DeepSeek V4 Pro" },
+                      "@cf/openai/gpt-oss-120b": { "name": "GPT-OSS 120B" },
+                      "@cf/moonshotai/kimi-k2.7-code": { "name": "Kimi K2.7 Code" },
+                      "@cf/qwen/qwen3.8-27b": { "name": "Qwen 3.8 27B" }
                     }
                   }
                 },
@@ -152,50 +157,41 @@ jobs:
             exit 0
           }
 
-          if [[ -n "${CLOUDFLARE_API_TOKEN:-}" && -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] && probe_cf "${CF_MODEL}"; then
-            choose "cloudflare-workers-ai/${CF_MODEL}" "" true
-          fi
-          echo "::warning::Cloudflare Workers AI primary unavailable (or secrets missing) - checking fallback"
-
           if [[ "${IS_REVIEW}" == "true" ]]; then
-            # Review gets a second Cloudflare model before falling back to the Zen chain.
-            CF_FALLBACK="@cf/deepseek-ai/deepseek-v4-pro-0813"
-            if [[ -n "${CLOUDFLARE_API_TOKEN:-}" && -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] && probe_cf "${CF_FALLBACK}"; then
-              choose "cloudflare-workers-ai/${CF_FALLBACK}" "" true
-            fi
-            echo "::warning::Cloudflare Workers AI review fallback unavailable - falling back to OpenCode Zen chain"
-            if probe_zen big-pickle; then
-              choose "opencode/big-pickle"
-            fi
-            echo "::warning::big-pickle unavailable - trying free fallback (nemotron-3-ultra-free)"
-            if probe_zen nemotron-3-ultra-free; then
-              choose "opencode/nemotron-3-ultra-free"
+            for cf_m in "@cf/zai-org/glm-5.3" "@cf/deepseek-ai/deepseek-v4-pro-0813" "@cf/openai/gpt-oss-120b" "@cf/moonshotai/kimi-k2.7-code"; do
+              if [[ -n "${CLOUDFLARE_API_TOKEN:-}" && -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] && probe_cf "${cf_m}"; then
+                choose "cloudflare-workers-ai/${cf_m}" "" true
+              fi
+            done
+            echo "::warning::Cloudflare Workers AI review models unavailable - checking OpenCode Zen chain"
+            for zen_m in big-pickle glm-5-free nemotron-3-ultra-free; do
+              if probe_zen "${zen_m}"; then
+                choose "opencode/${zen_m}"
+              fi
+            done
+            echo "::warning::Zen review models unavailable - checking OpenRouter fallback"
+            if probe_openrouter "openrouter/free"; then
+              choose "openrouter/openrouter/free"
             fi
             echo "::error::All review models unavailable"
             exit 1
           fi
 
-          # Fix chain: Cloudflare DeepSeek V4 Flash fallback -> Zen nemotron-3.5-lightning-free -> big-pickle -> nemotron-3-ultra-free -> deepseek-v4-flash.
-          CF_FIX_FALLBACK="@cf/deepseek-ai/deepseek-v4-flash-0731"
-          if [[ -n "${CLOUDFLARE_API_TOKEN:-}" && -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] && probe_cf "${CF_FIX_FALLBACK}"; then
-            choose "cloudflare-workers-ai/${CF_FIX_FALLBACK}" "" true
-          fi
-          echo "::warning::Cloudflare Workers AI fix fallback unavailable - falling back to OpenCode Zen chain"
-
-          if probe_zen nemotron-3.5-lightning-free; then
-            choose "opencode/nemotron-3.5-lightning-free"
-          fi
-          echo "::warning::Nemotron 3.5 Lightning free unavailable - trying big-pickle"
-          if probe_zen big-pickle; then
-            choose "opencode/big-pickle"
-          fi
-          echo "::warning::big-pickle unavailable - trying free fallback (nemotron-3-ultra-free)"
-          if probe_zen nemotron-3-ultra-free; then
-            choose "opencode/nemotron-3-ultra-free"
-          fi
-          echo "::warning::Nemotron 3 Ultra free unavailable - trying deepseek-v4-flash"
-          if probe_zen deepseek-v4-flash; then
-            choose "opencode/deepseek-v4-flash"
+          # Fix chain: Cloudflare Flash/Coding models -> Zen free -> OpenRouter free
+          for cf_m in "@cf/zai-org/glm-5.3-flash" "@cf/deepseek-ai/deepseek-v4-flash-0731" "@cf/moonshotai/kimi-k2.7-code" "@cf/qwen/qwen3.8-27b" "@cf/openai/gpt-oss-120b"; do
+            if [[ -n "${CLOUDFLARE_API_TOKEN:-}" && -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] && probe_cf "${cf_m}"; then
+              choose "cloudflare-workers-ai/${cf_m}" "" true
+            fi
+          done
+          echo "::warning::Cloudflare Workers AI fix models unavailable - checking OpenCode Zen chain"
+          for zen_m in nemotron-3.5-lightning-free big-pickle glm-5-free; do
+            if probe_zen "${zen_m}"; then
+              choose "opencode/${zen_m}"
+            fi
+          done
+          echo "::warning::Zen fix models unavailable - checking OpenRouter fallback"
+          if probe_openrouter "openrouter/free"; then
+            choose "openrouter/openrouter/free"
           fi
           echo "::error::All fix models unavailable"
           exit 1
@@ -251,6 +247,7 @@ jobs:
           ALIBABA_TOKEN_PLAN_API_KEY: ${{ secrets.ALIBABA_TOKEN_PLAN_API_KEY }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
           OPENCODE_CONFIG_CONTENT: ${{ steps.probe.outputs.config }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
