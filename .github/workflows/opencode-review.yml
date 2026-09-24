@@ -1,0 +1,43 @@
+---
+name: OpenCode review
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+concurrency:
+  group: opencode-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      id-token: write
+      actions: read
+    uses: tonythethompson/opencode-review-threads/.github/workflows/opencode-review.yml@c1c9bc9bdae03bc36259caf78a1eb8a4209706cc # v1.4.1
+    with:
+      use-github-token: true
+      timeout-minutes: 85
+      models-review: >-
+        cf:@cf/zai-org/glm-5.2,
+        cf:@cf/deepseek-ai/deepseek-v4-pro-0813,
+        zen:big-pickle,
+        zen:nemotron-3-ultra-free
+      models-fix: >-
+        cf:@cf/deepseek-ai/deepseek-v4-flash-0731,
+        zen:nemotron-3.5-lightning-free,
+        zen:big-pickle,
+        zen:nemotron-3-ultra-free,
+        zen:deepseek-v4-flash
+    secrets:
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY || secrets.CLOUDFLARE_API_TOKEN }}
+      CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
