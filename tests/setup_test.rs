@@ -7,15 +7,28 @@ use numan_cli::cmd::setup::{
 
 /// Write a minimal `nu_state/paths.json` so loader flows can resolve the
 /// vendor autoload directory without probing a real Nu binary.
+///
+/// The payload is serialized with `serde_json` (not `format!`) so Windows
+/// backslash paths are escaped correctly; a hand-rolled JSON string with
+/// `path.display()` is invalid JSON on Windows and makes `NuPaths::load`
+/// fail, which silently disables every loader flow that depends on it.
 fn write_paths_json(root: &std::path::Path, autoload: &std::path::Path) {
+    use numan_cli::nu::paths::NuPaths;
+
     let nu_state = root.join("nu_state");
     std::fs::create_dir_all(&nu_state).unwrap();
-    let json = format!(
-        r#"{{"nu_executable":"/usr/bin/nu","nu_version":"0.113.1","plugin_registry_path":"/tmp/p.json","nu_executable_hash":"abc","platform":"x86_64-unknown-linux-gnu","data_dir":"{}","vendor_autoload_dirs":["{}"],"vendor_autoload_dir":"{}"}}"#,
-        autoload.display(),
-        autoload.display(),
-        autoload.display()
-    );
+    let autoload_str = autoload.display().to_string();
+    let paths = NuPaths {
+        nu_executable: "/usr/bin/nu".to_string(),
+        nu_version: "0.113.1".to_string(),
+        plugin_registry_path: "/tmp/p.json".to_string(),
+        nu_executable_hash: "abc".to_string(),
+        platform: "x86_64-unknown-linux-gnu".to_string(),
+        data_dir: Some(autoload_str.clone()),
+        vendor_autoload_dirs: vec![autoload_str.clone()],
+        vendor_autoload_dir: Some(autoload_str),
+    };
+    let json = serde_json::to_string(&paths).unwrap();
     std::fs::write(nu_state.join("paths.json"), json).unwrap();
 }
 
@@ -233,6 +246,11 @@ fn setup_loader_detect_discovers_installed_tool() {
     assert!(configs.iter().any(|e| e.name == "starship"));
 }
 
+/// Unix-only: Windows has no execute permission bit, so `is_executable`
+/// reports every regular file as executable there and a non-executable
+/// fixture cannot be expressed. Windows detection is covered by
+/// `setup_loader_detect_discovers_installed_tool`.
+#[cfg(unix)]
 #[test]
 fn setup_loader_detect_rejects_non_executable() {
     let dir = tempfile::tempdir().unwrap();
@@ -240,22 +258,15 @@ fn setup_loader_detect_rejects_non_executable() {
     let config_path = dir.path().join("config.nu");
     std::fs::write(&config_path, "# user config\n").unwrap();
 
-    // Plant a fake binary but mark it non-executable on Unix
+    // Plant a fake binary but mark it non-executable
     let tools_bin = root.join("tools").join("bin");
     std::fs::create_dir_all(&tools_bin).unwrap();
-    let fake_starship = tools_bin.join(if cfg!(windows) {
-        "starship.exe"
-    } else {
-        "starship"
-    });
+    let fake_starship = tools_bin.join("starship");
     std::fs::write(&fake_starship, b"fake").unwrap();
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        // Make it non-executable
-        std::fs::set_permissions(&fake_starship, std::fs::Permissions::from_mode(0o644)).unwrap();
-    }
+    use std::os::unix::fs::PermissionsExt;
+    // Make it non-executable
+    std::fs::set_permissions(&fake_starship, std::fs::Permissions::from_mode(0o644)).unwrap();
 
     let detect_args = LoaderArgs {
         detect: true,
