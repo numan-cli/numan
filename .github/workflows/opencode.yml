@@ -68,13 +68,13 @@ jobs:
           fi
 
           # Cloudflare Workers AI is the primary provider:
-          #   review -> GLM 5.2 (DeepSeek V4 Pro as CF fallback), fix -> DeepSeek V4 Flash.
+          #   review -> GLM 5.3 (DeepSeek V4 Pro as CF fallback), fix -> GLM 5.3 Flash (DeepSeek V4 Flash as CF fallback).
           if [[ "${IS_REVIEW}" == "true" ]]; then
-            CF_MODEL="@cf/zai-org/glm-5.2"
-            echo "::notice::Review requested - Cloudflare Workers AI primary: GLM 5.2 (${CF_MODEL})"
+            CF_MODEL="@cf/zai-org/glm-5.3"
+            echo "::notice::Review requested - Cloudflare Workers AI primary: GLM 5.3 (${CF_MODEL})"
           else
-            CF_MODEL="@cf/deepseek-ai/deepseek-v4-flash-0731"
-            echo "::notice::Fix requested - Cloudflare Workers AI primary: DeepSeek V4 Flash (${CF_MODEL})"
+            CF_MODEL="@cf/zai-org/glm-5.3-flash"
+            echo "::notice::Fix requested - Cloudflare Workers AI primary: GLM 5.3 Flash (${CF_MODEL})"
           fi
 
           # Emit the inline opencode config. OPENCODE_CONFIG_CONTENT is the highest-priority
@@ -99,7 +99,8 @@ jobs:
                 "provider": {
                   "cloudflare-workers-ai": {
                     "models": {
-                      "@cf/zai-org/glm-5.2": { "name": "GLM 5.2" },
+                      "@cf/zai-org/glm-5.3": { "name": "GLM 5.3" },
+                      "@cf/zai-org/glm-5.3-flash": { "name": "GLM 5.3 Flash" },
                       "@cf/deepseek-ai/deepseek-v4-flash-0731": { "name": "DeepSeek V4 Flash" },
                       "@cf/deepseek-ai/deepseek-v4-pro-0813": { "name": "DeepSeek V4 Pro" }
                     }
@@ -174,7 +175,13 @@ jobs:
             exit 1
           fi
 
-          # Fix chain: nemotron-3.5-lightning-free -> big-pickle -> nemotron-3-ultra-free -> deepseek-v4-flash.
+          # Fix chain: Cloudflare DeepSeek V4 Flash fallback -> Zen nemotron-3.5-lightning-free -> big-pickle -> nemotron-3-ultra-free -> deepseek-v4-flash.
+          CF_FIX_FALLBACK="@cf/deepseek-ai/deepseek-v4-flash-0731"
+          if [[ -n "${CLOUDFLARE_API_TOKEN:-}" && -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] && probe_cf "${CF_FIX_FALLBACK}"; then
+            choose "cloudflare-workers-ai/${CF_FIX_FALLBACK}" "" true
+          fi
+          echo "::warning::Cloudflare Workers AI fix fallback unavailable - falling back to OpenCode Zen chain"
+
           if probe_zen nemotron-3.5-lightning-free; then
             choose "opencode/nemotron-3.5-lightning-free"
           fi
