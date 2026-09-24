@@ -23,6 +23,7 @@ jobs:
     uses: tonythethompson/opencode-review-threads/.github/workflows/opencode-review.yml@c1c9bc9bdae03bc36259caf78a1eb8a4209706cc # v1.4.1
     with:
       use-github-token: true
+      timeout-minutes: 85
       models-review: >-
         cf:@cf/zai-org/glm-5.2,
         cf:@cf/deepseek-ai/deepseek-v4-pro-0813,
