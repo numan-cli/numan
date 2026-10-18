@@ -16,12 +16,13 @@ import sys
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATE_FILE = REPO_ROOT / ".github" / "latest-nu-version.json"
 RELEASES_MD = REPO_ROOT / "docs" / "nushell-releases.md"
-NU_RELEASES_API = "https://api.github.com/repos/nushell/nushell/releases/latest"
+NU_RELEASES_LIST_API = "https://api.github.com/repos/nushell/nushell/releases"
+RELEASES_PAGE_SIZE = 100
 USER_AGENT = "numan-release-watcher/1.0"
 HTTP_SCHEMES = frozenset({"https", "http"})
 
@@ -52,22 +53,50 @@ def http_opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(_HttpOnlyRedirectHandler())
 
 
-def fetch_latest_release(url: str = NU_RELEASES_API) -> dict:
-    """Fetch latest release metadata from GitHub API with scheme safety."""
+def fetch_releases(
+    url: str = NU_RELEASES_LIST_API,
+    per_page: int = RELEASES_PAGE_SIZE,
+) -> list[dict]:
+    """Fetch every published, stable Nushell release using GitHub pagination."""
+    if not 1 <= per_page <= 100:
+        raise ValueError("per_page must be between 1 and 100")
     ensure_http_url(url)
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": USER_AGENT,
-            "Accept": "application/vnd.github.v3+json",
-        },
-    )
-    gh_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    if gh_token:
-        req.add_header("Authorization", f"Bearer {gh_token}")
 
-    with http_opener().open(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    gh_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    opener = http_opener()
+    releases: list[dict] = []
+    page = 1
+
+    while True:
+        separator = "&" if "?" in url else "?"
+        page_url = f"{url}{separator}{urlencode({'per_page': per_page, 'page': page})}"
+        req = urllib.request.Request(
+            page_url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/vnd.github.v3+json",
+            },
+        )
+        if gh_token:
+            req.add_header("Authorization", f"Bearer {gh_token}")
+
+        with opener.open(req, timeout=30) as resp:
+            page_releases = json.loads(resp.read().decode("utf-8"))
+        if not isinstance(page_releases, list) or any(
+            not isinstance(item, dict) for item in page_releases
+        ):
+            raise ValueError("Unexpected response while listing Nushell releases")
+
+        releases.extend(
+            release
+            for release in page_releases
+            if not release.get("draft") and not release.get("prerelease")
+        )
+        if len(page_releases) < per_page:
+            break
+        page += 1
+
+    return releases
 
 
 def parse_version_tuple(v_str: str) -> tuple[int, int, int]:
@@ -183,6 +212,7 @@ def write_github_actions_outputs(
     tag_name: str,
     github_url: str = "",
     blog_url: str | None = None,
+    new_versions: list[str] | None = None,
 ) -> None:
     """Write outputs to GITHUB_OUTPUT environment file if defined."""
     gh_output = os.environ.get("GITHUB_OUTPUT")
@@ -192,6 +222,7 @@ def write_github_actions_outputs(
         f.write(f"is_new={'true' if is_new else 'false'}\n")
         f.write(f"version={tag_name}\n")
         if is_new:
+            f.write(f"new_versions={','.join(new_versions or [tag_name])}\n")
             f.write(f"blog_url={blog_url or ''}\n")
             f.write(f"github_url={github_url}\n")
 
@@ -202,13 +233,19 @@ def write_github_step_summary(
     github_url: str,
     blog_url: str | None,
     new_entry: str,
+    new_versions: list[str] | None = None,
 ) -> None:
     """Append release summary to GITHUB_STEP_SUMMARY environment file."""
     gh_summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if not gh_summary:
         return
+    versions = new_versions or [tag_name]
     with open(gh_summary, "a", encoding="utf-8") as f:
-        f.write(f"### 🚀 New Nushell Release Detected: {tag_name}\n\n")
+        if len(versions) == 1:
+            heading = f"### 🚀 New Nushell Release Detected: {versions[0]}"
+        else:
+            heading = f"### 🚀 New Nushell Releases Detected: {', '.join(versions)}"
+        f.write(f"{heading}\n\n")
         f.write(f"- **Release Date**: {date_str}\n")
         f.write(f"- **GitHub Release**: [{github_url}]({github_url})\n")
         if blog_url:
@@ -233,74 +270,158 @@ def process_release(
     state_file: Path = STATE_FILE,
     releases_md: Path = RELEASES_MD,
 ) -> int:
-    """Process fetched release against tracked state and update files/outputs."""
-    tag_name = release.get("tag_name", "").lstrip("v").strip()
-    if not tag_name or not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", tag_name):
-        raise ValueError(f"Unexpected release tag_name: {tag_name!r}")
-    github_url = release.get("html_url", f"https://github.com/nushell/nushell/releases/tag/{tag_name}")
-    published_at = release.get("published_at", datetime.now(timezone.utc).isoformat())
-    date_str = published_at[:10] if published_at else datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    body = release.get("body", "")
+    """Process one release against tracked state."""
+    return process_releases(
+        [release],
+        write=write,
+        dry_run=dry_run,
+        force=force,
+        state_file=state_file,
+        releases_md=releases_md,
+    )
 
-    blog_url = extract_blog_url(body)
-    major, minor, _patch = parse_version_tuple(tag_name)
 
-    print(f"Detected latest release: {tag_name} (released {date_str})")
-    print(f"Extracted blog URL: {blog_url or 'None found'}")
+def process_releases(
+    releases: list[dict],
+    write: bool,
+    dry_run: bool,
+    force: bool,
+    state_file: Path = STATE_FILE,
+    releases_md: Path = RELEASES_MD,
+) -> int:
+    """Process every stable release newer than the tracked version."""
+    if not releases:
+        raise ValueError("No stable Nushell releases found")
 
+    normalized: list[tuple[tuple[int, int, int], str, dict]] = []
+    for release in releases:
+        tag_name = str(release.get("tag_name", "")).lstrip("v").strip()
+        if not tag_name or not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", tag_name):
+            raise ValueError(f"Unexpected release tag_name: {tag_name!r}")
+        normalized.append((parse_version_tuple(tag_name), tag_name, release))
+    normalized.sort(key=lambda item: item[0])
+
+    latest_key, latest_tag, latest_release = normalized[-1]
     current_state = load_current_state(state_file)
     tracked_version = current_state.get("latest_version")
-    is_new = tracked_version != tag_name
+    tracked_key = parse_version_tuple(tracked_version) if tracked_version else None
+    is_new = tracked_key is None or latest_key > tracked_key
 
-    print(f"Tracked version in state: {tracked_version or 'None'}")
-    print(f"New release detected: {is_new}")
+    if tracked_key is None:
+        new_releases = [normalized[-1]]
+    else:
+        new_releases = [item for item in normalized if item[0] > tracked_key]
 
     if not is_new and not force:
         print("No new version detected. Everything up to date.")
-        write_github_actions_outputs(is_new=False, tag_name=tag_name)
+        write_github_actions_outputs(is_new=False, tag_name=latest_tag)
         return 0
 
-    new_entry = generate_release_entry(tag_name, date_str, github_url, blog_url, major, minor)
+    releases_to_process = new_releases or [normalized[-1]]
+    entries: list[str] = []
+    for _version_key, tag_name, release in releases_to_process:
+        github_url = release.get(
+            "html_url",
+            f"https://github.com/nushell/nushell/releases/tag/{tag_name}",
+        )
+        published_at = release.get(
+            "published_at",
+            datetime.now(timezone.utc).isoformat(),
+        )
+        date_str = (
+            published_at[:10]
+            if published_at
+            else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        )
+        blog_url = extract_blog_url(release.get("body", ""))
+        major, minor, _patch = parse_version_tuple(tag_name)
+        entry = generate_release_entry(
+            tag_name,
+            date_str,
+            github_url,
+            blog_url,
+            major,
+            minor,
+        )
+        entries.append(entry)
+        print(f"Detected release: {tag_name} (released {date_str})")
+        print(f"Extracted blog URL: {blog_url or 'None found'}")
 
     if dry_run or not write:
-        print("\n--- Proposed new release entry ---")
-        print(new_entry)
-        print(f"[dry-run] Would update {state_file} to latest_version: {tag_name}")
+        print("\n--- Proposed release entries ---")
+        for entry in entries:
+            print(entry)
+        print(f"[dry-run] Would update {state_file} to latest_version: {latest_tag}")
         return 0
 
+    for (_version_key, tag_name, _release), entry in zip(releases_to_process, entries):
+        update_releases_markdown(releases_md, entry, tag_name, force=force)
+
+    latest_github_url = latest_release.get(
+        "html_url",
+        f"https://github.com/nushell/nushell/releases/tag/{latest_tag}",
+    )
+    latest_published_at = latest_release.get(
+        "published_at",
+        datetime.now(timezone.utc).isoformat(),
+    )
+    latest_date = (
+        latest_published_at[:10]
+        if latest_published_at
+        else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    )
+    latest_blog_url = extract_blog_url(latest_release.get("body", ""))
+
     new_state = {
-        "latest_version": tag_name,
+        "latest_version": latest_tag,
         "checked_at": datetime.now(timezone.utc).isoformat(),
-        "published_at": published_at,
-        "github_url": github_url,
-        "blog_url": blog_url,
+        "published_at": latest_published_at,
+        "github_url": latest_github_url,
+        "blog_url": latest_blog_url,
     }
     write_state(state_file, new_state)
-    update_releases_markdown(releases_md, new_entry, tag_name, force=force)
-    write_github_actions_outputs(is_new=True, tag_name=tag_name, github_url=github_url, blog_url=blog_url)
-    write_github_step_summary(tag_name, date_str, github_url, blog_url, new_entry)
+
+    processed_versions = [item[1] for item in releases_to_process]
+    should_open_pr = is_new or force
+    write_github_actions_outputs(
+        is_new=should_open_pr,
+        tag_name=latest_tag,
+        github_url=latest_github_url,
+        blog_url=latest_blog_url,
+        new_versions=processed_versions,
+    )
+    write_github_step_summary(
+        tag_name=latest_tag,
+        date_str=latest_date,
+        github_url=latest_github_url,
+        blog_url=latest_blog_url,
+        new_entry="\n".join(entries),
+        new_versions=processed_versions,
+    )
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point for Nushell release watcher."""
     args = parse_args(argv)
-    print("Fetching latest Nushell release from GitHub...")
+    print("Fetching Nushell releases from GitHub...")
     try:
-        release = fetch_latest_release()
+        releases = fetch_releases()
     except Exception as e:
-        print(f"Error fetching release: {e}", file=sys.stderr)
+        print(f"Error fetching releases: {e}", file=sys.stderr)
         return 1
 
     try:
-        return process_release(
-            release=release,
+        return process_releases(
+            releases=releases,
             write=args.write,
             dry_run=args.dry_run,
             force=args.force,
+            state_file=STATE_FILE,
+            releases_md=RELEASES_MD,
         )
     except ValueError as e:
-        print(f"Error processing release: {e}", file=sys.stderr)
+        print(f"Error processing releases: {e}", file=sys.stderr)
         return 1
 
 

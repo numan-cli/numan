@@ -48,7 +48,7 @@ class WatchNuReleasesTests(unittest.TestCase):
         os.environ.pop("GITHUB_STEP_SUMMARY", None)
 
     def test_ensure_http_url_valid(self):
-        self.mod.ensure_http_url("https://api.github.com/repos/nushell/nushell/releases/latest")
+        self.mod.ensure_http_url("https://api.github.com/repos/nushell/nushell/releases")
         self.mod.ensure_http_url("http://example.com/test")
         self.mod.ensure_http_url("HTTPS://WWW.NUSHELL.SH/BLOG/TEST.HTML")
 
@@ -76,8 +76,16 @@ class WatchNuReleasesTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             handler.redirect_request(req, None, 302, "Found", {}, "file:///etc/passwd")
 
-    def test_fetch_latest_release_success(self):
-        payload = json.dumps({"tag_name": "v0.115.0", "html_url": "https://github.com/nushell/nushell/releases/tag/0.115.0"}).encode("utf-8")
+    def test_fetch_releases_success(self):
+        payload = json.dumps(
+            [
+                {
+                    "tag_name": "v0.115.0",
+                    "draft": False,
+                    "prerelease": False,
+                }
+            ]
+        ).encode("utf-8")
         fake_resp = FakeResponse(payload)
 
         with mock.patch.object(self.mod, "http_opener") as mock_opener_fn, \
@@ -86,12 +94,54 @@ class WatchNuReleasesTests(unittest.TestCase):
             mock_opener.open.return_value = fake_resp
             mock_opener_fn.return_value = mock_opener
 
-            res = self.mod.fetch_latest_release("https://api.github.com/test")
-            self.assertEqual(res["tag_name"], "v0.115.0")
+            releases = self.mod.fetch_releases("https://api.github.com/test")
+            self.assertEqual(releases[0]["tag_name"], "v0.115.0")
             mock_opener.open.assert_called_once()
             req = mock_opener.open.call_args[0][0]
             self.assertEqual(req.get_header("Authorization"), "Bearer secret_token")
             self.assertEqual(req.get_header("User-agent"), self.mod.USER_AGENT)
+
+
+    def test_fetch_releases_paginates_and_filters(self):
+        pages = [
+            [
+                {"tag_name": "v0.116.1", "draft": False, "prerelease": False},
+                {"tag_name": "v0.116.0-rc.1", "draft": False, "prerelease": True},
+            ],
+            [
+                {"tag_name": "v0.115.1", "draft": False, "prerelease": False},
+                {"tag_name": "v0.115.0-draft", "draft": True, "prerelease": False},
+            ],
+            [],
+        ]
+        responses = [
+            FakeResponse(json.dumps(page).encode("utf-8"))
+            for page in pages
+        ]
+
+        with mock.patch.object(self.mod, "http_opener") as mock_opener_fn:
+            mock_opener = mock.MagicMock()
+            mock_opener.open.side_effect = responses
+            mock_opener_fn.return_value = mock_opener
+
+            releases = self.mod.fetch_releases(
+                "https://api.github.com/test",
+                per_page=2,
+            )
+
+        self.assertEqual(
+            [release["tag_name"] for release in releases],
+            ["v0.116.1", "v0.115.1"],
+        )
+        urls = [call.args[0].full_url for call in mock_opener.open.call_args_list]
+        self.assertEqual(
+            urls,
+            [
+                "https://api.github.com/test?per_page=2&page=1",
+                "https://api.github.com/test?per_page=2&page=2",
+                "https://api.github.com/test?per_page=2&page=3",
+            ],
+        )
 
     def test_parse_version_tuple(self):
         self.assertEqual(self.mod.parse_version_tuple("0.115.0"), (0, 115, 0))
@@ -199,6 +249,7 @@ class WatchNuReleasesTests(unittest.TestCase):
             out_text = gh_output.read_text(encoding="utf-8")
             self.assertIn("is_new=true\n", out_text)
             self.assertIn("version=0.115.0\n", out_text)
+            self.assertIn("new_versions=0.115.0\n", out_text)
             self.assertIn("blog_url=https://www.nushell.sh/blog/0.115.0.html\n", out_text)
 
             sum_text = gh_summary.read_text(encoding="utf-8")
@@ -239,6 +290,73 @@ class WatchNuReleasesTests(unittest.TestCase):
                 code = self.mod.process_release(release, write=True, dry_run=False, force=True, state_file=state_file, releases_md=md_file)
                 self.assertEqual(code, 0)
 
+    def test_process_releases_catches_up_missed_versions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "latest-nu-version.json"
+            md_file = Path(tmp) / "nushell-releases.md"
+            gh_output = Path(tmp) / "github_output"
+            gh_summary = Path(tmp) / "github_summary"
+            state_file.write_text(
+                json.dumps({"latest_version": "0.115.0"}),
+                encoding="utf-8",
+            )
+            releases = [
+                {
+                    "tag_name": "v0.116.1",
+                    "html_url": "https://github.com/nushell/nushell/releases/tag/0.116.1",
+                    "published_at": "2026-10-04T15:26:13Z",
+                    "body": "",
+                },
+                {
+                    "tag_name": "v0.115.1",
+                    "html_url": "https://github.com/nushell/nushell/releases/tag/0.115.1",
+                    "published_at": "2026-08-23T09:46:06Z",
+                    "body": "",
+                },
+                {
+                    "tag_name": "v0.116.0",
+                    "html_url": "https://github.com/nushell/nushell/releases/tag/0.116.0",
+                    "published_at": "2026-09-26T20:11:49Z",
+                    "body": "",
+                },
+            ]
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "GITHUB_OUTPUT": str(gh_output),
+                    "GITHUB_STEP_SUMMARY": str(gh_summary),
+                },
+            ):
+                code = self.mod.process_releases(
+                    releases,
+                    write=True,
+                    dry_run=False,
+                    force=False,
+                    state_file=state_file,
+                    releases_md=md_file,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                self.mod.load_current_state(state_file).get("latest_version"),
+                "0.116.1",
+            )
+            content = md_file.read_text(encoding="utf-8")
+            positions = [
+                content.index("## Nushell 0.116.1"),
+                content.index("## Nushell 0.116.0"),
+                content.index("## Nushell 0.115.1"),
+            ]
+            self.assertEqual(positions, sorted(positions))
+            output = gh_output.read_text(encoding="utf-8")
+            self.assertIn("new_versions=0.115.1,0.116.0,0.116.1\n", output)
+            summary = gh_summary.read_text(encoding="utf-8")
+            self.assertIn(
+                "New Nushell Releases Detected: 0.115.1, 0.116.0, 0.116.1",
+                summary,
+            )
+
     def test_process_release_invalid_tag_raises(self):
         with self.assertRaises(ValueError):
             self.mod.process_release({"tag_name": ""}, write=False, dry_run=True, force=False)
@@ -255,30 +373,30 @@ class WatchNuReleasesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "latest-nu-version.json"
             md_file = Path(tmp) / "nushell-releases.md"
-            with mock.patch.object(self.mod, "fetch_latest_release", return_value=fake_release), \
+            with mock.patch.object(self.mod, "fetch_releases", return_value=[fake_release]), \
                  mock.patch.object(self.mod, "STATE_FILE", state_file), \
                  mock.patch.object(self.mod, "RELEASES_MD", md_file):
                 buf = io.StringIO()
                 with redirect_stdout(buf):
                     code = self.mod.main(["--dry-run"])
                 self.assertEqual(code, 0)
-                self.assertIn("Detected latest release: 0.115.0", buf.getvalue())
+                self.assertIn("Detected release: 0.115.0", buf.getvalue())
 
     def test_main_cli_fetch_error_handled(self):
-        with mock.patch.object(self.mod, "fetch_latest_release", side_effect=OSError("network failure")):
+        with mock.patch.object(self.mod, "fetch_releases", side_effect=OSError("network failure")):
             err = io.StringIO()
             with redirect_stderr(err):
                 code = self.mod.main(["--dry-run"])
             self.assertEqual(code, 1)
-            self.assertIn("Error fetching release: network failure", err.getvalue())
+            self.assertIn("Error fetching releases: network failure", err.getvalue())
 
     def test_main_cli_value_error_handled(self):
-        with mock.patch.object(self.mod, "fetch_latest_release", return_value={"tag_name": "invalid"}):
+        with mock.patch.object(self.mod, "fetch_releases", return_value=[{"tag_name": "invalid"}]):
             err = io.StringIO()
             with redirect_stderr(err):
                 code = self.mod.main(["--dry-run"])
             self.assertEqual(code, 1)
-            self.assertIn("Error processing release:", err.getvalue())
+            self.assertIn("Error processing releases:", err.getvalue())
 
 
 if __name__ == "__main__":
