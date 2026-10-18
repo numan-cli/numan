@@ -9,7 +9,7 @@ from pathlib import Path
 import yaml
 
 
-class UniqueKeyLoader(yaml.BaseLoader):
+class UniqueKeyLoader(yaml.SafeLoader):
     pass
 
 
