@@ -59,22 +59,22 @@ jobs:
             git push origin "${BRANCH}" --force-with-lease
 
             PR_BODY=$(cat <<EOF
-            ## Official Nushell ${VERSION} Released
+          ## Official Nushell ${VERSION} Released
 
-            A new official Nushell release has been published.
+          A new official Nushell release has been published.
 
-            - **Release Notes**: ${GITHUB_URL}
-            - **Changelog / Blog**: ${BLOG_URL}
+          - **Release Notes**: ${GITHUB_URL}
+          - **Changelog / Blog**: ${BLOG_URL}
 
-            ### Ecosystem Checklist
-            - [ ] Review breaking engine/protocol changes affecting plugins
-            - [ ] Audit \`numan-maintained/*\` fork dependencies (\`Cargo.toml\`)
-            - [ ] Update \`manifest.json\` active plugin versions in \`numan-plugins\`
-            - [ ] Rebuild & test active plugins for Nu ${VERSION} band
-            - [ ] Update \`numan\` CI acceptance matrix (\`.github/workflows/ci.yml\`)
+          ### Ecosystem Checklist
+          - [ ] Review breaking engine/protocol changes affecting plugins
+          - [ ] Audit \`numan-maintained/*\` fork dependencies (\`Cargo.toml\`)
+          - [ ] Update \`manifest.json\` active plugin versions in \`numan-plugins\`
+          - [ ] Rebuild & test active plugins for Nu ${VERSION} band
+          - [ ] Update \`numan\` CI acceptance matrix (\`.github/workflows/ci.yml\`)
 
-            _Automated by \`.github/workflows/watch-nushell-releases.yml\`._
-            EOF
+          _Automated by \`.github/workflows/watch-nushell-releases.yml\`._
+          EOF
             )
 
             PR_URL=$(gh pr create \
