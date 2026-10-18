@@ -43,6 +43,14 @@ UniqueKeyLoader.add_constructor(
 )
 
 
+def load_workflow(stream):
+    loader = UniqueKeyLoader(stream)
+    try:
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
+
+
 def workflow_files(root: Path) -> list[Path]:
     result = subprocess.run(
         ["git", "-C", str(root), "ls-files", "-z", "--", ".github/workflows"],
@@ -64,7 +72,7 @@ def validate_workflows(root: Path) -> list[str]:
     for path in files:
         try:
             with path.open(encoding="utf-8") as fh:
-                yaml.load(fh, Loader=UniqueKeyLoader)
+                load_workflow(fh)
         except (OSError, yaml.YAMLError) as exc:
             errors.append(f"{path}: {exc}")
     return errors

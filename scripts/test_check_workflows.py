@@ -76,10 +76,7 @@ class CheckWorkflowsTests(unittest.TestCase):
 
     def test_on_key_stays_literal(self):
         path = add_workflow(self.root, "ci.yml", VALID)
-        doc = check_workflows.yaml.load(
-            path.read_text(encoding="utf-8"),
-            Loader=check_workflows.UniqueKeyLoader,
-        )
+        doc = check_workflows.load_workflow(path.read_text(encoding="utf-8"))
         self.assertIn("on", doc)
         self.assertNotIn(True, doc)
 
