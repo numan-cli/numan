@@ -163,6 +163,20 @@ def load_current_state(state_file: Path = STATE_FILE) -> dict:
         return {}
 
 
+def load_documented_versions(releases_md: Path = RELEASES_MD) -> set[tuple[int, int, int]]:
+    """Read release versions already present in the stewardship ledger."""
+    if not releases_md.exists():
+        return set()
+
+    content = releases_md.read_text(encoding="utf-8")
+    matches = re.finditer(
+        r"^## Nushell (\d+\.\d+(?:\.\d+)?)(?:\s|$)",
+        content,
+        re.MULTILINE,
+    )
+    return {parse_version_tuple(match.group(1)) for match in matches}
+
+
 def write_state(state_file: Path, new_state: dict) -> None:
     """Persist new state dictionary as formatted JSON."""
     state_file.parent.mkdir(parents=True, exist_ok=True)
@@ -171,35 +185,59 @@ def write_state(state_file: Path, new_state: dict) -> None:
 
 
 def update_releases_markdown(releases_md: Path, new_entry: str, tag_name: str, force: bool = False) -> bool:
-    """Prepend or insert release entry into releases markdown document."""
+    """Insert or replace a release entry while keeping the ledger newest-first."""
     existing_content = ""
     if releases_md.exists():
         existing_content = releases_md.read_text(encoding="utf-8")
 
+    header = (
+        "# Official Nushell Release & Stewardship Log\n\n"
+        "Chronological ledger of official Nushell releases, changelogs, ABI bands, and ecosystem impact checklists.\n\n"
+        "---\n\n"
+    )
+    if not existing_content.startswith("# Official Nushell Release & Stewardship Log"):
+        existing_content = header + existing_content
+
     section_header = re.compile(rf"^## Nushell {re.escape(tag_name)}(?=\s|$)", re.MULTILINE)
-    if section_header.search(existing_content):
-        if not force:
-            return False
-        # If force is true, replace the existing section up to next section header or EOF
-        pattern = re.compile(
-            rf"^## Nushell {re.escape(tag_name)}(?=\s|$).*?(?=(?:^## Nushell |\Z))",
-            re.MULTILINE | re.DOTALL,
+    if section_header.search(existing_content) and not force:
+        return False
+
+    section_matches = list(
+        re.finditer(
+            r"^## Nushell (\d+\.\d+(?:\.\d+)?)(?=\s|$)",
+            existing_content,
+            re.MULTILINE,
         )
-        updated_content = pattern.sub(new_entry.strip() + "\n\n", existing_content)
+    )
+    if section_matches:
+        prefix = existing_content[: section_matches[0].start()]
+        sections = [
+            (
+                parse_version_tuple(match.group(1)),
+                existing_content[
+                    match.start() : (
+                        section_matches[index + 1].start()
+                        if index + 1 < len(section_matches)
+                        else len(existing_content)
+                    )
+                ].strip(),
+            )
+            for index, match in enumerate(section_matches)
+        ]
     else:
-        header = (
-            "# Official Nushell Release & Stewardship Log\n\n"
-            "Chronological ledger of official Nushell releases, changelogs, ABI bands, and ecosystem impact checklists.\n\n"
-            "---\n\n"
-        )
-        if not existing_content.startswith("# Official Nushell Release & Stewardship Log"):
-            updated_content = header + new_entry + existing_content
-        else:
-            parts = existing_content.split("---\n\n", 1)
-            if len(parts) == 2:
-                updated_content = parts[0] + "---\n\n" + new_entry + parts[1]
-            else:
-                updated_content = existing_content + "\n" + new_entry
+        prefix = existing_content
+        sections = []
+
+    new_section = new_entry.strip()
+    new_key = parse_version_tuple(tag_name)
+    if force:
+        sections = [section for section in sections if section[0] != new_key]
+    sections.append((new_key, new_section))
+    sections.sort(key=lambda section: section[0], reverse=True)
+
+    if not prefix.endswith("\n\n"):
+        prefix = prefix.rstrip() + "\n\n"
+    updated_content = prefix + "".join(f"{section}\n\n" for _key, section in sections)
 
     releases_md.parent.mkdir(parents=True, exist_ok=True)
     releases_md.write_text(updated_content, encoding="utf-8")
@@ -289,7 +327,7 @@ def process_releases(
     state_file: Path = STATE_FILE,
     releases_md: Path = RELEASES_MD,
 ) -> int:
-    """Process every stable release newer than the tracked version."""
+    """Process every new release and fill ledger gaps after its first entry."""
     if not releases:
         raise ValueError("No stable Nushell releases found")
 
@@ -305,12 +343,29 @@ def process_releases(
     current_state = load_current_state(state_file)
     tracked_version = current_state.get("latest_version")
     tracked_key = parse_version_tuple(tracked_version) if tracked_version else None
-    is_new = tracked_key is None or latest_key > tracked_key
+    documented_keys = load_documented_versions(releases_md)
+    history_floor = min(documented_keys) if documented_keys else None
+    missing_documented_releases = [
+        item
+        for item in normalized
+        if history_floor is not None
+        and item[0] > history_floor
+        and item[0] not in documented_keys
+    ]
+    is_new = (
+        tracked_key is None
+        or latest_key > tracked_key
+        or bool(missing_documented_releases)
+    )
 
     if tracked_key is None:
         new_releases = [normalized[-1]]
     else:
         new_releases = [item for item in normalized if item[0] > tracked_key]
+    releases_by_version = {item[0]: item for item in new_releases}
+    for item in missing_documented_releases:
+        releases_by_version.setdefault(item[0], item)
+    new_releases = sorted(releases_by_version.values(), key=lambda item: item[0])
 
     if not is_new and not force:
         print("No new version detected. Everything up to date.")
@@ -379,7 +434,8 @@ def process_releases(
         "github_url": latest_github_url,
         "blog_url": latest_blog_url,
     }
-    write_state(state_file, new_state)
+    if tracked_key is None or latest_key > tracked_key or force:
+        write_state(state_file, new_state)
 
     processed_versions = [item[1] for item in releases_to_process]
     should_open_pr = is_new or force

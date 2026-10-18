@@ -48,9 +48,25 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Check for an existing PR first. Preserve its branch and sync only
-          # the generated release files when it is missing detected releases.
-          EXISTING_PR=$(gh pr list --head "${BRANCH}" --state open --json url --jq '.[0].url // empty')
+          # Update any open release-tracking PR so later releases join the same review.
+          OPEN_RELEASE_PR=$(gh pr list --state open --limit 100 --json url,headRefName \
+            --jq '[.[] | select(.headRefName | startswith("feat/nu-release-"))][0] | if . == null then empty else [.url, .headRefName] | @tsv end')
+          if [ -n "${OPEN_RELEASE_PR}" ]; then
+            IFS=$'\t' read -r EXISTING_PR BRANCH <<< "${OPEN_RELEASE_PR}"
+          else
+            EXISTING_PR=""
+            if git ls-remote --exit-code --heads origin "refs/heads/${BRANCH}" >/dev/null 2>&1; then
+              CATCH_UP_BRANCH="${BRANCH}-catch-up"
+              BRANCH="${CATCH_UP_BRANCH}"
+              SUFFIX=2
+              while git ls-remote --exit-code --heads origin "refs/heads/${BRANCH}" >/dev/null 2>&1; do
+                BRANCH="${CATCH_UP_BRANCH}-${SUFFIX}"
+                SUFFIX=$((SUFFIX + 1))
+              done
+              echo "Previous release branch exists; using ${BRANCH}."
+            fi
+          fi
+
           if [ -n "${EXISTING_PR}" ]; then
             echo "PR already exists for ${BRANCH}: ${EXISTING_PR}; checking its release entries."
             PR_URL="${EXISTING_PR}"
@@ -91,11 +107,11 @@ jobs:
             git push origin "${BRANCH}"
 
             PR_BODY=$(cat <<EOF
-          ## Official Nushell ${VERSION} Released
+          ## Nushell Release Ledger Updated Through ${VERSION}
 
-          Releases detected since last check: ${NEW_VERSIONS}
+          Versions added to the ledger: ${NEW_VERSIONS}
 
-          A new official Nushell release has been published.
+          This update records stable Nushell releases missing from the stewardship ledger.
 
           - **Release Notes**: ${GITHUB_URL}
           - **Changelog / Blog**: ${BLOG_URL}
@@ -112,7 +128,7 @@ jobs:
             )
 
             PR_URL=$(gh pr create \
-              --title "feat(release): track official Nushell ${VERSION} release" \
+              --title "feat(release): update Nushell release ledger through ${VERSION}" \
               --body "${PR_BODY}" \
               --head "${BRANCH}" \
               --base master)

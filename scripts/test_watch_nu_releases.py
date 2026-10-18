@@ -357,6 +357,76 @@ class WatchNuReleasesTests(unittest.TestCase):
                 summary,
             )
 
+    def test_process_releases_repairs_ledger_gaps_after_state_advanced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "latest-nu-version.json"
+            md_file = Path(tmp) / "nushell-releases.md"
+            gh_output = Path(tmp) / "github_output"
+            state = {
+                "latest_version": "0.116.1",
+                "checked_at": "2026-10-18T15:41:18Z",
+            }
+            state_file.write_text(json.dumps(state), encoding="utf-8")
+            md_file.write_text(
+                "# Official Nushell Release & Stewardship Log\n\n"
+                "Chronological ledger of official Nushell releases, changelogs, ABI bands, and ecosystem impact checklists.\n\n"
+                "---\n\n"
+                "## Nushell 0.116.1 (2026-10-04)\n\n---\n\n"
+                "## Nushell 0.115.0 (2026-08-15)\n",
+                encoding="utf-8",
+            )
+            releases = [
+                {
+                    "tag_name": "v0.116.1",
+                    "html_url": "https://github.com/nushell/nushell/releases/tag/0.116.1",
+                    "published_at": "2026-10-04T15:26:13Z",
+                    "body": "",
+                },
+                {
+                    "tag_name": "v0.115.1",
+                    "html_url": "https://github.com/nushell/nushell/releases/tag/0.115.1",
+                    "published_at": "2026-08-23T09:46:06Z",
+                    "body": "",
+                },
+                {
+                    "tag_name": "v0.116.0",
+                    "html_url": "https://github.com/nushell/nushell/releases/tag/0.116.0",
+                    "published_at": "2026-09-26T20:11:49Z",
+                    "body": "",
+                },
+            ]
+
+            with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(gh_output)}):
+                code = self.mod.process_releases(
+                    releases,
+                    write=True,
+                    dry_run=False,
+                    force=False,
+                    state_file=state_file,
+                    releases_md=md_file,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(self.mod.load_current_state(state_file), state)
+            content = md_file.read_text(encoding="utf-8")
+            positions = [
+                content.index("## Nushell 0.116.1"),
+                content.index("## Nushell 0.116.0"),
+                content.index("## Nushell 0.115.1"),
+                content.index("## Nushell 0.115.0"),
+            ]
+            self.assertEqual(positions, sorted(positions))
+            self.assertEqual(content.count("## Nushell 0.116.1"), 1)
+            self.assertEqual(
+                self.mod.load_documented_versions(md_file),
+                {(0, 115, 0), (0, 115, 1), (0, 116, 0), (0, 116, 1)},
+            )
+            self.assertIn("is_new=true\n", gh_output.read_text(encoding="utf-8"))
+            self.assertIn(
+                "new_versions=0.115.1,0.116.0\n",
+                gh_output.read_text(encoding="utf-8"),
+            )
+
     def test_process_release_invalid_tag_raises(self):
         with self.assertRaises(ValueError):
             self.mod.process_release({"tag_name": ""}, write=False, dry_run=True, force=False)
