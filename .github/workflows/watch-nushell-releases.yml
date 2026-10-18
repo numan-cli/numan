@@ -48,16 +48,47 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Check for existing PR first — do not overwrite maintainer work
+          # Check for an existing PR first. Preserve its branch and sync only
+          # the generated release files when it is missing detected releases.
           EXISTING_PR=$(gh pr list --head "${BRANCH}" --state open --json url --jq '.[0].url // empty')
           if [ -n "${EXISTING_PR}" ]; then
-            echo "PR already exists for ${BRANCH}: ${EXISTING_PR}; leaving branch untouched."
+            echo "PR already exists for ${BRANCH}: ${EXISTING_PR}; checking its release entries."
             PR_URL="${EXISTING_PR}"
+            RELEASE_SNAPSHOT=$(mktemp -d)
+            cp .github/latest-nu-version.json "${RELEASE_SNAPSHOT}/latest-nu-version.json"
+            cp docs/nushell-releases.md "${RELEASE_SNAPSHOT}/nushell-releases.md"
+
+            git fetch origin "${BRANCH}"
+            REMOTE_HEAD=$(git rev-parse FETCH_HEAD)
+            BRANCH_VERSION=$(git show "${REMOTE_HEAD}:.github/latest-nu-version.json" | python -c 'import json, sys; print(json.load(sys.stdin).get("latest_version", ""))')
+            NEEDS_PR_UPDATE=false
+            if [ "${BRANCH_VERSION}" != "${VERSION}" ]; then
+              NEEDS_PR_UPDATE=true
+            fi
+            IFS=',' read -r -a DETECTED_VERSIONS <<< "${NEW_VERSIONS}"
+            for DETECTED_VERSION in "${DETECTED_VERSIONS[@]}"; do
+              if [ -n "${DETECTED_VERSION}" ] && ! git show "${REMOTE_HEAD}:docs/nushell-releases.md" | grep -Fq "## Nushell ${DETECTED_VERSION} ("; then
+                NEEDS_PR_UPDATE=true
+              fi
+            done
+
+            if [ "${NEEDS_PR_UPDATE}" = true ]; then
+              git checkout --force -B "${BRANCH}" "${REMOTE_HEAD}"
+              cp "${RELEASE_SNAPSHOT}/latest-nu-version.json" .github/latest-nu-version.json
+              cp "${RELEASE_SNAPSHOT}/nushell-releases.md" docs/nushell-releases.md
+              git add -- .github/latest-nu-version.json docs/nushell-releases.md
+              git commit -m "feat(release): catch up official Nushell releases through ${VERSION}"
+              # Push without force so a concurrent maintainer update is preserved.
+              git push origin "${BRANCH}"
+              echo "Updated ${EXISTING_PR} with releases: ${NEW_VERSIONS}"
+            else
+              echo "Existing PR already contains all detected releases; no branch update needed."
+            fi
           else
             git checkout -b "${BRANCH}"
             git add .github/latest-nu-version.json docs/nushell-releases.md
             git commit -m "feat(release): track official Nushell ${VERSION} release"
-            git push origin "${BRANCH}" --force-with-lease
+            git push origin "${BRANCH}"
 
             PR_BODY=$(cat <<EOF
           ## Official Nushell ${VERSION} Released
