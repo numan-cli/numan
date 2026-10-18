@@ -44,7 +44,8 @@ url = "2"
 tar = "0.4"
 flate2 = "1"
 xz2 = "0.1"
-zip = "2"
+# Keep the previous BZip2 backend; zip's default Rust backend adds an unapproved license.
+zip = { version = "9", default-features = false, features = ["aes-crypto", "bzip2-rs", "deflate64", "deflate", "lzma", "ppmd", "time", "zstd", "xz"] }
 globset = "0.4"
 
 # Integrity

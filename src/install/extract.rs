@@ -151,7 +151,10 @@ fn extract_zip(
             .map_err(|e| anyhow::anyhow!("Zip entry error: {e}"))?;
 
         // Validate the raw name BEFORE any mangling
-        let raw_name = entry.name().to_owned();
+        let raw_name = entry
+            .name()
+            .map_err(|e| anyhow::anyhow!("Zip entry name error: {e}"))?
+            .into_owned();
         if has_path_traversal_str(&raw_name) {
             bail!("Path traversal detected in archive: {raw_name}");
         }
@@ -178,7 +181,9 @@ fn extract_zip(
             );
         }
 
-        let entry_path = entry.mangled_name().to_owned();
+        let entry_path = entry
+            .mangled_name()
+            .with_context(|| format!("Failed to sanitize zip entry path: {raw_name}"))?;
 
         // Get relative path (strip archive_root if present)
         let relative_path = if let Some(root) = archive_root {

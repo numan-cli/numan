@@ -40,6 +40,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.watcher.outputs.version }}
+          NEW_VERSIONS: ${{ steps.watcher.outputs.new_versions }}
           BLOG_URL: ${{ steps.watcher.outputs.blog_url }}
           GITHUB_URL: ${{ steps.watcher.outputs.github_url }}
         run: |
@@ -60,6 +61,8 @@ jobs:
 
             PR_BODY=$(cat <<EOF
           ## Official Nushell ${VERSION} Released
+
+          Releases detected since last check: ${NEW_VERSIONS}
 
           A new official Nushell release has been published.
 
