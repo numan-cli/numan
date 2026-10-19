@@ -8,6 +8,7 @@ pub mod lifecycle_journal;
 pub mod lockfile;
 pub mod migration_journal;
 pub mod nupm_import;
+pub mod overlay_state;
 pub mod plugin_deactivate_journal;
 pub mod rollback;
 pub mod snapshot;
