@@ -22,22 +22,11 @@ jobs:
       actions: read
     uses: tonythethompson/opencode-review-threads/.github/workflows/opencode-review.yml@v1
     with:
-      use-github-token: true
-      timeout-minutes: 85
-      models-review: >-
-        cf:@cf/zai-org/glm-5.2,
-        cf:@cf/deepseek-ai/deepseek-v4-pro-0813,
-        zen:big-pickle,
-        zen:nemotron-3-ultra-free
-      models-fix: >-
-        cf:@cf/deepseek-ai/deepseek-v4-flash-0731,
-        zen:nemotron-3.5-lightning-free,
-        zen:big-pickle,
-        zen:nemotron-3-ultra-free,
-        zen:deepseek-v4-flash
+      models-review: cf:@cf/zai-org/glm-5.2,cf:@cf/deepseek-ai/deepseek-v4-pro-0813,cf:@cf/openai/gpt-oss-120b,cf:@cf/moonshotai/kimi-k2.7-code,zen:big-pickle,zen:glm-5-free,zen:nemotron-3-ultra-free,openrouter:openrouter/free
+      models-fix: cf:@cf/deepseek-ai/deepseek-v4-flash-0731,cf:@cf/moonshotai/kimi-k2.7-code,cf:@cf/qwen/qwen3.8-27b,cf:@cf/openai/gpt-oss-120b,zen:nemotron-3.5-lightning-free,zen:big-pickle,zen:glm-5-free,openrouter:openrouter/free
     secrets:
       OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY || secrets.CLOUDFLARE_API_TOKEN }}
       CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
