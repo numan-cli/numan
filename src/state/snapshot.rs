@@ -79,6 +79,8 @@ pub enum SnapshotTrigger {
     Doctor,
     /// `numan init --refresh` (paths / activation identity rewrite).
     Init,
+    /// `numan migrate` (nupm -> Numan).
+    Migrate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
