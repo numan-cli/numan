@@ -26,7 +26,7 @@ use crate::state::lockfile::{compute_revision_id, Lockfile, LockfileEntry};
 use crate::state::nupm_import::{NupmImportRecord, NupmImportsFile};
 use crate::util::atomic::write_bytes_atomic;
 use crate::util::format_timestamp;
-use crate::util::fs_safety::{acquire_mutation_lock, assert_not_symlink};
+use crate::util::fs_safety::{acquire_mutation_lock, assert_not_symlink, MutationLock};
 use crate::util::hints::{self, CMD_INIT, CMD_INIT_REFRESH, CMD_NUPM_INSPECT};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +111,22 @@ pub fn import_module_with_runner(
     runner: &dyn CandidateRunner,
 ) -> Result<ImportResult> {
     let _lock = acquire_mutation_lock(root)?;
+    import_module_with_runner_under_lock(root, source_path, target, yes, runner, &_lock)
+}
+
+/// Import while the caller already holds the root mutation lock.
+///
+/// Mirrors `activate::execute_under_lock`: the caller keeps one lock across an
+/// install→import→activate sequence (e.g. `numan migrate`) so nested
+/// non-blocking [`acquire_mutation_lock`] does not self-deadlock.
+pub fn import_module_with_runner_under_lock(
+    root: &Path,
+    source_path: &Path,
+    target: &ScopedId,
+    yes: bool,
+    runner: &dyn CandidateRunner,
+    _lock: &MutationLock,
+) -> Result<ImportResult> {
     ensure_no_stale_journal(root)?;
 
     let resolved = resolve_single_import(root, source_path, target, yes)?;
@@ -822,6 +838,38 @@ mod tests {
         assert_eq!(entry.origin.as_deref(), Some(NUPM_IMPORT_ORIGIN));
         let imports = NupmImportsFile::load(root.path()).unwrap();
         assert!(imports.imports.contains_key("test/minimal"));
+    }
+
+    #[test]
+    fn under_lock_variant_reuses_held_lock_without_self_deadlock() {
+        // Regression test for the `numan migrate` deadlock: the command holds
+        // the mutation lock for the whole migrate sequence, so nested imports
+        // must go through the under-lock variant.
+        let root = tempfile::tempdir().unwrap();
+        let source = fixture("supported/minimal-module");
+        let target = ScopedId::parse("test/underlock").unwrap();
+
+        let lock = acquire_mutation_lock(root.path()).unwrap();
+
+        // Re-acquiring the non-blocking lock while it is already held must fail.
+        assert!(acquire_mutation_lock(root.path()).is_err());
+
+        // The under-lock variant must succeed while the caller holds the lock.
+        let result = import_module_with_runner_under_lock(
+            root.path(),
+            &source,
+            &target,
+            true,
+            &FakeCandidateRunner::success(),
+            &lock,
+        )
+        .unwrap();
+        assert_eq!(result.package_id, "test/underlock");
+        assert!(root
+            .path()
+            .join(&result.payload_path)
+            .join("mod.nu")
+            .is_file());
     }
 
     #[test]

@@ -37,6 +37,9 @@ pub struct RollbackReport {
     pub packages_restored: usize,
     /// Human-readable description of what happened to the managed autoload file.
     pub autoload_action: String,
+    /// Non-fatal warning when the `numan_init.nu` bootstrap could not be
+    /// regenerated/cleaned up after rollback (e.g. `paths.json` absent).
+    pub bootstrap_warning: Option<String>,
 }
 
 /// Restore Numan-owned state to exactly the state captured in snapshot `id`.
@@ -282,9 +285,23 @@ pub fn rollback_to_snapshot(
     PendingLifecycle::clear(root)?;
 
     // Regenerate the invisible-activation bootstrap file (issue #32).
+    let mut bootstrap_warning: Option<String> = None;
     if let Ok(nu_paths) = crate::nu::paths::NuPaths::load(root) {
         if let Err(e) = crate::nu::init_file::regenerate_init_file(root, &nu_paths) {
+            bootstrap_warning = Some(format!("failed to regenerate numan_init.nu: {e}"));
             eprintln!("Warning: failed to regenerate numan_init.nu: {}", e);
+        }
+    } else if matches!(snapshot.paths.as_ref(), Some(SnapshotPaths::Absent)) {
+        // Rollback just removed paths.json, so NuPaths::load fails above and the
+        // bootstrap was never regenerated. Remove the Numan-owned bootstrap for
+        // the absent-path case so a later-created file cannot linger and source
+        // an invalid autoload file after rollback.
+        let init_path = root.join("nu_state").join("numan_init.nu");
+        if init_path.exists() {
+            if let Err(e) = std::fs::remove_file(&init_path) {
+                bootstrap_warning = Some(format!("failed to remove numan_init.nu: {e}"));
+                eprintln!("Warning: failed to remove numan_init.nu: {}", e);
+            }
         }
     }
 
@@ -293,6 +310,7 @@ pub fn rollback_to_snapshot(
         pre_rollback_snapshot_id: pre_rollback.id,
         packages_restored: snapshot.lockfile.packages.len(),
         autoload_action,
+        bootstrap_warning,
     })
 }
 
@@ -898,15 +916,28 @@ mod tests {
         .unwrap();
         assert!(!root.join("nu_state/paths.json").exists());
 
-        // Paths appear later (e.g. numan init).
+        // Paths appear later (e.g. numan init), along with the Numan-owned
+        // bootstrap file.
         save_fake_paths(root, "hash-new", "0.113.1");
+        let init_path = root.join("nu_state/numan_init.nu");
+        std::fs::create_dir_all(init_path.parent().unwrap()).unwrap();
+        std::fs::write(&init_path, b"# stale bootstrap").unwrap();
         assert!(root.join("nu_state/paths.json").exists());
+        assert!(init_path.exists());
 
         let runner = FakeCandidateRunner::success();
-        rollback_to_snapshot(root, &snap.id, &runner).unwrap();
+        let report = rollback_to_snapshot(root, &snap.id, &runner).unwrap();
         assert!(
             !root.join("nu_state/paths.json").exists(),
             "rollback must remove paths.json when the snapshot recorded Absent"
+        );
+        assert!(
+            !init_path.exists(),
+            "rollback to Absent paths must not leave a stale numan_init.nu"
+        );
+        assert!(
+            report.bootstrap_warning.is_none(),
+            "successful cleanup must not report a bootstrap warning"
         );
     }
 

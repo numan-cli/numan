@@ -8,6 +8,7 @@ pub mod info;
 pub mod init;
 pub mod install;
 pub mod list;
+pub mod migrate;
 pub mod nu_pin_offer;
 pub mod nupm;
 pub mod plugin_lifecycle;

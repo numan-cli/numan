@@ -67,18 +67,28 @@ fn execute_first_init<F>(root: &Path, detect: F) -> Result<()>
 where
     F: Fn() -> Result<NuPaths>,
 {
+    // Serialize the first-init mutations (paths.json, numan_init.nu, config.nu)
+    // so a concurrent `numan setup loader --configure` or another Numan process
+    // cannot lose its config update to an interleaved write.
+    let _lock = acquire_mutation_lock(root)?;
     let paths = detect()?;
     ensure_layout_dirs(root)?;
     paths.save(root)?;
     // Create the invisible-activation bootstrap file (issue #32).
+    let mut bootstrap_ok = false;
     if let Err(e) = crate::nu::init_file::regenerate_init_file(root, &paths) {
         eprintln!("Warning: failed to create numan_init.nu: {}", e);
+    } else {
+        bootstrap_ok = true;
     }
-    // One-time config.nu source line (issue #32).
-    if let Ok(cfg) = crate::nu::paths::probe_nu_config_path(&paths.nu_executable) {
-        let init_path = root.join("nu_state").join("numan_init.nu");
-        if let Err(e) = crate::nu::init_file::ensure_config_source_line(&cfg, &init_path) {
-            eprintln!("Warning: failed to update config.nu: {}", e);
+    // One-time config.nu source line (issue #32) — only when the bootstrap file
+    // was created, so startup never sources a missing file.
+    if bootstrap_ok {
+        if let Ok(cfg) = crate::nu::paths::probe_nu_config_path(&paths.nu_executable) {
+            let init_path = root.join("nu_state").join("numan_init.nu");
+            if let Err(e) = crate::nu::init_file::ensure_config_source_line(&cfg, &init_path) {
+                eprintln!("Warning: failed to update config.nu: {}", e);
+            }
         }
     }
     let config_path = root.join("config.toml");
@@ -222,13 +232,18 @@ where
     refresh_autoload_state_identity(root, &new_paths)?;
 
     new_paths.save(root)?;
+    let mut bootstrap_ok = false;
     if let Err(e) = crate::nu::init_file::regenerate_init_file(root, &new_paths) {
         eprintln!("Warning: failed to regenerate numan_init.nu: {}", e);
+    } else {
+        bootstrap_ok = true;
     }
-    if let Ok(cfg) = crate::nu::paths::probe_nu_config_path(&new_paths.nu_executable) {
-        let init_path = root.join("nu_state").join("numan_init.nu");
-        if let Err(e) = crate::nu::init_file::ensure_config_source_line(&cfg, &init_path) {
-            eprintln!("Warning: failed to update config.nu: {}", e);
+    if bootstrap_ok {
+        if let Ok(cfg) = crate::nu::paths::probe_nu_config_path(&new_paths.nu_executable) {
+            let init_path = root.join("nu_state").join("numan_init.nu");
+            if let Err(e) = crate::nu::init_file::ensure_config_source_line(&cfg, &init_path) {
+                eprintln!("Warning: failed to update config.nu: {}", e);
+            }
         }
     }
     print_summary(root, &new_paths, true);
