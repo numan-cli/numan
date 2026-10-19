@@ -17,8 +17,6 @@ pub struct OverlayState {
     pub overlays: Vec<OverlayRecord>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OverlayRecord {
 /// Scope of an overlay activation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -27,12 +25,16 @@ pub enum OverlayScope {
     Project,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OverlayRecord {
     pub package_id: String,
     pub overlay_name: String,
     pub entry_path: String,
-    /// "session" or "project"
-    pub scope: String,
+    /// Scope of the activation; `"session"` or `"project"`.
     pub scope: OverlayScope,
+    /// Project root when scope is `Project`; `None` for session scope.
+    #[serde(default)]
+    pub project_root: Option<String>,
     pub activated_at: String,
 }
 
@@ -78,8 +80,8 @@ mod tests {
             package_id: "owner/name".to_string(),
             overlay_name: "name".to_string(),
             entry_path: "/tmp/entry.nu".to_string(),
-            scope: "session".to_string(),
             scope: OverlayScope::Session,
+            project_root: None,
             activated_at: "2026-01-01T00:00:00Z".to_string(),
         });
         state.save(root).unwrap();
@@ -93,5 +95,19 @@ mod tests {
         let dir = tempdir().unwrap();
         let state = OverlayState::load(dir.path()).unwrap();
         assert!(state.overlays.is_empty());
+    }
+
+    #[test]
+    fn scope_serde_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&OverlayScope::Session).unwrap(),
+            "\"session\""
+        );
+        assert_eq!(
+            serde_json::to_string(&OverlayScope::Project).unwrap(),
+            "\"project\""
+        );
+        assert!(serde_json::from_str::<OverlayScope>("\"Session\"").is_err());
+        assert!(serde_json::from_str::<OverlayScope>("\"other\"").is_err());
     }
 }
