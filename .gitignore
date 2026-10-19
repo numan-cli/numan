@@ -14,9 +14,10 @@
 Thumbs.db
 desktop.ini
 
-# Environment
+# Environment (values live in Infisical; see ../INFISICAL.md)
 .env
-.env.local
+.env.*
+!.env.example
 
 # Editor
 *.bak

@@ -72,7 +72,7 @@ def validate_workflows(root: Path, files: list[Path] | None = None) -> list[str]
     errors = []
     for path in files:
         try:
-            with path.open(encoding="utf-8") as fh:
+            with path.open("rb") as fh:
                 load_workflow(fh)
         except (OSError, yaml.YAMLError) as exc:
             errors.append(f"{path}: {exc}")
