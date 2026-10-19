@@ -122,18 +122,31 @@ fn execute_nu_use_existing_refuses_without_consent_and_keeps_managed() {
 
 struct ClearedPath {
     saved: Option<String>,
+    previous_no_persist: Option<std::ffi::OsString>,
 }
 
 impl ClearedPath {
     fn new() -> Self {
         let saved = std::env::var("PATH").ok();
+        let previous_no_persist = std::env::var_os("NUMAN_TEST_NO_PERSIST_USER_PATH");
+        // Block durable PATH writes for the guard lifetime so ignored
+        // acceptance tests cannot permanently pollute the developer User
+        // PATH / shell profiles with tempfile fixture dirs (see #70).
+        std::env::set_var("NUMAN_TEST_NO_PERSIST_USER_PATH", "1");
         std::env::set_var("PATH", "");
-        Self { saved }
+        Self {
+            saved,
+            previous_no_persist,
+        }
     }
 }
 
 impl Drop for ClearedPath {
     fn drop(&mut self) {
+        match self.previous_no_persist.as_ref() {
+            Some(prev) => std::env::set_var("NUMAN_TEST_NO_PERSIST_USER_PATH", prev),
+            None => std::env::remove_var("NUMAN_TEST_NO_PERSIST_USER_PATH"),
+        }
         match &self.saved {
             Some(path) => std::env::set_var("PATH", path),
             None => std::env::remove_var("PATH"),
