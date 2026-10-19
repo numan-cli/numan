@@ -459,6 +459,52 @@ fn check_nu_paths(
         }
     }
 
+    // Invisible-activation bootstrap file drift (issue #32).
+    let init_path = root.join("nu_state").join("numan_init.nu");
+    let expected = crate::nu::init_file::expected_init_content(&paths);
+    let init_ok = std::fs::read(&init_path).ok().as_deref() == Some(expected.as_slice());
+    if init_ok {
+        findings.push(finding(
+            "nu_init.drift",
+            Severity::Ok,
+            "numan_init.nu matches current activation state",
+            None,
+            RepairTier::None,
+        ));
+    } else {
+        findings.push(finding(
+            "nu_init.drift",
+            Severity::Warn,
+            format!(
+                "numan_init.nu is missing or stale at '{}'",
+                init_path.display()
+            ),
+            Some(CMD_INIT_REFRESH),
+            RepairTier::Auto,
+        ));
+    }
+
+    // config.nu source line check.
+    if let Ok(cfg) = crate::nu::paths::probe_nu_config_path(&paths.nu_executable) {
+        if crate::nu::init_file::config_source_line_present(&cfg) {
+            findings.push(finding(
+                "nu_init.config_source",
+                Severity::Ok,
+                "config.nu sources numan_init.nu",
+                None,
+                RepairTier::None,
+            ));
+        } else {
+            findings.push(finding(
+                "nu_init.config_source",
+                Severity::Warn,
+                "config.nu does not source numan_init.nu",
+                Some(CMD_INIT_REFRESH),
+                RepairTier::Auto,
+            ));
+        }
+    }
+
     Some(paths)
 }
 
@@ -1276,6 +1322,65 @@ fn apply_repairs(
                     reason: Some(e.to_string()),
                 }),
             }
+        }
+    }
+
+    // Invisible-activation bootstrap file repair (issue #32).
+    if findings
+        .iter()
+        .any(|f| f.id == "nu_init.drift" && f.severity != Severity::Ok)
+    {
+        let id = "nu_init.drift".to_string();
+        let paths = crate::nu::paths::NuPaths::load(root);
+        match paths {
+            Ok(p) => match crate::nu::init_file::regenerate_init_file(root, &p) {
+                Ok(()) => records.push(RepairRecord {
+                    id: id.clone(),
+                    status: RepairStatus::Applied,
+                    reason: None,
+                }),
+                Err(e) => records.push(RepairRecord {
+                    id,
+                    status: RepairStatus::Failed,
+                    reason: Some(e.to_string()),
+                }),
+            },
+            Err(e) => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Failed,
+                reason: Some(e.to_string()),
+            }),
+        }
+    }
+
+    if findings
+        .iter()
+        .any(|f| f.id == "nu_init.config_source" && f.severity != Severity::Ok)
+    {
+        let id = "nu_init.config_source".to_string();
+        let init_path = root.join("nu_state").join("numan_init.nu");
+        // Need nu_exe; use paths from outer scope? paths may be None. Fallback probe.
+        let cfg = crate::nu::paths::NuPaths::load(root)
+            .ok()
+            .and_then(|p| crate::nu::paths::probe_nu_config_path(&p.nu_executable).ok());
+        match cfg {
+            Some(c) => match crate::nu::init_file::ensure_config_source_line(&c, &init_path) {
+                Ok(_) => records.push(RepairRecord {
+                    id,
+                    status: RepairStatus::Applied,
+                    reason: None,
+                }),
+                Err(e) => records.push(RepairRecord {
+                    id,
+                    status: RepairStatus::Failed,
+                    reason: Some(e.to_string()),
+                }),
+            },
+            None => records.push(RepairRecord {
+                id,
+                status: RepairStatus::Skipped,
+                reason: Some("config_path_unavailable".to_string()),
+            }),
         }
     }
 

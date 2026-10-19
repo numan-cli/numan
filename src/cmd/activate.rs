@@ -654,6 +654,16 @@ fn run_module_lane(
         return Ok(true); // lane failed
     }
 
+    // Step 8b: Regenerate the single invisible-activation bootstrap file so
+    // config.nu never needs further edits (issue #32).
+    if let Err(e) = crate::nu::init_file::regenerate_init_file(root, nu_paths) {
+        eprintln!(
+            "{} Failed to regenerate numan_init.nu: {}",
+            console::style("⚠").yellow(),
+            e
+        );
+    }
+
     // Step 9: Update journal to Replaced
     let mut journal = journal;
     journal.stage = AutoloadStage::Replaced;

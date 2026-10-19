@@ -466,6 +466,11 @@ fn run_module_deactivate_lane(
             .with_context(|| "Failed to delete autoload state after final module deactivation")?;
     }
 
+    // Regenerate the invisible-activation bootstrap file (issue #32).
+    if let Err(e) = crate::nu::init_file::regenerate_init_file(root, nu_paths) {
+        eprintln!("Warning: failed to regenerate numan_init.nu: {}", e);
+    }
+
     Ok(())
 }
 

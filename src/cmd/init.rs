@@ -70,7 +70,17 @@ where
     let paths = detect()?;
     ensure_layout_dirs(root)?;
     paths.save(root)?;
-
+    // Create the invisible-activation bootstrap file (issue #32).
+    if let Err(e) = crate::nu::init_file::regenerate_init_file(root, &paths) {
+        eprintln!("Warning: failed to create numan_init.nu: {}", e);
+    }
+    // One-time config.nu source line (issue #32).
+    if let Ok(cfg) = crate::nu::paths::probe_nu_config_path(&paths.nu_executable) {
+        let init_path = root.join("nu_state").join("numan_init.nu");
+        if let Err(e) = crate::nu::init_file::ensure_config_source_line(&cfg, &init_path) {
+            eprintln!("Warning: failed to update config.nu: {}", e);
+        }
+    }
     let config_path = root.join("config.toml");
     let config_created = !config_path.exists();
     let mut config = if config_created {
@@ -212,6 +222,15 @@ where
     refresh_autoload_state_identity(root, &new_paths)?;
 
     new_paths.save(root)?;
+    if let Err(e) = crate::nu::init_file::regenerate_init_file(root, &new_paths) {
+        eprintln!("Warning: failed to regenerate numan_init.nu: {}", e);
+    }
+    if let Ok(cfg) = crate::nu::paths::probe_nu_config_path(&new_paths.nu_executable) {
+        let init_path = root.join("nu_state").join("numan_init.nu");
+        if let Err(e) = crate::nu::init_file::ensure_config_source_line(&cfg, &init_path) {
+            eprintln!("Warning: failed to update config.nu: {}", e);
+        }
+    }
     print_summary(root, &new_paths, true);
     warn_missing_vendor_target(&new_paths);
     Ok(())

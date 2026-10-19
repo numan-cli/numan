@@ -281,6 +281,13 @@ pub fn rollback_to_snapshot(
     journal.save(root)?;
     PendingLifecycle::clear(root)?;
 
+    // Regenerate the invisible-activation bootstrap file (issue #32).
+    if let Ok(nu_paths) = crate::nu::paths::NuPaths::load(root) {
+        if let Err(e) = crate::nu::init_file::regenerate_init_file(root, &nu_paths) {
+            eprintln!("Warning: failed to regenerate numan_init.nu: {}", e);
+        }
+    }
+
     Ok(RollbackReport {
         target_snapshot_id: id.to_string(),
         pre_rollback_snapshot_id: pre_rollback.id,
