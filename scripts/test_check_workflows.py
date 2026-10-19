@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -105,6 +106,28 @@ class CheckWorkflowsTests(unittest.TestCase):
         joined = "\n".join(errors)
         self.assertIn("complex.yml", joined)
         self.assertIn("bad.yml", joined)
+
+    def test_load_workflow_rejects_undefined_alias(self):
+        with self.assertRaises(check_workflows.yaml.YAMLError):
+            check_workflows.load_workflow("key: *missing")
+
+    def test_load_workflow_rejects_recursive_alias(self):
+        with self.assertRaises(check_workflows.yaml.YAMLError):
+            check_workflows.load_workflow("key: &self {child: *self}")
+
+    def test_main_enumerates_once_and_uses_passed_files(self):
+        root = Path(check_workflows.__file__).resolve().parent.parent
+        fake_files = [root / ".github" / "workflows" / "only.yml"]
+        with patch.object(
+            check_workflows, "workflow_files", return_value=fake_files
+        ) as wf, patch.object(
+            check_workflows, "validate_workflows", return_value=[]
+        ) as vw, patch("builtins.print") as pr:
+            rc = check_workflows.main()
+        self.assertEqual(rc, 0)
+        wf.assert_called_once_with(root)
+        vw.assert_called_once_with(root, files=fake_files)
+        pr.assert_called_once_with("validated 1 workflow files")
 
     def test_invalid_non_first_workflow_still_found(self):
         add_workflow(self.root, "a.yml", VALID)

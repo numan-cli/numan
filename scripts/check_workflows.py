@@ -64,8 +64,9 @@ def workflow_files(root: Path) -> list[Path]:
     ]
 
 
-def validate_workflows(root: Path) -> list[str]:
-    files = workflow_files(root)
+def validate_workflows(root: Path, files: list[Path] | None = None) -> list[str]:
+    if files is None:
+        files = workflow_files(root)
     if not files:
         return [f"{root}: no tracked workflow files under .github/workflows"]
     errors = []
@@ -80,12 +81,13 @@ def validate_workflows(root: Path) -> list[str]:
 
 def main() -> int:
     root = Path(__file__).resolve().parent.parent
-    errors = validate_workflows(root)
+    files = workflow_files(root)
+    errors = validate_workflows(root, files=files)
     for err in errors:
         print(err, file=sys.stderr)
     if errors:
         return 1
-    print(f"validated {len(workflow_files(root))} workflow files")
+    print(f"validated {len(files)} workflow files")
     return 0
 
 

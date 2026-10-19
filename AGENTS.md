@@ -9,6 +9,7 @@ cargo build                             # Build binary
 cargo test                              # Run standard unit & integration test suite
 cargo clippy -- -D warnings             # CI clippy gate (lib + bins only)
 cargo fmt --check                       # CI code formatting check
+python3 -m pip install PyYAML==6.0.3    # Required for workflow YAML validation
 python3 scripts/check_workflows.py      # Tracked workflow YAML validation (needs PyYAML)
 cargo test -- --ignored --skip acceptance_process_helper --skip stage1_official_registry --skip real_nu_active_update_ # Real-Nu tests (requires Nu on PATH)
 ```
