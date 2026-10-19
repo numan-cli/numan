@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import check_workflows
+
+VALID = """\
+name: ok
+on:
+  push:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ok
+"""
+
+MALFORMED = "name: bad\non: [push\n"
+
+DUPLICATE_KEY = """\
+name: dup
+on: push
+on: pull_request
+"""
+
+
+def init_repo(root: Path) -> None:
+    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+
+
+def add_workflow(root: Path, name: str, text: str, tracked: bool = True) -> Path:
+    path = root / ".github" / "workflows" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    if tracked:
+        subprocess.run(
+            ["git", "-C", str(root), "add", ".github/workflows/" + name],
+            check=True,
+        )
+    return path
+
+
+class CheckWorkflowsTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        init_repo(self.root)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_valid_workflow_passes(self):
+        add_workflow(self.root, "ci.yml", VALID)
+        self.assertEqual(check_workflows.validate_workflows(self.root), [])
+
+    def test_malformed_yaml_fails(self):
+        add_workflow(self.root, "ci.yml", MALFORMED)
+        errors = check_workflows.validate_workflows(self.root)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("ci.yml", errors[0])
+
+    def test_duplicate_mapping_key_fails(self):
+        add_workflow(self.root, "ci.yml", DUPLICATE_KEY)
+        errors = check_workflows.validate_workflows(self.root)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("duplicate", errors[0].lower())
+        self.assertIn("ci.yml", errors[0])
+
+    def test_on_key_stays_literal(self):
+        path = add_workflow(self.root, "ci.yml", VALID)
+        doc = check_workflows.load_workflow(path.read_text(encoding="utf-8"))
+        self.assertIn("on", doc)
+        self.assertNotIn(True, doc)
+
+    def test_both_extensions_checked(self):
+        add_workflow(self.root, "a.yml", VALID)
+        add_workflow(self.root, "b.yaml", MALFORMED)
+        errors = check_workflows.validate_workflows(self.root)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("b.yaml", errors[0])
+
+    def test_untracked_malformed_workflow_ignored(self):
+        add_workflow(self.root, "ci.yml", VALID)
+        add_workflow(self.root, "draft.yml", MALFORMED, tracked=False)
+        self.assertEqual(check_workflows.validate_workflows(self.root), [])
+
+    def test_no_tracked_workflows_fails(self):
+        errors = check_workflows.validate_workflows(self.root)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("no tracked workflow", errors[0].lower())
+
+    def test_unhashable_key_and_other_errors_collected(self):
+        add_workflow(self.root, "complex.yml", "name: x\n? [a, b]\n: value\n")
+        add_workflow(self.root, "bad.yml", MALFORMED)
+        errors = check_workflows.validate_workflows(self.root)
+        self.assertEqual(len(errors), 2)
+        joined = "\n".join(errors)
+        self.assertIn("complex.yml", joined)
+        self.assertIn("bad.yml", joined)
+
+    def test_load_workflow_rejects_undefined_alias(self):
+        with self.assertRaises(check_workflows.yaml.YAMLError):
+            check_workflows.load_workflow("key: *missing")
+
+    def test_load_workflow_rejects_recursive_alias(self):
+        with self.assertRaises(check_workflows.yaml.YAMLError):
+            check_workflows.load_workflow("key: &self {child: *self}")
+
+    def test_load_workflow_accepts_valid_alias(self):
+        doc = check_workflows.load_workflow("a: &x 1\nb: *x\n")
+        self.assertEqual(doc["b"], 1)
+
+    def test_resolver_equivalent_duplicate_keys_fail(self):
+        with self.assertRaises(check_workflows.yaml.YAMLError):
+            check_workflows.load_workflow("1: a\n01: b\n")
+
+    def test_boolean_forms_still_resolve(self):
+        doc = check_workflows.load_workflow("a: true\nb: on\nc: yes\n")
+        self.assertIs(doc["a"], True)
+        self.assertEqual(doc["b"], "on")
+        self.assertEqual(doc["c"], "yes")
+
+    def test_main_enumerates_once_and_uses_passed_files(self):
+        root = Path(check_workflows.__file__).resolve().parent.parent
+        fake_files = [root / ".github" / "workflows" / "only.yml"]
+        with patch.object(
+            check_workflows, "workflow_files", return_value=fake_files
+        ) as wf, patch.object(
+            check_workflows, "validate_workflows", return_value=[]
+        ) as vw, patch("builtins.print") as pr:
+            rc = check_workflows.main()
+        self.assertEqual(rc, 0)
+        wf.assert_called_once_with(root)
+        vw.assert_called_once_with(root, files=fake_files)
+        pr.assert_called_once_with("validated 1 workflow files")
+
+    def test_invalid_non_first_workflow_still_found(self):
+        add_workflow(self.root, "a.yml", VALID)
+        add_workflow(self.root, "b.yml", VALID)
+        add_workflow(self.root, "c.yml", MALFORMED)
+        errors = check_workflows.validate_workflows(self.root)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("c.yml", errors[0])
+
+
+if __name__ == "__main__":
+    unittest.main()
