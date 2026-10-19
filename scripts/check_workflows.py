@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -9,8 +10,27 @@ from pathlib import Path
 import yaml
 
 
-class UniqueKeyLoader(yaml.BaseLoader):
+class UniqueKeyLoader(yaml.SafeLoader):
     pass
+
+
+# GitHub Actions treats on/off/yes/no as plain strings; restrict implicit
+# boolean resolution to true/false so `on:` stays a literal string key while
+# other scalars still get resolver-aware duplicate-key checks.
+UniqueKeyLoader.yaml_implicit_resolvers = {}
+for _ch, _resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items():
+    _filtered = [
+        (tag, regexp)
+        for tag, regexp in _resolvers
+        if tag != "tag:yaml.org,2002:bool"
+    ]
+    if _filtered:
+        UniqueKeyLoader.yaml_implicit_resolvers[_ch] = _filtered
+UniqueKeyLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool",
+    re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
+    list("tTfF"),
+)
 
 
 def _construct_mapping(loader, node, deep=False):

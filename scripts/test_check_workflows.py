@@ -115,6 +115,20 @@ class CheckWorkflowsTests(unittest.TestCase):
         with self.assertRaises(check_workflows.yaml.YAMLError):
             check_workflows.load_workflow("key: &self {child: *self}")
 
+    def test_load_workflow_accepts_valid_alias(self):
+        doc = check_workflows.load_workflow("a: &x 1\nb: *x\n")
+        self.assertEqual(doc["b"], 1)
+
+    def test_resolver_equivalent_duplicate_keys_fail(self):
+        with self.assertRaises(check_workflows.yaml.YAMLError):
+            check_workflows.load_workflow("1: a\n01: b\n")
+
+    def test_boolean_forms_still_resolve(self):
+        doc = check_workflows.load_workflow("a: true\nb: on\nc: yes\n")
+        self.assertIs(doc["a"], True)
+        self.assertEqual(doc["b"], "on")
+        self.assertEqual(doc["c"], "yes")
+
     def test_main_enumerates_once_and_uses_passed_files(self):
         root = Path(check_workflows.__file__).resolve().parent.parent
         fake_files = [root / ".github" / "workflows" / "only.yml"]
