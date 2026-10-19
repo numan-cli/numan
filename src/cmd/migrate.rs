@@ -108,6 +108,7 @@ pub fn execute(args: &MigrateArgs, numan_root: &Path, out: &mut dyn Write) -> Re
     }
 
     // Snapshot before mutation.
+    // Acquire mutation lock before snapshot + mutation.
     let _lock = acquire_mutation_lock(numan_root)?;
     let _snap = create_snapshot(
         numan_root,
