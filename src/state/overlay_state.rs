@@ -37,7 +37,7 @@ impl OverlayState {
         }
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
-        Ok(serde_json::from_str(&content).unwrap_or_default())
+        Ok(serde_json::from_str(&content).with_context(|| format!("Failed to parse {}", path.display()))?)
     }
 
     pub fn save(&self, root: &Path) -> Result<()> {
