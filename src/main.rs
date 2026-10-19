@@ -36,6 +36,10 @@ fn main() -> anyhow::Result<()> {
             let mut stdout = std::io::stdout();
             numan_cli::cmd::nupm::execute(&args, &root, &mut stdout)
         }
+        Commands::Migrate(args) => {
+            let mut stdout = std::io::stdout();
+            numan_cli::cmd::migrate::execute(&args, &root, &mut stdout)
+        }
         Commands::Completions(args) => numan_cli::cmd::completions::execute(&args),
         Commands::Doctor(args) => {
             let code = numan_cli::cmd::doctor::execute(&args, &root)?;
