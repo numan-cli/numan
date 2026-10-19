@@ -57,11 +57,12 @@ pub const CONFIG_SOURCE_MARKER: &str = "# Numan (managed) — do not edit";
 
 /// Build the single source line that config.nu must contain.
 pub fn config_source_line(init_file_path: &Path) -> String {
-    format!(
-        "source \"{}\"  {}",
-        init_file_path.display(),
-        CONFIG_SOURCE_MARKER
-    )
+    let escaped = init_file_path
+        .display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    format!("source \"{}\"  {}", escaped, CONFIG_SOURCE_MARKER)
 }
 
 /// Returns true when `config.nu` already contains the Numan managed source line.
@@ -136,9 +137,10 @@ mod tests {
         let content = String::from_utf8(render_init_file(&paths)).unwrap();
         assert!(content.starts_with("# Generated and managed by Numan."));
         let path_str = format!("{}/numan.nu", vendor_str);
-        // Use a hardcoded format to avoid re-deriving the same escaping chain
-        // used in production (which would make the test a tautology).
-        assert!(content.contains(&format!("source \"{}\"", path_str)));
+        // Escape like production does: host paths may contain \ (Windows).
+        // The dedicated escaping test below guards the chain itself.
+        let escaped = path_str.replace('\\', "\\\\").replace('"', "\\\"");
+        assert!(content.contains(&format!("source \"{}\"", escaped)));
     }
 
     #[test]
@@ -146,7 +148,7 @@ mod tests {
         // Verify Nu string-literal escaping with a path containing \ and ".
         // We test config_source_line directly because render_init_file requires
         // actual filesystem paths that are valid on the host OS.
-        let raw = "C:\\Users\\test\"dir\
+        let raw = "C:\\Users\\test\"dir\\";
         let init_path = std::path::Path::new(raw);
         let line = config_source_line(init_path);
         // Backslashes must be doubled and double-quotes must be backslash-escaped.
@@ -176,7 +178,7 @@ mod tests {
         regenerate_init_file(root, &paths).unwrap();
         let read = std::fs::read_to_string(root.join("nu_state/numan_init.nu")).unwrap();
         let path_str = format!("{}/numan.nu", vendor_str);
-        // Use a hardcoded format rather than re-deriving the escaping chain.
-        assert!(read.contains(&format!("source \"{}\"", path_str)));
+        let escaped = path_str.replace('\\', "\\\\").replace('"', "\\\"");
+        assert!(read.contains(&format!("source \"{}\"", escaped)));
     }
 }
