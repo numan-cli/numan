@@ -143,7 +143,6 @@ impl ClearedPath {
 
 impl Drop for ClearedPath {
     fn drop(&mut self) {
-        match &self.saved {
         match self.previous_no_persist.as_ref() {
             Some(prev) => std::env::set_var("NUMAN_TEST_NO_PERSIST_USER_PATH", prev),
             None => std::env::remove_var("NUMAN_TEST_NO_PERSIST_USER_PATH"),
