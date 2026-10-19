@@ -1031,6 +1031,9 @@ fn run_full_deactivation(
         );
         clear_module_activations(lockfile, targets, root)?;
         AutoloadState::delete(root)?;
+        if let Err(e) = crate::nu::init_file::regenerate_init_file(root, nu_paths) {
+            eprintln!("Warning: failed to regenerate numan_init.nu: {}", e);
+        }
         print_deactivation_success(targets);
         return Ok(());
     }
@@ -1106,6 +1109,10 @@ fn run_full_deactivation(
 
     // Step 8: Clear journal.
     PendingAutoload::delete(root)?;
+
+    if let Err(e) = crate::nu::init_file::regenerate_init_file(root, nu_paths) {
+        eprintln!("Warning: failed to regenerate numan_init.nu: {}", e);
+    }
 
     print_deactivation_success(targets);
     Ok(())
