@@ -471,7 +471,6 @@ fn run_module_deactivate_lane(
     // must fail the deactivation rather than only warn.
     crate::nu::init_file::regenerate_init_file(root, nu_paths)
         .with_context(|| "Failed to regenerate numan_init.nu")?;
-
     Ok(())
 }
 
