@@ -486,7 +486,7 @@ fn check_nu_paths(
 
     // config.nu source line check.
     if let Ok(cfg) = crate::nu::paths::probe_nu_config_path(&paths.nu_executable) {
-        if crate::nu::init_file::config_source_line_present(&cfg) {
+        if crate::nu::init_file::config_source_line_present(&cfg, &init_path) {
             findings.push(finding(
                 "nu_init.config_source",
                 Severity::Ok,
@@ -1359,28 +1359,38 @@ fn apply_repairs(
     {
         let id = "nu_init.config_source".to_string();
         let init_path = root.join("nu_state").join("numan_init.nu");
-        // Need nu_exe; use paths from outer scope? paths may be None. Fallback probe.
-        let cfg = crate::nu::paths::NuPaths::load(root)
-            .ok()
-            .and_then(|p| crate::nu::paths::probe_nu_config_path(&p.nu_executable).ok());
-        match cfg {
-            Some(c) => match crate::nu::init_file::ensure_config_source_line(&c, &init_path) {
-                Ok(_) => records.push(RepairRecord {
-                    id,
-                    status: RepairStatus::Applied,
-                    reason: None,
-                }),
-                Err(e) => records.push(RepairRecord {
-                    id,
-                    status: RepairStatus::Failed,
-                    reason: Some(e.to_string()),
-                }),
-            },
-            None => records.push(RepairRecord {
+        // Adding a source line for a missing bootstrap file would make every Nu
+        // startup fail. Surface the bootstrap repair instead.
+        if !init_path.is_file() {
+            records.push(RepairRecord {
                 id,
                 status: RepairStatus::Skipped,
-                reason: Some("config_path_unavailable".to_string()),
-            }),
+                reason: Some("numan_init_missing".to_string()),
+            });
+        } else {
+            // Need nu_exe; use paths from outer scope? paths may be None. Fallback probe.
+            let cfg = crate::nu::paths::NuPaths::load(root)
+                .ok()
+                .and_then(|p| crate::nu::paths::probe_nu_config_path(&p.nu_executable).ok());
+            match cfg {
+                Some(c) => match crate::nu::init_file::ensure_config_source_line(&c, &init_path) {
+                    Ok(_) => records.push(RepairRecord {
+                        id,
+                        status: RepairStatus::Applied,
+                        reason: None,
+                    }),
+                    Err(e) => records.push(RepairRecord {
+                        id,
+                        status: RepairStatus::Failed,
+                        reason: Some(e.to_string()),
+                    }),
+                },
+                None => records.push(RepairRecord {
+                    id,
+                    status: RepairStatus::Skipped,
+                    reason: Some("config_path_unavailable".to_string()),
+                }),
+            }
         }
     }
 

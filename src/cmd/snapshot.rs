@@ -307,6 +307,12 @@ fn rollback_with_tty(root: &Path, id: &str, yes: bool, is_tty: bool) -> Result<(
         "  pre-rollback snapshot: {} (roll back to this to undo)",
         report.pre_rollback_snapshot_id
     );
+    if let Some(warning) = &report.bootstrap_warning {
+        eprintln!(
+            "{} Warning: {warning} — re-run `numan init --refresh` to repair numan_init.nu.",
+            console::style("⚠").yellow()
+        );
+    }
 
     Ok(())
 }

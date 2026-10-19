@@ -107,6 +107,24 @@ pub fn execute(args: &MigrateArgs, numan_root: &Path, out: &mut dyn Write) -> Re
         return Ok(());
     }
 
+    // Nu paths + runner.
+    let nu_paths = NuPaths::load(numan_root)
+        .with_context(|| "Nu paths are not configured. Run `numan init` first.".to_string())?;
+    let runner = NuCandidateRunner::new(&nu_paths.nu_executable);
+
+    // Confirm the whole migration once up front. The per-import consent gate in
+    // `nupm_compat` only prints the consent block and aborts without `--yes`,
+    // so asking here — then passing consent granted to each import — is what
+    // makes `--yes` behave as "skip the prompt".
+    crate::util::confirm::confirm_or_bail(
+        &format!(
+            "Import {} package(s) from nupm and activate them?",
+            importable.len()
+        ),
+        args.yes,
+        "Migration cancelled.",
+    )?;
+
     // Snapshot before mutation.
     // Acquire mutation lock before snapshot + mutation.
     let _lock = acquire_mutation_lock(numan_root)?;
@@ -119,21 +137,20 @@ pub fn execute(args: &MigrateArgs, numan_root: &Path, out: &mut dyn Write) -> Re
     )
     .context("Failed to create pre-migration snapshot")?;
 
-    // Nu paths + runner.
-    let nu_paths = NuPaths::load(numan_root)
-        .with_context(|| "Nu paths are not configured. Run `numan init` first.".to_string())?;
-    let runner = NuCandidateRunner::new(&nu_paths.nu_executable);
-
-    // Import each.
+    // Import each, reusing the outer mutation lock so the nested non-blocking
+    // acquire does not self-deadlock.
     let mut imported_ids: Vec<String> = Vec::new();
+    let mut import_failures = 0usize;
     for (entry, scoped) in &importable {
-        let target = ScopedId::parse(scoped)?;
-        match crate::nupm_compat::import_module_with_runner(
+        let target = ScopedId::parse(scoped)
+            .expect("scoped ids are validated before the mutation lock is acquired");
+        match crate::nupm_compat::import_module_with_runner_under_lock(
             numan_root,
             &entry.source_path,
             &target,
-            args.yes,
+            true,
             &runner,
+            &_lock,
         ) {
             Ok(res) => {
                 writeln!(
@@ -145,11 +162,13 @@ pub fn execute(args: &MigrateArgs, numan_root: &Path, out: &mut dyn Write) -> Re
             }
             Err(e) => {
                 writeln!(out, "Failed to import {}: {:#}", scoped, e)?;
+                import_failures += 1;
             }
         }
     }
 
-    // Activate imported.
+    // Activate imported, reusing the same outer mutation lock.
+    let mut activation_failed = false;
     if !imported_ids.is_empty() {
         let activate_args = crate::cmd::activate::ActivateArgs {
             packages: imported_ids.clone(),
@@ -157,15 +176,27 @@ pub fn execute(args: &MigrateArgs, numan_root: &Path, out: &mut dyn Write) -> Re
             list: false,
             check: false,
         };
-        if let Err(e) = crate::cmd::activate::execute(&activate_args, numan_root) {
+        if let Err(e) = crate::cmd::activate::execute_under_lock(&activate_args, numan_root, &_lock)
+        {
             writeln!(out, "Activation failed: {:#}", e)?;
+            activation_failed = true;
         } else {
             writeln!(out, "Activated {} package(s).", imported_ids.len())?;
         }
     }
 
-    writeln!(out, "\nMigration complete.")?;
-    Ok(())
+    if import_failures == 0 && !activation_failed {
+        writeln!(out, "\nMigration complete.")?;
+        Ok(())
+    } else {
+        writeln!(
+            out,
+            "\nMigration finished with errors: {} import failure(s), activation {}.",
+            import_failures,
+            if activation_failed { "failed" } else { "ok" },
+        )?;
+        bail!("migration completed with errors");
+    }
 }
 
 fn compat_reason(c: NupmCompatibility) -> &'static str {
