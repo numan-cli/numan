@@ -50,30 +50,6 @@ pub struct ModuleActivation {
     pub activated_at: String,
 }
 
-/// Per-Nu-identity activation record for an overlay package (issue #17).
-///
-/// Ephemeral: an overlay is scoped to a session or project and is NOT treated
-/// as persistent activation by `is_active_for`. Tracked separately so rollback
-/// and drift handling can distinguish it from module/plugin activation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OverlayActivation {
-    /// Absolute path to the overlay entry `.nu` file within the installed payload.
-    pub entry_path: String,
-    /// Overlay name used for `overlay use` / `overlay hide`.
-    pub overlay_name: String,
-    /// Scope: "session" or "project".
-    pub scope: String,
-    /// Project root when scope == "project"; None for session scope.
-    #[serde(default)]
-    pub project_root: Option<String>,
-    /// SHA-256 of the Nu executable used when this overlay was recorded.
-    pub nu_executable_sha256: String,
-    /// Version string of the Nu executable used when this overlay was recorded.
-    pub nu_version: String,
-    /// Timestamp when this overlay record was written.
-    pub activated_at: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lockfile {
     pub version: u32,
