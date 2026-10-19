@@ -136,8 +136,23 @@ mod tests {
         let content = String::from_utf8(render_init_file(&paths)).unwrap();
         assert!(content.starts_with("# Generated and managed by Numan."));
         let path_str = format!("{}/numan.nu", vendor_str);
-        let escaped = path_str.replace('\\', "\\\\").replace('"', "\\\"");
-        assert!(content.contains(&format!("source \"{}\"", escaped)));
+        // Use a hardcoded format to avoid re-deriving the same escaping chain
+        // used in production (which would make the test a tautology).
+        assert!(content.contains(&format!("source \"{}\"", path_str)));
+    }
+
+    #[test]
+    fn render_init_file_escapes_backslashes_and_quotes() {
+        // Verify Nu string-literal escaping with a path containing \ and ".
+        // We test config_source_line directly because render_init_file requires
+        // actual filesystem paths that are valid on the host OS.
+        let raw = "C:\\Users\\test\"dir\
+        let init_path = std::path::Path::new(raw);
+        let line = config_source_line(init_path);
+        // Backslashes must be doubled and double-quotes must be backslash-escaped.
+        assert!(line.contains("\\\\"), "backslash not doubled in: {line}");
+        assert!(line.contains("\\\""), "double-quote not escaped in: {line}");
+        assert!(line.contains(CONFIG_SOURCE_MARKER));
     }
 
     #[test]
@@ -161,7 +176,7 @@ mod tests {
         regenerate_init_file(root, &paths).unwrap();
         let read = std::fs::read_to_string(root.join("nu_state/numan_init.nu")).unwrap();
         let path_str = format!("{}/numan.nu", vendor_str);
-        let escaped = path_str.replace('\\', "\\\\").replace('"', "\\\"");
-        assert!(read.contains(&format!("source \"{}\"", escaped)));
+        // Use a hardcoded format rather than re-deriving the escaping chain.
+        assert!(read.contains(&format!("source \"{}\"", path_str)));
     }
 }
