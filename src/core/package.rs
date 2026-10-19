@@ -228,19 +228,20 @@ impl fmt::Display for ModuleImportMode {
     }
 }
 
-/// Registry metadata describing how a module or overlay package should be activated.
+/// Registry metadata describing how a module, overlay, or hook package should be activated.
 ///
 /// Stored under `activation` in a `VersionEntry`. Recognized kinds:
 /// - `"nu-module"`: persistent module activation (Phase 4).
 /// - `"nu-overlay"`: session/project overlay activation (Phase 5, issue #17).
+/// - `"nu-hook"`: hook profile activation (Phase P1, issue #16).
 ///
 /// All other kinds are rejected at activation time.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RegistryActivationSpec {
-    /// Activation kind. `"nu-module"` or `"nu-overlay"`.
+    /// Activation kind. `"nu-module"`, `"nu-overlay"`, or `"nu-hook"`.
     pub kind: String,
     /// Import mode for the module. Defaults to `ModuleImportMode::Module`.
-    /// Ignored for `nu-overlay`.
+    /// Ignored for `nu-overlay` and `nu-hook`.
     #[serde(default)]
     pub import: ModuleImportMode,
     /// Package-relative entry point for an overlay (e.g. `"overlay.nu"`).
@@ -253,6 +254,23 @@ pub struct RegistryActivationSpec {
     /// Optional declared exported surface for conflict checks.
     #[serde(default)]
     pub exports: Option<Vec<String>>,
+    /// Hook bindings. Used when `kind = "nu-hook"`.
+    #[serde(default)]
+    pub bindings: Option<Vec<HookBinding>>,
+}
+
+/// A single hook binding declared by a package (issue #16).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookBinding {
+    /// Stable binding ID (unique within the package and across active hooks).
+    pub id: String,
+    /// Hook event name (must be in the allow-list).
+    pub event: String,
+    /// Package-relative handler `.nu` path.
+    pub handler: String,
+    /// Optional filter expression.
+    #[serde(default)]
+    pub filter: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -58,6 +58,20 @@ pub struct OverlayPackageSpec {
     pub exports: Vec<String>,
 }
 
+/// Per-package hook activation record (issue #16, Phase 5 — data model only).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookActivation {
+    /// Active binding IDs owned by this package.
+    pub binding_ids: Vec<String>,
+    /// SHA-256 of the Nu executable used when recorded.
+    pub nu_executable_sha256: String,
+    /// Version string of the Nu executable used when recorded.
+    pub nu_version: String,
+    /// Timestamp when this record was written.
+    pub activated_at: String,
+}
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lockfile {
     pub version: u32,
