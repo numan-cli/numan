@@ -31,7 +31,9 @@ pub fn render_init_file(nu_paths: &crate::nu::paths::NuPaths) -> Vec<u8> {
         // Only source the managed autoload file when it actually exists, so a
         // fully-deactivated state never references a missing file.
         if managed.is_file() {
-            out.push_str(&format!("source \"{vendor_dir}/numan.nu\"\n"));
+            let path_str = format!("{}/numan.nu", vendor_dir);
+            let escaped = path_str.replace('\\', "\\\\").replace('"', "\\\"");
+            out.push_str(&format!("source \"{}\"\n", escaped));
         }
     }
     out.into_bytes()
@@ -133,7 +135,9 @@ mod tests {
         let paths = make_paths(Some(&vendor_str));
         let content = String::from_utf8(render_init_file(&paths)).unwrap();
         assert!(content.starts_with("# Generated and managed by Numan."));
-        assert!(content.contains(&format!("source \"{}/numan.nu\"", vendor_str)));
+        let path_str = format!("{}/numan.nu", vendor_str);
+        let escaped = path_str.replace('\\', "\\\\").replace('"', "\\\"");
+        assert!(content.contains(&format!("source \"{}\"", escaped)));
     }
 
     #[test]
@@ -156,6 +160,8 @@ mod tests {
         let paths = make_paths(Some(&vendor_str));
         regenerate_init_file(root, &paths).unwrap();
         let read = std::fs::read_to_string(root.join("nu_state/numan_init.nu")).unwrap();
-        assert!(read.contains(&format!("source \"{}/numan.nu\"", vendor_str)));
+        let path_str = format!("{}/numan.nu", vendor_str);
+        let escaped = path_str.replace('\\', "\\\\").replace('"', "\\\"");
+        assert!(read.contains(&format!("source \"{}\"", escaped)));
     }
 }
