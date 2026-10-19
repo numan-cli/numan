@@ -78,6 +78,10 @@ uuid = { version = "1", features = ["v7", "v4"] }
 # Git (for source builds and registry sync)
 git2 = "0.21"
 
+# TUI
+ratatui = "0.30.2"
+crossterm = "0.29.0"
+
 # stdio redirect for doctor --json repair passes (Unix only)
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
