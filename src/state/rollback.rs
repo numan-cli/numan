@@ -916,15 +916,28 @@ mod tests {
         .unwrap();
         assert!(!root.join("nu_state/paths.json").exists());
 
-        // Paths appear later (e.g. numan init).
+        // Paths appear later (e.g. numan init), along with the Numan-owned
+        // bootstrap file.
         save_fake_paths(root, "hash-new", "0.113.1");
+        let init_path = root.join("nu_state/numan_init.nu");
+        std::fs::create_dir_all(init_path.parent().unwrap()).unwrap();
+        std::fs::write(&init_path, b"# stale bootstrap").unwrap();
         assert!(root.join("nu_state/paths.json").exists());
+        assert!(init_path.exists());
 
         let runner = FakeCandidateRunner::success();
-        rollback_to_snapshot(root, &snap.id, &runner).unwrap();
+        let report = rollback_to_snapshot(root, &snap.id, &runner).unwrap();
         assert!(
             !root.join("nu_state/paths.json").exists(),
             "rollback must remove paths.json when the snapshot recorded Absent"
+        );
+        assert!(
+            !init_path.exists(),
+            "rollback to Absent paths must not leave a stale numan_init.nu"
+        );
+        assert!(
+            report.bootstrap_warning.is_none(),
+            "successful cleanup must not report a bootstrap warning"
         );
     }
 

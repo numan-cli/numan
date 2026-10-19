@@ -177,7 +177,8 @@ mod tests {
         let paths = make_paths(Some(&vendor_str));
         let content = String::from_utf8(render_init_file(&paths)).unwrap();
         assert!(content.starts_with("# Generated and managed by Numan."));
-        assert!(content.contains(&format!("source \"{}/numan.nu\"", vendor_str)));
+        let expected = vendor_str.replace('\\', "/");
+        assert!(content.contains(&format!("source \"{expected}/numan.nu\"")));
     }
 
     #[test]
@@ -244,7 +245,8 @@ mod tests {
         let paths = make_paths(Some(&vendor_str));
         regenerate_init_file(root, &paths).unwrap();
         let read = std::fs::read_to_string(root.join("nu_state/numan_init.nu")).unwrap();
-        assert!(read.contains(&format!("source \"{}/numan.nu\"", vendor_str)));
+        let expected = vendor_str.replace('\\', "/");
+        assert!(read.contains(&format!("source \"{expected}/numan.nu\"")));
     }
 
     #[test]
