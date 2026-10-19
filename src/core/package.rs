@@ -245,8 +245,8 @@ pub struct RegistryActivationSpec {
     pub import: ModuleImportMode,
     /// Package-relative entry point for an overlay (e.g. `"overlay.nu"`).
     /// Required when `kind = "nu-overlay"`; ignored otherwise.
-    #[serde(default)]
-    pub entry: Option<String>,
+    /// Package-relative entry point for an overlay (e.g. `"overlay.nu"`).
+    /// Expected when `kind = "nu-overlay"` (validated at activation time in P2); ignored otherwise.
     /// Optional overlay name. Defaults to the package name when absent.
     #[serde(default)]
     pub overlay_name: Option<String>,

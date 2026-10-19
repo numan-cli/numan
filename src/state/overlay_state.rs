@@ -19,13 +19,20 @@ pub struct OverlayState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OverlayRecord {
+/// Scope of an overlay activation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OverlayScope {
+    Session,
+    Project,
+}
+
     pub package_id: String,
     pub overlay_name: String,
     pub entry_path: String,
     /// "session" or "project"
     pub scope: String,
-    #[serde(default)]
-    pub project_root: Option<String>,
+    pub scope: OverlayScope,
     pub activated_at: String,
 }
 
@@ -72,7 +79,7 @@ mod tests {
             overlay_name: "name".to_string(),
             entry_path: "/tmp/entry.nu".to_string(),
             scope: "session".to_string(),
-            project_root: None,
+            scope: OverlayScope::Session,
             activated_at: "2026-01-01T00:00:00Z".to_string(),
         });
         state.save(root).unwrap();
