@@ -8,7 +8,7 @@
 <img alt="Crates.io Version" src="https://img.shields.io/crates/d/numan-cli">
 
 **numan** is a cross-platform package manager for [Nushell](https://www.nushell.sh/). It installs plugins, modules, scripts, and completion packages from signed registries, verifies downloaded artifacts, and records immutable install state in a lockfile.
-Packages remain inert after installation. Plugins and modules are only registered with Nushell when you explicitly run `numan activate`.
+Packages remain inert after installation. Plugins and modules are only registered with Nushell when you explicitly run `numan activate`; hook packages require the separate `numan hook enable` command.
 
 Built in Rust for Linux, macOS, and Windows.
 
@@ -28,7 +28,7 @@ numan provides those guarantees:
 | **Reproducibility** | Lockfile v2 pins version, payload hash, and install origin |
 | **Platform safety** | Resolves artifacts for the current compile-time OS, architecture, and libc target |
 | **Nu compatibility** | Respects the Nushell version constraints declared by each package |
-| **Activation isolation** | `install` never modifies Nushell state. Only `activate` registers plugins or writes managed autoload files |
+| **Activation isolation** | `install` never modifies Nushell state. `activate` manages plugins/modules; `hook enable` manages only explicitly approved hook profiles |
 | **Crash recovery** | Uses journals to recover interrupted activation, autoload, lifecycle, and nupm import operations |
 | **nupm coexistence** | Provides read-only discovery, one-way import, and drift detection for existing nupm installations |
 
@@ -42,7 +42,7 @@ These workflows are covered by unit tests, hermetic integration tests, and real-
 
 - **Registry-backed installs**: Search packages, inspect available versions, and install `owner/name` or `owner/name@version`.
 - **Official registry**: `numan init` configures the `official` registry automatically. Its production trust root is built into numan, and `numan registry sync` verifies every signed index.
-- **Package types**: Plugins and modules support activation. Scripts and completion packages are currently install-only while their activation contracts are finalized.
+- **Package types**: Plugins and modules support `numan activate`. Hook profiles require explicit `numan hook enable`. Scripts and completion packages are currently install-only.
 - **Verified artifacts**: Plugin binaries require SHA-256 hashes, and registry indexes require valid Ed25519 signatures.
 - **Scoped activation**: Plugins remain active only while the Nushell executable hash, Nushell version, and plugin registry path match the recorded activation state.
 - **Module autoloads**: numan writes managed vendor autoload files with ownership markers and validates candidate files before promotion.
@@ -60,12 +60,15 @@ These workflows are covered by unit tests, hermetic integration tests, and real-
 | ----------------------- | ---------------------------- | ------------------ | -------------- |
 | Plugin | Yes | Yes, through Nu's plugin registry | Supported |
 | Module | Yes | Yes, through a numan-managed vendor autoload file | Supported |
+| Hook profile | Yes | Yes, through `numan hook enable` and an owned vendor-autoload file | Explicit opt-in; handlers run only on declared interactive events |
 | Script | Yes | No | Install-only; activation is deferred |
 | Completion package | Yes | No | Install-only; activation is deferred |
 
 Install-only packages remain inert: numan downloads, verifies, locks, lists,
 removes, and garbage-collects their payloads, but does not execute them or
-modify Nu configuration for them. This is separate from numan's own shell
+modify Nu configuration for them. Hook packages are also inert until explicitly
+enabled; inspect their declared events with `numan info` first. Hook changes load
+in new Nushell sessions. This is separate from numan's own shell
 completion installer: `numan completions <shell>` is supported for bash, fish,
 zsh, PowerShell, and Nushell (`nu`); use `--print` to emit the script instead.
 
@@ -266,6 +269,19 @@ For modules:
 numan deactivate owner/module-name
 ```
 
+For hook profiles, inspect every declared event and handler before enabling:
+
+```bash
+numan info owner/hook-package
+numan hook enable owner/hook-package
+numan hook list
+numan hook disable owner/hook-package
+```
+
+`numan hook disable` removes only Numan-owned bindings. Existing user hooks stay
+in place. Start a new Nushell session after enabling or disabling; an open
+session keeps the hooks loaded when it started.
+
 #### 5. Maintain installs
 
 ```bash
@@ -280,7 +296,7 @@ numan gc                          # delete unreferenced payloads
 
 For Homebrew, winget, or `cargo install` installs, `numan update --self` prints the matching upgrade command (`brew upgrade numan`, `winget upgrade tonythethompson.numan`, or `cargo install --locked --force numan-cli`) instead of replacing the binary. With `--check`, those installs still query GitHub Releases to report whether a newer version exists, then print the upgrade command only when an update is available. Standalone apply downloads the archive plus `SHA256SUMS` and `SHA256SUMS.sig`, verifies the Ed25519 signature with a public key baked into the binary, then checks the archive digest.
 
-numan snapshots activation state before `update`, `remove`, `activate`, and `deactivate`, so a bad change can be undone:
+numan snapshots activation state before `update`, `remove`, `activate`, `deactivate`, and hook profile changes, so a bad change can be undone:
 
 ```bash
 numan snapshot list
@@ -339,6 +355,9 @@ Global flag: `--root <path>` — override the numan root directory (all commands
 | `numan list` | List installed packages and activation status |
 | `numan activate [pkg...]` | Register plugins / write module autoloads (scripts and completion packages are deferred) |
 | `numan deactivate [pkg...]` | Remove module autoload entries |
+| `numan hook enable [pkg...]` | Explicitly enable declared Nushell hook bindings |
+| `numan hook disable [pkg...]` | Disable hook bindings; no IDs disables all |
+| `numan hook list` | Show active hook bindings |
 | `numan update [--check] [pkg]` | Upgrade installed packages |
 | `numan update --self [--check]` | Upgrade the numan binary (GitHub Release self-replace, or print brew/winget/cargo command) |
 | `numan remove [--force] <pkg>` | Remove from lockfile and delete payload |

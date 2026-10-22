@@ -24,6 +24,14 @@ fn execute_to(root: &Path, out: &mut dyn Write) -> Result<()> {
     for (id, entry) in &lockfile.packages {
         let status = match &nu_paths {
             Some(p)
+                if entry.hook_activation.as_ref().is_some_and(|activation| {
+                    activation.nu_executable_sha256 == p.nu_executable_hash
+                        && activation.nu_version == p.nu_version
+                }) =>
+            {
+                "hooks enabled"
+            }
+            Some(p)
                 if entry.is_active_for(
                     &p.nu_executable_hash,
                     &p.nu_version,
@@ -59,6 +67,7 @@ mod tests {
     fn base_entry(version: &str, package_type: &str) -> LockfileEntry {
         LockfileEntry {
             hook_activation: None,
+            hook_bindings: None,
             version: version.to_string(),
             package_type: package_type.to_string(),
             source: "binary".to_string(),

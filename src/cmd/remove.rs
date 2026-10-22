@@ -67,6 +67,13 @@ pub fn execute_reviewed(
 
     ensure_plugin_not_active(&entry, &args.package)?;
     ensure_not_bundled_plugin(&entry, &args.package)?;
+    if entry.hook_activation.is_some() {
+        bail!(
+            "Package '{}' has active Nushell hooks. Run `numan hook disable {}` before removal.",
+            args.package,
+            args.package
+        );
+    }
     if !args.force && entry.module_activation.is_some() {
         bail!(
             "Package '{}' is currently active as a module. \
@@ -103,6 +110,13 @@ pub fn execute_reviewed(
     };
     ensure_plugin_not_active(&entry, &args.package)?;
     ensure_not_bundled_plugin(&entry, &args.package)?;
+    if entry.hook_activation.is_some() {
+        bail!(
+            "Package '{}' has active Nushell hooks. Run `numan hook disable {}` before removal.",
+            args.package,
+            args.package
+        );
+    }
     if !args.force && entry.module_activation.is_some() {
         bail!(
             "Package '{}' is currently active as a module. \
@@ -222,6 +236,7 @@ mod tests {
     fn base_entry() -> LockfileEntry {
         LockfileEntry {
             hook_activation: None,
+            hook_bindings: None,
             version: "1.0.0".to_string(),
             package_type: "plugin".to_string(),
             source: "binary".to_string(),

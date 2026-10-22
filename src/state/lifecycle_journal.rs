@@ -63,6 +63,8 @@ pub enum LifecycleStage {
     ActivationProfileCommitted,
     /// Rollback: overlay activation state (`nu_state/overlays.json`) committed or cleared.
     OverlayStateCommitted,
+    /// Rollback: hook profile (`nu_state/hook_profile.json`) committed or cleared.
+    HookProfileCommitted,
     /// Rollback: all owned state committed; journal clear pending.
     Completed,
 }

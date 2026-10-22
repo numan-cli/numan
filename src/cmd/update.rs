@@ -230,6 +230,19 @@ pub fn execute_reviewed(
                     failures.push(update.package_id.clone());
                     continue;
                 }
+                if current.hook_activation.is_some() {
+                    let e = anyhow::anyhow!(
+                        "Package '{}' has active Nushell hooks. Run `numan hook disable {}` before updating.",
+                        update.package_id,
+                        update.package_id
+                    );
+                    if args.package.is_some() {
+                        return Err(e);
+                    }
+                    eprintln!("  {e}");
+                    failures.push(update.package_id.clone());
+                    continue;
+                }
                 if current.activation.is_some() {
                     let e = anyhow::anyhow!(
                         "Package '{}' has a plugin activation record, but Nu paths \
@@ -603,6 +616,11 @@ fn plan_active_update(
     pkg_id: &str,
     nu_paths: &NuPaths,
 ) -> Result<ActiveUpdatePlan> {
+    if entry.hook_activation.is_some() {
+        bail!(
+            "Package '{pkg_id}' has active Nushell hooks. Run `numan hook disable {pkg_id}` before updating."
+        );
+    }
     if entry.module_activation.is_some() {
         bail!(
             "Package '{}' is currently active as a module. \
@@ -691,6 +709,7 @@ mod tests {
     fn base_entry() -> LockfileEntry {
         LockfileEntry {
             hook_activation: None,
+            hook_bindings: None,
             version: "1.0.0".to_string(),
             package_type: "plugin".to_string(),
             source: "binary".to_string(),
@@ -899,6 +918,7 @@ mod tests {
                 pkg_id.clone(),
                 LockfileEntry {
                     hook_activation: None,
+                    hook_bindings: None,
                     version: "1.0.0".to_string(),
                     package_type: "plugin".to_string(),
                     source: "binary".to_string(),

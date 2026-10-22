@@ -161,6 +161,7 @@ mod tests {
             "owner/pkg".to_string(),
             crate::state::lockfile::LockfileEntry {
                 hook_activation: None,
+                hook_bindings: None,
                 version: "1.0.0".to_string(),
                 package_type: "module".to_string(),
                 source: "archive".to_string(),
@@ -240,6 +241,7 @@ mod tests {
             "owner/pkg".to_string(),
             crate::state::lockfile::LockfileEntry {
                 hook_activation: None,
+                hook_bindings: None,
                 version: "1.1.0".to_string(),
                 package_type: "module".to_string(),
                 source: "archive".to_string(),
@@ -311,6 +313,7 @@ mod tests {
             "owner/pkg".to_string(),
             crate::state::lockfile::LockfileEntry {
                 hook_activation: None,
+                hook_bindings: None,
                 version: "1.0.0".to_string(),
                 package_type: "module".to_string(),
                 source: "archive".to_string(),

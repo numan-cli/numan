@@ -42,6 +42,9 @@ pub enum Commands {
     Activate(cmd::activate::ActivateArgs),
     /// Deactivate active plugins and modules
     Deactivate(cmd::deactivate::DeactivateArgs),
+    /// Manage explicitly enabled Nushell hook profiles
+    #[command(subcommand)]
+    Hook(cmd::hook::HookCommands),
     /// List all installed packages
     List,
     /// Initialize Numan and probe the local Nu installation

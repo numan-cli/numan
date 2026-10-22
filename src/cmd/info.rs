@@ -81,6 +81,29 @@ pub fn format_info(pkg: &Package, platform: &Platform, nu: Option<&NuVersion>) -
             ver.version, ver.nu_version
         ));
 
+        if let Some(activation) = ver
+            .activation
+            .as_ref()
+            .filter(|spec| spec.kind == "nu-hook")
+        {
+            out.push_str(
+                "    capability: high-risk Nushell hooks; explicit `numan hook enable` required\n",
+            );
+            if let Some(bindings) = activation.bindings.as_ref() {
+                for binding in bindings {
+                    let filter = binding
+                        .filter
+                        .as_deref()
+                        .map(|value| format!(" [filter: {value}]"))
+                        .unwrap_or_default();
+                    out.push_str(&format!(
+                        "    hook: {} -> {}{} (inactive until enabled)\n",
+                        binding.event, binding.handler, filter
+                    ));
+                }
+            }
+        }
+
         if !ver.verified_with.is_empty() {
             out.push_str(&format!(
                 "    tested with: {}\n",
@@ -219,6 +242,25 @@ mod tests {
         let out = format_info(&pkg, &linux_platform(), None);
         assert!(out.contains("Activation: install-only"), "{out}");
         assert!(out.contains("Type:       completion"), "{out}");
+    }
+
+    #[test]
+    fn format_info_shows_hook_triggers_before_explicit_activation() {
+        let mut pkg = sample_plugin(false);
+        pkg.versions[0].activation = Some(crate::core::package::RegistryActivationSpec {
+            kind: "nu-hook".into(),
+            import: Default::default(),
+            bindings: Some(vec![crate::core::package::HookBinding {
+                id: "before-prompt".into(),
+                event: "pre_prompt".into(),
+                handler: "hooks/prompt.nu".into(),
+                filter: None,
+            }]),
+        });
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(out.contains("high-risk Nushell hooks"), "{out}");
+        assert!(out.contains("pre_prompt -> hooks/prompt.nu"), "{out}");
+        assert!(out.contains("inactive until enabled"), "{out}");
     }
 
     #[test]

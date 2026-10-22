@@ -338,6 +338,17 @@ where
         package.package_type,
         PackageType::Script | PackageType::Completion
     );
+    let hook_package = Lockfile::load(root)?
+        .packages
+        .get(package_id)
+        .is_some_and(|entry| entry.hook_bindings.is_some());
+
+    if hook_package {
+        println!(
+            "Installed '{package_id}' with hooks disabled. Review them with `numan info {package_id}`, then run `numan hook enable {package_id}` to opt in."
+        );
+        return Ok(());
+    }
 
     if args.no_activate || install_only {
         if install_only {
@@ -903,6 +914,7 @@ mod tests {
     ) -> crate::state::lockfile::LockfileEntry {
         crate::state::lockfile::LockfileEntry {
             hook_activation: None,
+            hook_bindings: None,
             version: "0.1.0".to_string(),
             package_type: "script".to_string(),
             source: "registry".to_string(),

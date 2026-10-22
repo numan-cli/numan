@@ -1160,6 +1160,10 @@ fn resolve_module_targets(
             if entry.package_type != "module" {
                 continue;
             }
+
+            if entry.hook_bindings.is_some() {
+                continue;
+            }
             if entry.is_module_active_for(
                 &nu_paths.nu_executable_hash,
                 &nu_paths.nu_version,
@@ -1210,6 +1214,12 @@ fn resolve_module_targets(
                 // Non-module explicit packages are handled by resolve_plugin_targets
                 // or error there. Skip here.
                 continue;
+            }
+
+            if entry.hook_bindings.is_some() {
+                bail!(
+                    "Package '{pkg_id}' declares hooks. Hooks are a separate capability; use `numan hook enable {pkg_id}`."
+                );
             }
 
             if !entry.is_module_activatable() {
@@ -1580,6 +1590,7 @@ mod tests {
             "owner/myscript".to_string(),
             LockfileEntry {
                 hook_activation: None,
+                hook_bindings: None,
                 version: "1.0.0".to_string(),
                 package_type: "script".to_string(),
                 source: "archive".to_string(),
@@ -1662,6 +1673,7 @@ mod tests {
             "owner/mycomp".to_string(),
             LockfileEntry {
                 hook_activation: None,
+                hook_bindings: None,
                 version: "1.0.0".to_string(),
                 package_type: "completion".to_string(),
                 source: "archive".to_string(),
@@ -1742,6 +1754,7 @@ mod tests {
             "owner/mymod".to_string(),
             LockfileEntry {
                 hook_activation: None,
+                hook_bindings: None,
                 version: "1.0.0".to_string(),
                 package_type: "module".to_string(),
                 source: "archive".to_string(),
@@ -1834,6 +1847,7 @@ mod tests {
             "owner/depmod".to_string(),
             LockfileEntry {
                 hook_activation: None,
+                hook_bindings: None,
                 version: "1.0.0".to_string(),
                 package_type: "module".to_string(),
                 source: "archive".to_string(),

@@ -1,4 +1,4 @@
-//! Hook profile state (issue #16, Phase 5 — data model only).
+//! Hook profile state and active bindings (issue #16).
 //!
 //! Tracks Numan-owned hook bindings and their scope. Ephemeral merge state is
 //! regenerated, never partially merged.
@@ -13,6 +13,16 @@ use crate::util::atomic::write_json_atomic;
 pub struct HookProfile {
     #[serde(default)]
     pub bindings: Vec<HookBindingRecord>,
+    #[serde(default)]
+    pub nu_executable: Option<String>,
+    #[serde(default)]
+    pub nu_executable_sha256: Option<String>,
+    #[serde(default)]
+    pub nu_version: Option<String>,
+    #[serde(default)]
+    pub vendor_autoload_dir: Option<String>,
+    #[serde(default)]
+    pub managed_file_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,8 +37,12 @@ pub struct HookBindingRecord {
 }
 
 impl HookProfile {
+    pub fn profile_path(root: &Path) -> std::path::PathBuf {
+        root.join("nu_state").join("hook_profile.json")
+    }
+
     pub fn load(root: &Path) -> Result<Self> {
-        let path = root.join("nu_state").join("hook_profile.json");
+        let path = Self::profile_path(root);
         if !path.exists() {
             return Ok(Self::default());
         }
@@ -39,12 +53,12 @@ impl HookProfile {
     }
 
     pub fn save(&self, root: &Path) -> Result<()> {
-        let path = root.join("nu_state").join("hook_profile.json");
+        let path = Self::profile_path(root);
         write_json_atomic(&path, self)
     }
 
     pub fn delete(root: &Path) -> Result<()> {
-        let path = root.join("nu_state").join("hook_profile.json");
+        let path = Self::profile_path(root);
         if path.exists() {
             std::fs::remove_file(&path)
                 .with_context(|| format!("Failed to remove '{}'", path.display()))?;

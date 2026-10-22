@@ -569,6 +569,11 @@ fn classify_and_validate_packages(
                 bail!("Package '{pkg_id}' not found in lockfile (not installed)");
             }
         };
+        if entry.hook_activation.is_some() {
+            bail!(
+                "Package '{pkg_id}' has active Nushell hooks. Run `numan hook disable {pkg_id}`."
+            );
+        }
         match entry.package_type.as_str() {
             "module" | "plugin" => {}
             "script" => {
@@ -1345,6 +1350,7 @@ mod tests {
                 id.to_string(),
                 LockfileEntry {
                     hook_activation: None,
+                    hook_bindings: None,
                     version: "1.0.0".to_string(),
                     package_type: pkg_type.to_string(),
                     source: "archive".to_string(),
@@ -1980,6 +1986,7 @@ mod tests {
 
         let mut entry = LockfileEntry {
             hook_activation: None,
+            hook_bindings: None,
             version: "1.0.0".to_string(),
             package_type: "plugin".to_string(),
             source: "binary".to_string(),

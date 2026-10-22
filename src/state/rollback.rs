@@ -20,6 +20,7 @@ use crate::nu::autoload::{validate_candidate, write_candidate, CandidateRunner};
 use crate::nu::paths::NuPaths;
 use crate::state::activation_profile::ActivationProfile;
 use crate::state::autoload_state::AutoloadState;
+use crate::state::hook_profile::HookProfile;
 use crate::state::lifecycle_journal::{LifecycleOp, LifecycleStage, PendingLifecycle};
 use crate::state::overlay_state::OverlayState;
 use crate::state::snapshot::{
@@ -138,6 +139,22 @@ pub fn rollback_to_snapshot(
                 nu_version,
                 &nu_executable_sha256[..12.min(nu_executable_sha256.len())]
             );
+        }
+    }
+
+    if let Some(SnapshotSidecar::Present { value, .. }) = &snapshot.hook_profile {
+        if !value.bindings.is_empty() {
+            let nu_paths = NuPaths::load(root).context(
+                "Snapshot contains an active hook profile but the Nu path cache is unavailable. Run 'numan init' first.",
+            )?;
+            if value.nu_executable_sha256.as_deref() != Some(&nu_paths.nu_executable_hash)
+                || value.nu_version.as_deref() != Some(&nu_paths.nu_version)
+            {
+                bail!(
+                    "Snapshot '{}' contains hooks for a different Nu identity. Disable or re-enable hooks under the current Nu before rollback.",
+                    id
+                );
+            }
         }
     }
 
@@ -296,6 +313,41 @@ pub fn rollback_to_snapshot(
         );
     }
 
+    // Commit 8: explicit hook profile. Legacy snapshots have no hook sidecar
+    // and preserve current hook state.
+    match &snapshot.hook_profile {
+        None => {}
+        Some(SnapshotSidecar::Present { value, .. }) => {
+            value.save(root)?;
+            if !value.bindings.is_empty() {
+                if let Some(managed_path) = value.managed_file_path.as_deref() {
+                    let nu_paths = crate::nu::paths::NuPaths::load(root)?;
+                    let content = crate::nu::hooks::generate_hook_autoload_content(
+                        value,
+                        &HookProfile::profile_path(root),
+                    )?;
+                    let managed_path = std::path::Path::new(managed_path);
+                    let candidate = crate::nu::autoload::write_candidate(managed_path, &content)?;
+                    let runner =
+                        crate::nu::autoload::NuCandidateRunner::new(&nu_paths.nu_executable);
+                    crate::nu::autoload::validate_candidate(
+                        &candidate,
+                        &runner,
+                        &value
+                            .bindings
+                            .iter()
+                            .map(|binding| binding.package_id.as_str())
+                            .collect::<Vec<_>>(),
+                    )?;
+                    crate::nu::autoload::replace_managed_file(managed_path, &candidate)?;
+                }
+            }
+        }
+        Some(SnapshotSidecar::Absent) => HookProfile::delete(root)?,
+    }
+    journal.stage = LifecycleStage::HookProfileCommitted;
+    journal.save(root)?;
+
     journal.stage = LifecycleStage::Completed;
     journal.save(root)?;
     PendingLifecycle::clear(root)?;
@@ -378,6 +430,7 @@ mod tests {
     fn entry_for(payload_rel: &str) -> crate::state::lockfile::LockfileEntry {
         crate::state::lockfile::LockfileEntry {
             hook_activation: None,
+            hook_bindings: None,
             version: "1.0.0".to_string(),
             package_type: "module".to_string(),
             source: "archive".to_string(),
