@@ -240,6 +240,18 @@ mod generation_tests {
                 );
                 std::path::PathBuf::from(String::from_utf8_lossy(&output.stdout).trim().to_string())
             });
+        let version_output = std::process::Command::new(&nu)
+            .args(["-n", "-c", "version | get version"])
+            .output()
+            .expect("Nushell must report its version");
+        assert!(
+            version_output.status.success(),
+            "Nu failed to report its version: {}",
+            String::from_utf8_lossy(&version_output.stderr)
+        );
+        let nu_version = String::from_utf8_lossy(&version_output.stdout)
+            .trim()
+            .to_string();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let profile_path = root.join("nu_state/hook_profile.json");
@@ -252,7 +264,7 @@ mod generation_tests {
         std::fs::write(&env_handler_path, "print 'env-change-handler-ran'\n").unwrap();
         let profile = HookProfile {
             nu_executable: Some(nu.to_string_lossy().replace('\\', "/")),
-            nu_version: Some("0.116.1".into()),
+            nu_version: Some(nu_version),
             bindings: vec![
                 HookBindingRecord {
                     id: "owner/tool/prompt".into(),

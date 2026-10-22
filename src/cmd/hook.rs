@@ -266,10 +266,14 @@ fn disable(
             lockfile.save(root)?;
             HookProfile::delete(root)?;
         }
-        println!(
-            "Reconciled {} stale hook activation record(s).",
-            stale_packages.len()
-        );
+        if stale_packages.is_empty() {
+            println!("Reconciled stale hook integration file.");
+        } else {
+            println!(
+                "Reconciled {} stale hook activation record(s).",
+                stale_packages.len()
+            );
+        }
         return Ok(());
     }
 
