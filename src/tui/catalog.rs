@@ -577,9 +577,7 @@ mod tests {
                         field.value = field.spec.possible.first().cloned().unwrap_or_default()
                     }
                     FieldKind::PackageId => field.value = "owner/pkg".into(),
-                    FieldKind::SnapshotId => {
-                        field.value = "test-snapshot-id".into()
-                    }
+                    FieldKind::SnapshotId => field.value = "test-snapshot-id".into(),
                     FieldKind::RegistryName => field.value = "custom".into(),
                     FieldKind::Path => field.value = "/tmp/x".into(),
                     FieldKind::Version => field.value = "owner/pkg@1.0.0".into(),

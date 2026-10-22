@@ -677,11 +677,7 @@ fn read_only_execution_captures_output_and_refuses_mutations() {
     assert!(snapshots.contains("No snapshots"), "{snapshots}");
     for argv in [
         vec!["remove", "owner/pkg"],
-        vec![
-            "snapshot",
-            "rollback",
-            "test-snapshot-id",
-        ],
+        vec!["snapshot", "rollback", "test-snapshot-id"],
         vec!["registry", "sync"],
         vec!["update", "--self"],
     ] {
