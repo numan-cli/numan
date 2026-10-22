@@ -226,6 +226,8 @@ fn prune_dead(state: &mut OverlayState) {
             system.process(Pid::from_u32(pid)).map_or_else(
                 || !process_definitely_absent(pid),
                 |process| {
+                    // An existing reservation must survive inspection failure;
+                    // new observations require a verifiable nonzero identity.
                     process.start_time() == 0
                         || r.process_started
                             .is_none_or(|started| started == process.start_time())
@@ -439,10 +441,10 @@ fn prepare(root: &Path, args: &PrepareArgs) -> Result<Prepared> {
     let requested = lockfile
         .packages
         .get(&args.activation.package)
-        .unwrap()
+        .context("Overlay package disappeared from the lockfile")?
         .overlay
         .as_ref()
-        .unwrap();
+        .context("Overlay package has no activation metadata")?;
     for r in state
         .overlays
         .iter()
@@ -527,7 +529,10 @@ fn prepare_hide(root: &Path, args: &PrepareHideArgs) -> Result<Prepared> {
         );
     }
     let response = Prepared {
-        txn: record.txn.clone().unwrap(),
+        txn: record
+            .txn
+            .clone()
+            .context("Active overlay record is missing transaction ID")?,
         name: record.overlay_name.clone(),
         code: format!(
             "overlay hide {} --keep-env [PWD]",

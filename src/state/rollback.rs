@@ -87,6 +87,7 @@ pub fn rollback_to_snapshot(
     }
 
     let snapshot = load_snapshot(root, id)?;
+    let current = Lockfile::load(root)?;
     for record in OverlayState::load(root)?.overlays {
         let target = snapshot
             .lockfile
@@ -94,7 +95,6 @@ pub fn rollback_to_snapshot(
             .get(&record.package_id)
             .context("Rollback would remove a package reserved by a live overlay session")?;
         let target_payload = root.join(&target.payload_path).canonicalize()?;
-        let current = Lockfile::load(root)?;
         let current_entry = current
             .packages
             .get(&record.package_id)

@@ -79,7 +79,9 @@ impl OverlayState {
         let mut paths = Vec::new();
         for record in Self::load(root)?.overlays {
             let entry = PathBuf::from(&record.entry_path);
-            let entry = entry.canonicalize().unwrap_or(entry);
+            let entry = entry
+                .canonicalize()
+                .context("Cannot resolve reserved overlay entry; refusing garbage collection")?;
             let path = if let Some(payload) = record.payload_path {
                 PathBuf::from(payload)
             } else {
@@ -94,7 +96,9 @@ impl OverlayState {
             {
                 bail!("Overlay payload contains parent traversal");
             }
-            let path = path.canonicalize().unwrap_or(path);
+            let path = path
+                .canonicalize()
+                .context("Cannot resolve reserved overlay payload; refusing garbage collection")?;
             let packages = canonical_root.join("packages");
             if !path.starts_with(&packages)
                 || path.strip_prefix(&packages)?.components().count() != 4
@@ -154,6 +158,24 @@ impl OverlayState {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn unresolved_reserved_entry_aborts_payload_enumeration() {
+        let dir = tempdir().unwrap();
+        write_json_atomic(
+            &dir.path().join("nu_state/overlays.json"),
+            &serde_json::json!({"overlays": [{
+                "package_id": "owner/tool", "overlay_name": "tool",
+                "entry_path": dir.path().join("packages/modules/owner/tool/1/mod.nu"),
+                "scope": "session", "activated_at": "now"
+            }]}),
+        )
+        .unwrap();
+        assert!(OverlayState::referenced_payloads(dir.path())
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot resolve reserved overlay entry"));
+    }
 
     #[test]
     fn roundtrip() {
