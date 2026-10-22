@@ -228,17 +228,32 @@ impl fmt::Display for ModuleImportMode {
     }
 }
 
-/// Registry metadata describing how a module package should be activated.
+/// Registry metadata describing how a module or overlay package should be activated.
 ///
-/// Stored under `activation` in a `VersionEntry`. Only `kind = "nu-module"`
-/// is recognized in Phase 4; all other kinds are rejected at activation time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Stored under `activation` in a `VersionEntry`. Activation kinds:
+/// - `"nu-module"`: persistent module activation (Phase 4).
+/// - `"nu-overlay"`: reserved for planned session/project overlay activation
+///   (Phase 5, issue #17); overlay activation is not yet supported.
+///
+/// Only `"nu-module"` is currently supported at activation time.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RegistryActivationSpec {
-    /// Must be `"nu-module"` for Nushell module packages.
+    /// Activation kind. `"nu-module"` or the reserved `"nu-overlay"`.
     pub kind: String,
     /// Import mode for the module. Defaults to `ModuleImportMode::Module`.
+    /// Ignored for `nu-overlay`.
     #[serde(default)]
     pub import: ModuleImportMode,
+    /// Package-relative entry point for an overlay (e.g. `"overlay.nu"`).
+    /// Expected when `kind = "nu-overlay"` (validated at activation time in P2); ignored otherwise.
+    #[serde(default)]
+    pub entry: Option<String>,
+    /// Optional overlay name. Defaults to the package name when absent.
+    #[serde(default)]
+    pub overlay_name: Option<String>,
+    /// Optional declared exported surface for conflict checks.
+    #[serde(default)]
+    pub exports: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

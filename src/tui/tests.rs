@@ -131,6 +131,9 @@ impl Fixture {
                 activation: (!self.plugin).then_some(RegistryActivationSpec {
                     kind: "nu-module".into(),
                     import: ModuleImportMode::All,
+                    entry: None,
+                    overlay_name: None,
+                    exports: None,
                 }),
                 provenance: None,
                 evidence_tier: None,
