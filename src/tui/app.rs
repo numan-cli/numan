@@ -50,6 +50,11 @@ impl Shell {
 
 pub enum Command {
     Sync,
+    /// Run a catalog command through `operations::execute_cli`. The name is
+    /// deliberately not "read-only": reviewed mutating commands use it too.
+    /// Constructed by the Commands UI in an upper stack layer.
+    #[allow(dead_code)]
+    ExecuteCli(Vec<String>),
     Reload,
     Prepare(Action, String, String, Option<String>),
     Execute(Review),

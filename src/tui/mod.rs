@@ -1,5 +1,6 @@
 //! Optional, explicit terminal workbench. No network or mutation on view entry.
 mod app;
+pub mod catalog;
 pub mod operations;
 #[cfg(test)]
 mod tests;
@@ -34,6 +35,9 @@ impl Worker {
                 },
                 || match command {
                     Command::Sync => Completion::Finished(operations::sync(&root)),
+                    Command::ExecuteCli(argv) => {
+                        Completion::Finished(operations::execute_cli(&root, &argv))
+                    }
                     Command::Reload => Completion::Loaded(operations::load(&root).map(Box::new)),
                     Command::Prepare(action, id, registry, pinned) => Completion::Prepared(
                         operations::prepare(&root, action, &id, &registry, pinned.as_deref()),
