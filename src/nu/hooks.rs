@@ -228,7 +228,18 @@ mod generation_tests {
     fn generated_hook_runtime_preserves_user_hooks_and_runs_owned_handler() {
         let nu = std::env::var_os("NUMAN_TEST_NU")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("nu"));
+            .unwrap_or_else(|| {
+                let output = std::process::Command::new("nu")
+                    .args(["-n", "-c", "$nu.current-exe"])
+                    .output()
+                    .expect("Nushell must be available on PATH for the ignored runtime test");
+                assert!(
+                    output.status.success(),
+                    "Nu failed to report its executable path: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                std::path::PathBuf::from(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            });
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let profile_path = root.join("nu_state/hook_profile.json");
