@@ -521,8 +521,11 @@ Network failure may retain verified cached data; inspect the transcript for fall
                     },
                 ));
             }
+            let content_lines = form.fields.len() as u32 * 2 + 2;
+            let max_scroll = content_lines.saturating_sub(parts[0].height as u32);
             let field_scroll = (form.selected as u32 * 2)
-                .saturating_sub(u32::from(parts[0].height.saturating_sub(1)));
+                .saturating_sub(u32::from(parts[0].height.saturating_sub(1)))
+                .min(max_scroll);
             frame.render_widget(
                 Paragraph::new(ratatui::text::Text::from(lines))
                     .wrap(Wrap { trim: false })
