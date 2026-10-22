@@ -343,6 +343,6 @@ Executor key: R = Phase 1 read-only, M2/M3/M4 = mutation phase, X = exception ab
 
 ## Open questions
 
-None blocking Phase 0–2. One decision is required before Phase 4: the `update --self`
-option (a) vs (b) in § "Parity exceptions".
+None. The `update --self` decision was resolved during implementation; see
+"Parity exceptions".
 
