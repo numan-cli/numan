@@ -30,7 +30,7 @@ impl Worker {
         let handle = thread::spawn(move || {
             output::with_sink(
                 move |event| {
-                    let _ = send.try_send(event);
+                    let _ = send.send(event);
                 },
                 || match command {
                     Command::Sync => Completion::Finished(operations::sync(&root)),
