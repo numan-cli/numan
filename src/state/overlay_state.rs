@@ -10,6 +10,12 @@ use std::path::{Path, PathBuf};
 
 use crate::util::atomic::write_json_atomic;
 
+#[derive(Debug, thiserror::Error)]
+#[error("Package '{package_id}' is pinned by an overlay session. Hide it in that shell or close the shell and run `numan overlay reconcile` first.")]
+pub struct OverlayReservationError {
+    pub package_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct OverlayState {
     /// Overlay transactions, including unconfirmed payload reservations.
@@ -69,7 +75,10 @@ impl OverlayState {
             .iter()
             .any(|r| r.package_id == package_id)
         {
-            bail!("Package '{package_id}' is pinned by an overlay session. Hide it in that shell or close the shell and run `numan overlay reconcile` first.");
+            return Err(OverlayReservationError {
+                package_id: package_id.to_owned(),
+            }
+            .into());
         }
         Ok(())
     }

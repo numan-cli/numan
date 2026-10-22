@@ -87,6 +87,23 @@ pub fn rollback_to_snapshot(
     }
 
     let snapshot = load_snapshot(root, id)?;
+    // Exact-payload precondition: never approximate a rollback.
+    let payload_errors = verify_payloads(
+        root,
+        &snapshot.lockfile,
+        &snapshot.manifest.payload_revisions,
+    )?;
+    if !payload_errors.is_empty() {
+        bail!(
+            "Cannot roll back to snapshot '{}': required immutable payloads are \
+             missing or corrupted:\n  {}\n\
+             Reinstall the exact package revisions listed above, then retry. \
+             Numan will not substitute different artifacts during rollback.",
+            id,
+            payload_errors.join("\n  ")
+        );
+    }
+
     let current = Lockfile::load(root)?;
     for record in OverlayState::load(root)?.overlays {
         let target = snapshot
@@ -126,23 +143,6 @@ pub fn rollback_to_snapshot(
                 crate::util::fs_safety::assert_managed_file_owned(managed_path)?;
             }
         }
-    }
-
-    // Exact-payload precondition: never approximate a rollback.
-    let payload_errors = verify_payloads(
-        root,
-        &snapshot.lockfile,
-        &snapshot.manifest.payload_revisions,
-    )?;
-    if !payload_errors.is_empty() {
-        bail!(
-            "Cannot roll back to snapshot '{}': required immutable payloads are \
-             missing or corrupted:\n  {}\n\
-             Reinstall the exact package revisions listed above, then retry. \
-             Numan will not substitute different artifacts during rollback.",
-            id,
-            payload_errors.join("\n  ")
-        );
     }
 
     // Root identity: snapshot autoload content embeds absolute paths under the

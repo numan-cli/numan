@@ -740,6 +740,33 @@ mod tests {
     }
 
     #[test]
+    fn reserved_missing_payload_keeps_rollback_remediation() {
+        let dir = fixture();
+        let snapshot = create_snapshot(
+            dir.path(),
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Activate,
+            None,
+            None,
+        )
+        .unwrap();
+        prepare(dir.path(), &args(session())).unwrap();
+        std::fs::remove_file(dir.path().join("packages/modules/owner/tool/1/overlay.nu")).unwrap();
+        let error = crate::state::rollback::rollback_to_snapshot(
+            dir.path(),
+            &snapshot.id,
+            &crate::nu::autoload::FakeCandidateRunner::success(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("owner/tool"), "{error}");
+        assert!(
+            error.contains("Reinstall the exact package revisions"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn held_mutation_lock_leaves_nothing_reserved() {
         let dir = fixture();
         let _lock = acquire_mutation_lock(dir.path()).unwrap();

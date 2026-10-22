@@ -73,7 +73,8 @@ in new Nushell sessions. This is separate from numan's own shell
 completion installer: `numan completions <shell>` is supported for bash, fish,
 zsh, PowerShell, and Nushell (`nu`); use `--print` to emit the script instead.
 
-Run `numan init --refresh` and open a new Nu session to load the overlay commands.
+Run `numan init` for a new root, or `numan init --refresh` for an existing
+installation, then open a new Nu session to load the overlay commands.
 `numan overlay use owner/package` takes effect at the next prompt; commands from
 the overlay cannot be used later on the same input line. `numan overlay hide`
 preserves the current working directory. Each shell has independent activation

@@ -594,6 +594,9 @@ mod tests {
 
         let error = install_package("owner/pkg", None, &options).unwrap_err();
 
+        assert!(error
+            .downcast_ref::<crate::state::overlay_state::OverlayReservationError>()
+            .is_some());
         assert!(error.to_string().contains("pinned by an overlay session"));
         assert!(Lockfile::load(&root).unwrap().packages.is_empty());
         assert!(!root.join("packages").exists());

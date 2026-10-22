@@ -2,12 +2,10 @@
 
 ## Checkout and publication
 
-- Worktree: `C:\Users\tonyt\.codex\worktrees\overlay-p3\numan`
 - Branch: `codex/overlay-p3`, pushed to origin.
 - PR: https://github.com/numan-cli/numan/pull/160, targeting master.
 - Overlay P1/P2 PRs #147 and #150 are merged. Master through TUI parity PR #157
   was merged into this branch; do not retarget to the old overlay branches.
-- The primary checkout, other worktrees, and live Nu configuration were preserved.
 
 ## Implementation
 
@@ -82,7 +80,4 @@ identity inheritance has not received a dedicated PTY case. Degraded execution
 requires closing the affected shell and reconciling; no automatic repair of
 arbitrary partial Nu state is claimed. Review the PR's latest checks before merge.
 
-Build output is stored at `D:\Dev\numan_workspace\.codex-build\overlay-p3-target`
-through a junction at this worktree's `target`. Local check logs are alongside it
-as `overlay-p3-standard.log`, `overlay-p3-tui.log`, and `overlay-p3-nu115.log`.
 User-facing contract: `docs/overlay-sessions.md`.

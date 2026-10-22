@@ -1,6 +1,7 @@
 # Overlay sessions
 
-Run `numan init --refresh` and start a new interactive Nushell session. The
+Run `numan init` for a new Numan root, or `numan init --refresh` for an existing
+installation, then start a new interactive Nushell session. The
 generated `numan_init.nu` sources the owned `nu_state/numan_overlay.nu`, which
 defines `numan overlay use`, `hide`, and `list`. Other commands, including
 `numan --version`, continue to invoke the external binary.

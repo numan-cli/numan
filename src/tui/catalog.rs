@@ -315,8 +315,10 @@ pub fn build_argv(spec: &CommandSpec, fields: &[FieldState]) -> Vec<String> {
 pub fn phase1_executable(display: &str, fields: &[FieldState]) -> bool {
     match display {
         "search" | "info" | "list" | "registry list" | "registry packages" | "snapshot list"
-        | "snapshot inspect" | "nupm status" | "nupm inspect" | "nupm diff" | "hook list"
-        | "overlay list" => true,
+        | "snapshot inspect" | "nupm status" | "nupm inspect" | "nupm diff" | "hook list" => true,
+        "overlay list" => fields
+            .iter()
+            .all(|field| field.spec.id != "session" || field.value.trim().is_empty()),
         "completions" => fields
             .iter()
             .any(|field| field.spec.id == "print" && field.enabled),
