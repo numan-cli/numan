@@ -83,3 +83,18 @@ Primary files: `src/cmd/overlay.rs`, `src/state/overlay_state.rs`,
 `src/nu/overlay.rs`, `src/nu/overlay_shell.nu`, `tests/overlay_session_test.rs`,
 and `docs/overlay-sessions.md`. Mutation guards are intentionally scoped to
 overlay reservations. The primary checkout and older PR worktrees were preserved.
+
+## Continuation: review and publication
+
+Master advanced through the TUI parity PRs #154–#157. Merged it into this branch
+and preserved captured overlay listing, classified reconciliation, and excluded
+hidden helper commands from TUI forms. Added a focused captured-list regression
+test and corrected the state module documentation. Final pre-merge Clippy passed.
+Rust 1.88 all-target checks and the standard suite are running; Windows PTY tests
+will also run against the installed CI-pinned Nu 0.115.0. Publication starts as a
+draft while these checks and cross-platform CI complete.
+
+The process-inventory limitation remains explicit: unavailable process entries
+are treated as dead. Zero start times are retained conservatively. Restricted
+process visibility and Linux/macOS PTY behavior need platform evidence; do not
+interpret Windows acceptance as proof for those environments.

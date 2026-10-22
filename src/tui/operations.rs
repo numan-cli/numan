@@ -808,7 +808,7 @@ pub fn execute_cli(root: &Path, argv: &[String]) -> Result<String> {
             ensure_no_pending(root)?;
             crate::cmd::overlay::execute(cmd, root)?;
             Ok(format!(
-                "{note} For overlay use/hide, run the Nushell statement the handler printed to the terminal in your current shell."
+                "{note} To track overlay use/hide, run `numan init --refresh`, start an interactive Nushell session, and use its Numan overlay commands."
             ))
         }
         _ => bail!("This command is not executable in the TUI yet; no state was changed."),

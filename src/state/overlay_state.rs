@@ -32,7 +32,7 @@ pub enum OverlayStatus {
     Pending,
     Active,
     /// Execution failed or ownership no longer agrees with the shell. Keep
-    /// the payload pinned until the shell exits or explicitly hides it.
+    /// the payload pinned until the shell exits and reconciliation prunes it.
     Degraded,
 }
 

@@ -113,6 +113,7 @@ const CLASSIFICATIONS: &[(&str, &str, &str)] = &[
         "Phase 3 (shell exception)",
     ),
     ("overlay list", "ReadOnly", "Phase 1 - read-only"),
+    ("overlay reconcile", "RootMutation", "Phase 3"),
 ];
 
 /// Summaries for leaves whose Clap variant carries no `about` text.
@@ -196,7 +197,7 @@ fn build_fields(path: &str, cmd: &clap::Command) -> Vec<FieldSpec> {
 fn walk(cmd: &clap::Command, prefix: &[String], out: &mut Vec<CommandSpec>) {
     let children: Vec<&clap::Command> = cmd
         .get_subcommands()
-        .filter(|sub| sub.get_name() != "help")
+        .filter(|sub| sub.get_name() != "help" && !sub.is_hide_set())
         .collect();
     let has_own_args = cmd
         .get_arguments()
@@ -237,7 +238,7 @@ pub fn catalog() -> &'static [CommandSpec] {
         let cmd = Cli::command();
         let mut specs = Vec::new();
         for child in cmd.get_subcommands() {
-            if child.get_name() != "help" {
+            if child.get_name() != "help" && !child.is_hide_set() {
                 walk(child, &[child.get_name().to_string()], &mut specs);
             }
         }
@@ -520,7 +521,7 @@ mod tests {
         fn walk(cmd: &clap::Command, prefix: &[String], out: &mut Vec<String>) {
             let children: Vec<&clap::Command> = cmd
                 .get_subcommands()
-                .filter(|sub| sub.get_name() != "help")
+                .filter(|sub| sub.get_name() != "help" && !sub.is_hide_set())
                 .collect();
             let has_own_args = cmd
                 .get_arguments()
@@ -539,7 +540,7 @@ mod tests {
         let cmd = Cli::command();
         let mut leaves = Vec::new();
         for child in cmd.get_subcommands() {
-            if child.get_name() != "help" {
+            if child.get_name() != "help" && !child.is_hide_set() {
                 walk(child, &[child.get_name().to_string()], &mut leaves);
             }
         }
@@ -550,7 +551,7 @@ mod tests {
     #[test]
     fn catalog_covers_every_clap_leaf_with_classification_and_fields() {
         let leaves = discovered_leaves();
-        assert_eq!(leaves.len(), 40, "leaf count changed: {leaves:?}");
+        assert_eq!(leaves.len(), 41, "leaf count changed: {leaves:?}");
         assert_eq!(catalog().len(), leaves.len());
         for leaf in &leaves {
             let found = spec(leaf).unwrap_or_else(|| panic!("no catalog spec for {leaf}"));

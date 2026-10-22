@@ -518,6 +518,15 @@ pub(crate) fn nu_literal(value: &str) -> Result<String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn list_output_is_captured_without_mutating_state() {
+        let root = tempfile::tempdir().unwrap();
+        let mut out = Vec::new();
+        list_overlays_to(root.path(), &mut out).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "No overlays recorded.\n");
+        assert!(!root.path().join("nu_state").exists());
+    }
+
     fn fixture() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let payload = dir.path().join("packages/modules/owner/tool/1");
