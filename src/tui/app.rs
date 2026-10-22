@@ -52,15 +52,11 @@ impl Shell {
 
 pub enum Command {
     Sync,
-<<<<<<< HEAD
     /// Run a catalog command through `operations::execute_cli`. The name is
     /// deliberately not "read-only": reviewed mutating commands use it too.
     /// Constructed by the Commands UI in an upper stack layer.
     #[allow(dead_code)]
     ExecuteCli(Vec<String>),
-=======
-    ExecuteReadOnly(Vec<String>),
->>>>>>> f3629a5 (feat(tui): Commands section with guided forms and visual theme)
     Reload,
     Prepare(Action, String, String, Option<String>),
     Execute(Review),
@@ -851,19 +847,50 @@ impl App {
                                         form.error = Some(reason.to_string());
                                     }
                                     mode => {
-                                        if let Some(missing) = form.fields.iter().find(|field| {
-                                            field.spec.required
-                                                && field.spec.kind != FieldKind::Bool
-                                                && field.value.trim().is_empty()
-                                        }) {
+                                        if self.busy {
+                                            form.error = Some(
+                                                "Wait for the current operation to finish.".into(),
+                                            );
+                                        } else if let Some(missing) =
+                                            form.fields.iter().find(|field| {
+                                                field.spec.required
+                                                    && field.spec.kind != FieldKind::Bool
+                                                    && field.value.trim().is_empty()
+                                            })
+                                        {
                                             form.error = Some(format!(
                                                 "Required field '{}' is empty.",
                                                 missing.spec.id
                                             ));
-                                        } else if let Some(found) = catalog::spec(&form.display) {
-                                            let argv = catalog::build_argv(found, &form.fields);
+                                        } else {
+                                            let Some(found) = catalog::spec(&form.display) else {
+                                                form.error = Some(format!(
+                                                    "No catalog entry for {}.",
+                                                    form.display
+                                                ));
+                                                self.overlay = Some(Overlay::CommandForm(form));
+                                                return None;
+                                            };
+                                            // `activate --list/--check` conflicts with a
+                                            // positional; a context-prefilled package must
+                                            // not leak into those read-only forms.
+                                            let mut effective = form.fields.clone();
+                                            if form.display == "activate"
+                                                && effective.iter().any(|field| {
+                                                    (field.spec.id == "list"
+                                                        || field.spec.id == "check")
+                                                        && field.enabled
+                                                })
+                                            {
+                                                for field in &mut effective {
+                                                    if field.spec.id == "packages" {
+                                                        field.value.clear();
+                                                    }
+                                                }
+                                            }
+                                            let argv = catalog::build_argv(found, &effective);
                                             if mode == catalog::ExecutionMode::ReadOnly {
-                                                return Some(Command::ExecuteReadOnly(argv));
+                                                return Some(Command::ExecuteCli(argv));
                                             }
                                             let display = form.display.clone();
                                             let effects = self.generic_effects(&display, &argv);
@@ -924,8 +951,9 @@ impl App {
                         KeyCode::Down | KeyCode::PageDown => scroll = scroll.saturating_add(1),
                         KeyCode::Up | KeyCode::PageUp => scroll = scroll.saturating_sub(1),
                         KeyCode::Enter if confirm && !self.busy => {
-                            return Some(Command::ExecuteReadOnly(argv));
+                            return Some(Command::ExecuteCli(argv));
                         }
+                        KeyCode::Enter if !confirm => return None,
                         _ => {}
                     }
                     self.overlay = Some(Overlay::GenericReview {

@@ -7,7 +7,8 @@
 use ratatui::style::{Color, Modifier, Style};
 
 fn no_color() -> bool {
-    std::env::var_os("NO_COLOR").is_some()
+    static NO_COLOR: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *NO_COLOR.get_or_init(|| std::env::var_os("NO_COLOR").is_some())
 }
 
 pub fn accent() -> Style {

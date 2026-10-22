@@ -2,9 +2,9 @@
 mod app;
 pub mod catalog;
 pub mod operations;
-pub mod theme;
 #[cfg(test)]
 mod tests;
+pub mod theme;
 mod ui;
 
 use crate::util::output::{self, OutputEvent};

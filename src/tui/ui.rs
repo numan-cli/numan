@@ -311,16 +311,20 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
             );
         }
     }
-    let actions = app
-        .selected_row()
-        .map(|row| {
-            if app.focus == Focus::Navigation {
-                Vec::new()
-            } else {
-                app.available_actions(&row)
-            }
-        })
-        .unwrap_or_default();
+    let actions = if app.view == View::Commands {
+        Vec::new()
+    } else {
+        app.selected_row()
+            .map(|row| {
+                if app.focus == Focus::Navigation {
+                    Vec::new()
+                } else {
+                    app.available_actions(&row)
+                }
+            })
+            .unwrap_or_default()
+    };
+
     let hints = actions
         .iter()
         .map(|action| match action {
@@ -337,26 +341,6 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         Focus::List => "Package list",
         Focus::Details => "Package details",
     };
-    let footer = format!(
-        "Focus: {focus}{} | Left/Right: pane | Enter: actions | ?: help | q: quit\n{}\n{}",
-        if app.busy {
-            " (busy; displayed data may be stale)"
-        } else {
-            ""
-        },
-        format_args!(
-            "{}  {}  [Shift+R] Refresh registries",
-            if app.focus == Focus::Navigation {
-                "Up/Down: destination"
-            } else if app.focus == Focus::List {
-                "[/] Filter  [r] Reload locally"
-            } else {
-                "Up/Down: scroll  [r] Reload locally"
-            },
-            hints
-        ),
-        clean(&app.status)
-    );
     let footer_text = ratatui::text::Text::from(vec![
         Line::from(vec![Span::styled(
             format!(
@@ -385,7 +369,6 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         ),
         Line::styled(clean(&app.status), theme::status(&app.status)),
     ]);
-    let _ = footer;
     frame.render_widget(Paragraph::new(footer_text), sections[2]);
     if let Some(overlay) = &app.overlay {
         render_overlay(frame, app, overlay, area);
@@ -395,7 +378,12 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
 fn render_overlay(frame: &mut Frame<'_>, app: &App, overlay: &Overlay, area: Rect) {
     let width = area.width.saturating_sub(4).min(100);
     let height = area.height.saturating_sub(4);
-    let popup = Rect::new(area.x + (area.width - width) / 2, area.y + 2, width, height);
+    let popup = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + 2,
+        width,
+        height,
+    );
     frame.render_widget(Clear, popup);
     let (heading, body) = match overlay {
         Overlay::Actions { selected } => {
@@ -533,8 +521,12 @@ Network failure may retain verified cached data; inspect the transcript for fall
                     },
                 ));
             }
+            let field_scroll = (form.selected as u32 * 2)
+                .saturating_sub(u32::from(parts[0].height.saturating_sub(1)));
             frame.render_widget(
-                Paragraph::new(ratatui::text::Text::from(lines)).wrap(Wrap { trim: false }),
+                Paragraph::new(ratatui::text::Text::from(lines))
+                    .wrap(Wrap { trim: false })
+                    .scroll((field_scroll.min(u32::from(u16::MAX)) as u16, 0)),
                 parts[0],
             );
             let preview = if form.editing == Some(super::app::EditTarget::Preview) {
