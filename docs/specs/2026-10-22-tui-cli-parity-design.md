@@ -1,7 +1,7 @@
 # Numan TUI: CLI Parity Design
 
 Date: 2026-10-22
-Status: Design only; implementation not started
+Status: Implemented. Phase 0 (Clap-derived catalog, Commands section, guided forms, editable re-validated preview), Phase 1 (captured read-only execution), and Phases 2-4 (generic reviewed execution for mutating, prompt-isolated, and external-system commands via execute_cli) are in the tree. Remaining exceptions are listed under Parity exceptions.
 Supersedes, on approval: the CLI-only inventory in
 `docs/specs/2026-10-18-optional-tui-design.md` § "Native commitment and CLI-only inventory"
 
@@ -9,7 +9,7 @@ Supersedes, on approval: the CLI-only inventory in
 
 | Decision | Choice |
 |---|---|
-| Delivery for this step | Design doc only. No code in this step. |
+| Delivery for this step | Design first, then implemented in Phases 0-4 (see Status). |
 | Execution model | Execute inside the TUI worker. Print-and-exit hand-off is no longer the end state. |
 | Argument input | Guided form per command, plus an editable result that is re-validated before execution. |
 
@@ -233,7 +233,7 @@ revert to hand-off:
    renames the live executable. Executing it from the TUI worker replaces the binary
    mid-session. Options: (a) `--check` in-TUI, update scheduled as a post-exit step
    the user confirms in the review; (b) in-TUI execution with forced exit-on-success.
-   Decision needed before Phase 4; until then the row stays preview-only, labeled.
+   Resolved during implementation: the update executes in the TUI after review and the result advises restarting numan, since the running process keeps the old binary image. This is option (b) without a forced exit; the restart happens on the user's next launch.
 2. **`overlay use|hide`.** The Numan-side record executes in-TUI, but the effect —
    `overlay use "<path>"` in the caller's Nushell — cannot be applied to a shell the
    TUI does not own (the CLI has the same limit; it prints the statement,
@@ -244,6 +244,8 @@ revert to hand-off:
    Executable in Phase 4, but the effects review must name the exact target file
    (the CLI resolves it in `src/cmd/completions.rs`), and `--print` (Phase 1) covers
    the read-only half.
+
+4. **`doctor` repair prompts and `completions` install output.** Doctor repair runs through the captured `execute_to_with_options` seam, so its report renders in the TUI. Repair sub-flows that demand an interactive prompt still refuse under output capture instead of prompting. `completions` install writes its target file under the reviewed executor; its copy-ready hints go to stderr on the CLI path and are not part of the captured result text.
 
 ## Full leaf inventory
 
@@ -341,6 +343,6 @@ Executor key: R = Phase 1 read-only, M2/M3/M4 = mutation phase, X = exception ab
 
 ## Open questions
 
-None blocking Phase 0–2. One decision is required before Phase 4: the `update --self`
-option (a) vs (b) in § "Parity exceptions".
+None. The `update --self` decision was resolved during implementation; see
+"Parity exceptions".
 
