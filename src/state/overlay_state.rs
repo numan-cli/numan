@@ -1,4 +1,4 @@
-//! Overlay activation state (issue #17, Phase 5 — data model only).
+//! Overlay activation state (issue #17, Phase 5).
 //!
 //! Tracks which overlays are currently active and their scope. Ephemeral:
 //! session-scoped overlays are recorded for status/drift but cannot be

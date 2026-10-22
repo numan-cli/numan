@@ -129,6 +129,7 @@ impl InitRefreshEnv {
                     activated_at: "now".to_string(),
                 }),
                 module_import_mode: Some(ModuleImportMode::Module),
+                overlay: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );

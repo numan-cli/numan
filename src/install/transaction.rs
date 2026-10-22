@@ -274,10 +274,25 @@ pub fn install_package(
     std::fs::create_dir_all(parent_dir)?;
     let tmp_dir = tempfile::tempdir_in(parent_dir).context("Failed to create staging directory")?;
 
+    let activation_entry = resolved
+        .activation
+        .as_ref()
+        .filter(|spec| spec.kind == "nu-overlay")
+        .and_then(|spec| spec.entry.clone());
+    if resolved
+        .activation
+        .as_ref()
+        .is_some_and(|spec| spec.kind == "nu-overlay")
+        && activation_entry.is_none()
+    {
+        bail!("Overlay package '{}' is missing activation.entry", id);
+    }
     let extract_config = ExtractConfig {
         archive_root: resolved.artifact.archive_root.clone(),
         include: resolved.artifact.include.clone(),
-        entry: resolved.artifact.entry.clone(),
+        entry: activation_entry
+            .clone()
+            .or_else(|| resolved.artifact.entry.clone()),
         ..ExtractConfig::default()
     };
 
@@ -321,7 +336,10 @@ pub fn install_package(
     }
 
     // Validate entry point if specified
-    if let Some(ref entry_name) = resolved.artifact.entry {
+    if let Some(ref entry_name) = activation_entry
+        .as_ref()
+        .or(resolved.artifact.entry.as_ref())
+    {
         if !extract_result.entry_found {
             bail!(
                 "Expected entry point '{}' not found in archive for '{}'",
@@ -371,7 +389,7 @@ pub fn install_package(
     // Compute payload manifest hash after extraction for drift detection.
     let revision_id = crate::state::lockfile::compute_revision_id(&install_dir);
 
-    // Capture module-specific activation metadata from registry at install time
+    // Capture activation metadata from registry at install time
     // so that activation can proceed without re-querying the registry.
     // Only persist import mode for known "nu-module" kind — unknown/future kinds
     // must not be silently treated as Nu module autoloads.
@@ -380,6 +398,18 @@ pub fn install_package(
         .as_ref()
         .filter(|spec| spec.kind == "nu-module")
         .map(|spec| spec.import.clone());
+
+    let overlay = resolved
+        .activation
+        .as_ref()
+        .filter(|spec| spec.kind == "nu-overlay")
+        .map(|spec| {
+            let name = spec.overlay_name.clone().unwrap_or_else(|| id.name.clone());
+            crate::state::lockfile::OverlayPackageSpec {
+                name,
+                exports: spec.exports.clone().unwrap_or_default(),
+            }
+        });
 
     let locked_dependencies: BTreeMap<String, String> = resolved
         .dependencies
@@ -403,7 +433,7 @@ pub fn install_package(
         executable_path,
         archive_root: resolved.artifact.archive_root.clone(),
         include: resolved.artifact.include.clone(),
-        entry: resolved.artifact.entry.clone(),
+        entry: activation_entry.or_else(|| resolved.artifact.entry.clone()),
         installed_at,
         nu_version_at_install: Some(options.nu_version.version.clone()),
         activation: None,
@@ -424,6 +454,7 @@ pub fn install_package(
         origin: Some(format!("registry:{}", verified.registry_name)),
         module_activation: None,
         module_import_mode,
+        overlay,
         locked_dependencies,
     };
 

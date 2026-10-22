@@ -65,4 +65,7 @@ pub enum Commands {
     Try(cmd::try_cmd::TryArgs),
     /// Switch the active managed Nu version (`latest`, `list`, or a specific version)
     Use(cmd::use_cmd::UseArgs),
+    /// Manage explicit session and project overlays
+    #[command(subcommand)]
+    Overlay(cmd::overlay::OverlayCommands),
 }

@@ -441,6 +441,7 @@ fn discover_bundled_plugins(root: &Path, version_dir: &Path, nu_version: &str) -
             origin: Some(BUNDLED_NU_ORIGIN.to_string()),
             module_activation: None,
             module_import_mode: None,
+            overlay: None,
             locked_dependencies: std::collections::BTreeMap::new(),
         };
         discovered.push((package_id, lockfile_entry));
@@ -1750,6 +1751,7 @@ mod tests {
                 origin: Some("registry:official".to_string()),
                 module_activation: None,
                 module_import_mode: None,
+                overlay: None,
                 locked_dependencies: std::collections::BTreeMap::new(),
             },
         );
@@ -1840,6 +1842,7 @@ mod tests {
                 origin: Some(BUNDLED_NU_ORIGIN.to_string()),
                 module_activation: None,
                 module_import_mode: None,
+                overlay: None,
                 locked_dependencies: std::collections::BTreeMap::new(),
             },
         );
