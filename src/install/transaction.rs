@@ -186,6 +186,14 @@ pub fn install_package(
                             &id,
                         )? {
                             entry.overlay = Some(overlay);
+                            // Same precedence as the fresh-install path: the overlay entry
+                            // from the registry activation, then the artifact entry.
+                            entry.entry = resolved
+                                .activation
+                                .as_ref()
+                                .filter(|spec| spec.kind == "nu-overlay")
+                                .and_then(|spec| spec.entry.clone())
+                                .or_else(|| resolved.artifact.entry.clone());
                             lockfile.save(options.root)?;
                         }
                     }
