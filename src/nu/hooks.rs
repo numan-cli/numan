@@ -226,7 +226,9 @@ mod generation_tests {
     #[test]
     #[ignore = "requires a real Nushell binary; run with NUMAN_TEST_NU set"]
     fn generated_hook_runtime_preserves_user_hooks_and_runs_owned_handler() {
-        let nu = std::env::var("NUMAN_TEST_NU").expect("set NUMAN_TEST_NU to a Nushell binary");
+        let nu = std::env::var_os("NUMAN_TEST_NU")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("nu"));
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let profile_path = root.join("nu_state/hook_profile.json");
