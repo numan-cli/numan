@@ -2,6 +2,7 @@
 mod app;
 pub mod catalog;
 pub mod operations;
+pub mod theme;
 #[cfg(test)]
 mod tests;
 mod ui;
