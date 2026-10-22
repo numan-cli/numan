@@ -11,6 +11,7 @@ use crate::state::overlay_state::{OverlayRecord, OverlayScope, OverlayState};
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::format_timestamp;
 use crate::util::fs_safety::acquire_mutation_lock;
+use crate::util::output::{eprintln, println};
 
 #[derive(Subcommand, Debug)]
 pub enum OverlayCommands {
@@ -238,9 +239,14 @@ fn hide_overlay(args: &OverlayHideArgs, root: &Path) -> Result<()> {
 }
 
 fn list_overlays(root: &Path) -> Result<()> {
+    let mut out = std::io::stdout();
+    list_overlays_to(root, &mut out)
+}
+
+pub(crate) fn list_overlays_to(root: &Path, out: &mut dyn std::io::Write) -> Result<()> {
     let state = OverlayState::load(root)?;
     if state.overlays.is_empty() {
-        println!("No active overlays recorded.");
+        writeln!(out, "No active overlays recorded.")?;
         return Ok(());
     }
     for record in state.overlays {
@@ -250,10 +256,11 @@ fn list_overlays(root: &Path) -> Result<()> {
                 format!("project:{}", record.project_root.as_deref().unwrap_or("?"))
             }
         };
-        println!(
+        writeln!(
+            out,
             "{} ({}) [{}]",
             record.overlay_name, record.package_id, scope
-        );
+        )?;
     }
     Ok(())
 }

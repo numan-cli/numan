@@ -40,6 +40,15 @@ pub enum SnapshotCommands {
     },
 }
 
+#[cfg_attr(not(feature = "tui"), allow(dead_code))] // used by the TUI read-only executor
+pub(crate) fn execute_to(cmd: &SnapshotCommands, root: &Path, out: &mut dyn Write) -> Result<()> {
+    match cmd {
+        SnapshotCommands::List => list(root, out),
+        SnapshotCommands::Inspect { id } => inspect(root, id, out),
+        _ => anyhow::bail!("snapshot command is not read-only"),
+    }
+}
+
 pub fn execute(cmd: SnapshotCommands, root: &Path) -> Result<()> {
     match cmd {
         SnapshotCommands::List => list(root, &mut std::io::stdout()),

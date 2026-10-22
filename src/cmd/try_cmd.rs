@@ -8,6 +8,7 @@ use crate::install::transaction::{self, InstallResult};
 use crate::state::lockfile::Lockfile;
 use crate::util::fs_safety::{acquire_mutation_lock, MutationLock};
 use crate::util::hints::{self, CMD_REGISTRY_SYNC};
+use crate::util::output::{eprintln, println};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use std::collections::HashSet;

@@ -33,6 +33,15 @@ pub enum RegistryCommands {
     Packages,
 }
 
+#[cfg_attr(not(feature = "tui"), allow(dead_code))] // used by the TUI read-only executor
+pub(crate) fn execute_to(cmd: &RegistryCommands, root: &Path, out: &mut dyn Write) -> Result<()> {
+    match cmd {
+        RegistryCommands::List => list_registries(root, out),
+        RegistryCommands::Packages => list_packages(root, out),
+        _ => anyhow::bail!("registry command is not read-only"),
+    }
+}
+
 pub fn execute(cmd: RegistryCommands, root: &Path) -> Result<()> {
     match cmd {
         RegistryCommands::List => list_registries(root, &mut std::io::stdout()),
