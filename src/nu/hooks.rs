@@ -224,7 +224,7 @@ mod generation_tests {
     }
 
     #[test]
-    #[ignore = "requires a real Nushell binary; run with NUMAN_TEST_NU set"]
+    #[ignore = "requires a real Nushell binary on PATH or NUMAN_TEST_NU"]
     fn generated_hook_runtime_preserves_user_hooks_and_runs_owned_handler() {
         let nu = std::env::var_os("NUMAN_TEST_NU")
             .map(std::path::PathBuf::from)
@@ -240,7 +240,7 @@ mod generation_tests {
         std::fs::write(&filtered_handler_path, "print 'filtered-handler-ran'\n").unwrap();
         std::fs::write(&env_handler_path, "print 'env-change-handler-ran'\n").unwrap();
         let profile = HookProfile {
-            nu_executable: Some(nu.replace('\\', "/")),
+            nu_executable: Some(nu.to_string_lossy().replace('\\', "/")),
             nu_version: Some("0.116.1".into()),
             bindings: vec![
                 HookBindingRecord {
