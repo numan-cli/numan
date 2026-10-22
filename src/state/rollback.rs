@@ -22,6 +22,7 @@ use crate::state::activation_profile::ActivationProfile;
 use crate::state::autoload_state::AutoloadState;
 use crate::state::hook_profile::HookProfile;
 use crate::state::lifecycle_journal::{LifecycleOp, LifecycleStage, PendingLifecycle};
+use crate::state::lockfile::Lockfile;
 use crate::state::overlay_state::OverlayState;
 use crate::state::snapshot::{
     create_snapshot, load_snapshot, verify_payloads, ManagedAutoloadProjection, Snapshot,
@@ -86,6 +87,27 @@ pub fn rollback_to_snapshot(
     }
 
     let snapshot = load_snapshot(root, id)?;
+    for record in OverlayState::load(root)?.overlays {
+        let target = snapshot
+            .lockfile
+            .packages
+            .get(&record.package_id)
+            .context("Rollback would remove a package reserved by a live overlay session")?;
+        let target_payload = root.join(&target.payload_path).canonicalize()?;
+        let current = Lockfile::load(root)?;
+        let current_entry = current
+            .packages
+            .get(&record.package_id)
+            .context("Overlay reservation has no current package entry")?;
+        if current_entry.payload_path != target.payload_path
+            || record
+                .payload_path
+                .as_deref()
+                .is_some_and(|p| Path::new(p) != target_payload)
+        {
+            bail!("Rollback would replace package '{}' reserved by an overlay session. Hide it or close the shell and reconcile first.", record.package_id);
+        }
+    }
     let current_hook_profile = HookProfile::load(root).ok();
     let current_hook_managed_path = current_hook_profile
         .and_then(|profile| profile.managed_file_path.map(PathBuf::from))
@@ -370,18 +392,14 @@ pub fn rollback_to_snapshot(
     journal.stage = LifecycleStage::ActivationProfileCommitted;
     journal.save(root)?;
 
-    // Commit 7: overlay state. Legacy snapshots do not carry this sidecar and
-    // leave the current overlay records untouched.
-    match &snapshot.overlays {
-        None => {}
-        Some(SnapshotSidecar::Present { value, .. }) => value.save(root)?,
-        Some(SnapshotSidecar::Absent) => OverlayState::delete(root)?,
-    }
+    // Overlay sidecars are historical observations, never desired state.
+    // Restoring them cannot load or unload overlays in a live parent shell.
+    // Keep the current session reservations, including pending transactions.
     journal.stage = LifecycleStage::OverlayStateCommitted;
     journal.save(root)?;
     if snapshot.overlays.is_some() {
         eprintln!(
-            "Warning: overlay records were restored from the snapshot. The current Nushell shell may still have overlays active; reconcile it with `numan overlay list`."
+            "Overlay session observations were not restored. Live shells retain their current overlays."
         );
     }
 

@@ -60,6 +60,7 @@ These workflows are covered by unit tests, hermetic integration tests, and real-
 | ----------------------- | ---------------------------- | ------------------ | -------------- |
 | Plugin | Yes | `numan activate` (Nu plugin registry) | Supported |
 | Module | Yes | `numan activate` (managed vendor autoload) | Supported |
+| Overlay module | Yes | `numan overlay use` / `hide` (interactive Nu wrapper) | Explicit activation in the current shell; applied at the next prompt |
 | Hook profile | Yes | `numan hook enable` (owned vendor autoload) | Explicit opt-in; handlers run only on declared interactive events |
 | Script | Yes | None | Install-only; activation is deferred |
 | Completion package | Yes | None | Install-only; activation is deferred |
@@ -71,6 +72,13 @@ enabled; inspect their declared events with `numan info` first. Hook changes loa
 in new Nushell sessions. This is separate from numan's own shell
 completion installer: `numan completions <shell>` is supported for bash, fish,
 zsh, PowerShell, and Nushell (`nu`); use `--print` to emit the script instead.
+
+Run `numan init --refresh` and open a new Nu session to load the overlay commands.
+`numan overlay use owner/package` takes effect at the next prompt; commands from
+the overlay cannot be used later on the same input line. `numan overlay hide`
+preserves the current working directory. Each shell has independent activation
+records. Pending and active overlays protect their package payload from mutation.
+See [overlay sessions](docs/overlay-sessions.md) for failure recovery and limits.
 
 ---
 

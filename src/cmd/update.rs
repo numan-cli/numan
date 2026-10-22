@@ -17,6 +17,7 @@ use crate::state::lifecycle_journal::{
     check_stale_journal, LifecycleOp, LifecycleStage, PendingLifecycle,
 };
 use crate::state::lockfile::{Lockfile, LockfileEntry};
+use crate::state::overlay_state::OverlayState;
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::fs_safety::acquire_mutation_lock;
 use crate::util::hints;
@@ -196,6 +197,14 @@ pub fn execute_reviewed(
     let mut failures: Vec<String> = Vec::new();
 
     for update in &updates {
+        if let Err(e) = OverlayState::ensure_package_mutable(root, &update.package_id) {
+            if args.package.is_some() {
+                return Err(e);
+            }
+            eprintln!("  {e}");
+            failures.push(update.package_id.clone());
+            continue;
+        }
         let current = match lockfile.packages.get(update.package_id.as_str()) {
             Some(entry) => entry,
             None => continue,

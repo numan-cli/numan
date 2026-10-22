@@ -128,6 +128,7 @@ pub fn import_module_with_runner_under_lock(
     _lock: &MutationLock,
 ) -> Result<ImportResult> {
     ensure_no_stale_journal(root)?;
+    crate::state::overlay_state::OverlayState::ensure_package_mutable(root, &target.to_string())?;
 
     let resolved = resolve_single_import(root, source_path, target, yes)?;
     if resolved.reimported && yes {
@@ -252,6 +253,10 @@ pub fn import_manifest_with_runner(
     for entry in &manifest.imports {
         let source = home.join(&entry.source);
         let target = ScopedId::parse(&entry.target)?;
+        crate::state::overlay_state::OverlayState::ensure_package_mutable(
+            root,
+            &target.to_string(),
+        )?;
         let resolved = resolve_single_import(root, &source, &target, yes)?;
         resolved_list.push(resolved);
     }

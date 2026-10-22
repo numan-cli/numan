@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::state::lifecycle_journal::{check_stale_journal, PendingLifecycle};
 use crate::state::lockfile::Lockfile;
+use crate::state::overlay_state::OverlayState;
 use crate::state::snapshot::{legacy_snapshot_payload_paths, list_snapshots, load_snapshot};
 use crate::util::fs_safety::acquire_mutation_lock;
 
@@ -59,6 +60,13 @@ pub fn execute(args: &GcArgs, root: &Path) -> Result<()> {
         }
     }
     referenced.extend(legacy_snapshot_payload_paths(root).unwrap_or_default());
+    // Session reservations remain live roots even after the lockfile changes.
+    // Invalid overlay state must abort GC rather than discard its protection.
+    referenced.extend(OverlayState::referenced_payloads(root)?);
+    let referenced: HashSet<PathBuf> = referenced
+        .into_iter()
+        .map(|path| path.canonicalize().unwrap_or(path))
+        .collect();
 
     let packages_dir = root.join("packages");
     if !packages_dir.exists() {
@@ -73,7 +81,7 @@ pub fn execute(args: &GcArgs, root: &Path) -> Result<()> {
 
     let orphans: Vec<PathBuf> = candidates
         .into_iter()
-        .filter(|p| !referenced.contains(p))
+        .filter(|p| !referenced.contains(&p.canonicalize().unwrap_or_else(|_| p.clone())))
         .collect();
 
     if orphans.is_empty() {
@@ -141,6 +149,52 @@ mod tests {
     use super::*;
     use crate::state::lockfile::Lockfile;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn gc_preserves_overlay_reservations_without_lockfile_entries() {
+        for status in ["pending", "active", "degraded"] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            let payload = root.join("packages/modules/owner/pkg/1.0.0-abc12345");
+            std::fs::create_dir_all(&payload).unwrap();
+            let entry = payload.join("mod.nu");
+            std::fs::write(&entry, "export def hello [] { 'hello' }").unwrap();
+            let orphan = root.join("packages/modules/owner/unused/1.0.0-def67890");
+            std::fs::create_dir_all(&orphan).unwrap();
+            crate::util::atomic::write_json_atomic(
+                &root.join("nu_state/overlays.json"),
+                &serde_json::json!({"overlays": [{
+                    "package_id": "owner/pkg", "overlay_name": "pkg",
+                    "entry_path": entry.canonicalize().unwrap(), "scope": "session",
+                    "activated_at": "2026-10-22T00:00:00Z",
+                    "session_id": "test-session", "pid": 42,
+                    "txn": "test-transaction", "status": status
+                }]}),
+            )
+            .unwrap();
+
+            execute(&GcArgs { dry_run: false }, root).unwrap();
+
+            assert!(entry.is_file(), "{status} overlay payload must survive GC");
+            assert!(
+                !orphan.exists(),
+                "unreserved orphan must still be collected"
+            );
+        }
+    }
+
+    #[test]
+    fn gc_rejects_invalid_overlay_state_before_deleting_payloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let orphan = root.join("packages/modules/owner/pkg/1.0.0-abc12345");
+        std::fs::create_dir_all(&orphan).unwrap();
+        std::fs::create_dir_all(root.join("nu_state")).unwrap();
+        std::fs::write(root.join("nu_state/overlays.json"), "invalid JSON").unwrap();
+
+        assert!(execute(&GcArgs { dry_run: false }, root).is_err());
+        assert!(orphan.is_dir());
+    }
 
     #[test]
     fn gc_finds_no_orphans_when_all_referenced() {
