@@ -296,13 +296,22 @@ fn rollback_with_tty(root: &Path, id: &str, yes: bool, is_tty: bool) -> Result<(
     let runner = NuCandidateRunner::new(&nu_paths.nu_executable);
     let report = rollback_to_snapshot(root, id, &runner)?;
 
+    // Snapshot UUIDs are public CLI identifiers required for follow-up actions,
+    // not secrets or diagnostic log data.
+    // codeql[rust/cleartext-logging]
     println!(
         "{} Rolled back to snapshot {}",
         console::style("✓").green(),
         report.target_snapshot_id
     );
+    // This user-facing rollback summary contains only a count, not sensitive data.
+    // codeql[rust/cleartext-logging]
     println!("  packages restored: {}", report.packages_restored);
+    // The action is reported without printing the managed file path.
     println!("  autoload:          {}", report.autoload_action);
+    // Snapshot UUIDs are public CLI identifiers required for follow-up actions,
+    // not secrets or diagnostic log data.
+    // codeql[rust/cleartext-logging]
     println!(
         "  pre-rollback snapshot: {} (roll back to this to undo)",
         report.pre_rollback_snapshot_id
