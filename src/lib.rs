@@ -12,4 +12,6 @@ pub mod install;
 pub mod nu;
 pub mod nupm_compat;
 pub mod state;
+#[cfg(feature = "tui")]
+pub mod tui;
 pub mod util;

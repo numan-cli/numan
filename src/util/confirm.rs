@@ -6,6 +6,7 @@
 //! - non-TTY (piped / CI) → auto-confirm (print a note to stderr)
 //! - TTY → prompt `[y/N]` and return the user's answer
 
+use crate::util::output::eprintln;
 use anyhow::Result;
 use std::io::{IsTerminal, Write};
 
@@ -21,6 +22,10 @@ pub fn confirm_or_auto(prompt: &str, yes: bool) -> Result<bool> {
 pub fn confirm_or_auto_with_tty(prompt: &str, yes: bool, is_tty: bool) -> Result<bool> {
     if yes {
         return Ok(true);
+    }
+
+    if crate::util::output::is_captured() {
+        anyhow::bail!("Unexpected interactive confirmation in a reviewed operation. Use the CLI for this workflow.");
     }
 
     if !is_tty {

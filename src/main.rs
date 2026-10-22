@@ -11,15 +11,22 @@ fn main() -> anyhow::Result<()> {
         .root
         .unwrap_or_else(|| config::Config::resolve_root(&platform));
 
+    let command = match cli.command {
+        None => return numan_cli::cmd::tui::execute(&root, false),
+        Some(Commands::Tui) => return numan_cli::cmd::tui::execute(&root, true),
+        Some(command) => command,
+    };
+
     // Ensure root directory exists (completions/doctor/setup/use do not need layout)
     if !matches!(
-        cli.command,
+        command,
         Commands::Completions(_) | Commands::Doctor(_) | Commands::Setup(_) | Commands::Use(_)
     ) {
         std::fs::create_dir_all(&root)?;
     }
 
-    match cli.command {
+    match command {
+        Commands::Tui => unreachable!("TUI dispatch occurs before root creation"),
         Commands::Search(args) => numan_cli::cmd::search::execute(&args, &root),
         Commands::Info { id } => numan_cli::cmd::info::execute(&id, &root),
         Commands::Install(args) => numan_cli::cmd::install::execute(&args, &root),

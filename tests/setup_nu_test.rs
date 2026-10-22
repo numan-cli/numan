@@ -217,7 +217,9 @@ fn parse_nu_args(argv: &[&str]) -> NuSetupArgs {
     full.extend_from_slice(argv);
     let cli = Cli::try_parse_from(&full).unwrap();
     match cli.command {
-        numan_cli::cli::Commands::Setup(numan_cli::cmd::setup::SetupCommands::Nu(args)) => args,
+        Some(numan_cli::cli::Commands::Setup(numan_cli::cmd::setup::SetupCommands::Nu(args))) => {
+            args
+        }
         _ => panic!("expected Setup(Nu) variant"),
     }
 }

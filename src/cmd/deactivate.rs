@@ -1,3 +1,4 @@
+use crate::util::output::{eprintln, println};
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use std::collections::BTreeSet;

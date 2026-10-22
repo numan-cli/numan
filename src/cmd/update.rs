@@ -1,7 +1,8 @@
+use crate::util::output::{eprintln, println};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::cmd::plugin_lifecycle::{CommandPluginLifecycle, PluginLifecycle};
 use crate::core::nu_version::NuVersion;
@@ -67,7 +68,7 @@ pub struct UpdateHooks<'a> {
     pub install: Option<&'a UpdateInstallFn>,
 }
 
-pub fn execute(args: &UpdateArgs, root: &PathBuf) -> Result<()> {
+pub fn execute(args: &UpdateArgs, root: &Path) -> Result<()> {
     let lifecycle = CommandPluginLifecycle;
     execute_with_hooks(
         args,
@@ -80,10 +81,16 @@ pub fn execute(args: &UpdateArgs, root: &PathBuf) -> Result<()> {
 }
 
 /// Testability entry: inject deactivate/activate/install seams.
-pub fn execute_with_hooks(
+pub fn execute_with_hooks(args: &UpdateArgs, root: &Path, hooks: &UpdateHooks<'_>) -> Result<()> {
+    execute_reviewed(args, root, hooks, &|| Ok(()))
+}
+
+/// Execute with an advisory-review validator held inside the mutation lock.
+pub fn execute_reviewed(
     args: &UpdateArgs,
-    root: &PathBuf,
+    root: &Path,
     hooks: &UpdateHooks<'_>,
+    validate: &dyn Fn() -> Result<()>,
 ) -> Result<()> {
     if args.self_update {
         if args.package.is_some() {
@@ -152,6 +159,7 @@ pub fn execute_with_hooks(
     }
 
     let _lock = acquire_mutation_lock(root)?;
+    validate()?;
     // Finish interrupted active-plugin reactivation before discovery so a
     // LockfileUpdated package is not treated as already up to date.
     resume_interrupted_reactivate(root, hooks)?;
@@ -288,8 +296,9 @@ pub fn execute_with_hooks(
         }
 
         // Same Nu identity as discovery (`resolve_nu_version`) for Plain and orchestrated.
+        let root_buf = root.to_path_buf();
         let options = InstallOptions {
-            root,
+            root: &root_buf,
             platform: &platform,
             nu_version: &resolve_nu_version,
             force: false,
@@ -638,6 +647,7 @@ mod tests {
     use crate::state::lockfile::{Lockfile, LockfileEntry, ModuleActivation, PluginActivation};
     use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     #[test]
