@@ -1,3 +1,4 @@
+use crate::util::output::{eprintln, println};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use std::io::IsTerminal;
@@ -31,6 +32,16 @@ pub fn execute(args: &RemoveArgs, root: &Path) -> Result<()> {
 
 /// Same as [`execute`] with an injectable terminal-status seam for tests.
 fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> {
+    execute_reviewed(args, root, is_tty, &|| Ok(()))
+}
+
+/// Validate the reviewed scope under the existing mutation lock before removal.
+pub fn execute_reviewed(
+    args: &RemoveArgs,
+    root: &Path,
+    is_tty: bool,
+    validate: &dyn Fn() -> Result<()>,
+) -> Result<()> {
     // Destructive: permanently deletes the package payload and lockfile entry.
     // Refuse unattended (non-TTY) sessions without explicit --yes so safe-batch
     // automation has to opt in; interactive TTY sessions still confirm below.
@@ -78,6 +89,7 @@ fn execute_with_tty(args: &RemoveArgs, root: &Path, is_tty: bool) -> Result<()> 
     )?;
 
     let _lock = acquire_mutation_lock(root)?;
+    validate()?;
 
     // Reload under the lock so the confirm-time view cannot race a concurrent
     // install/activate that landed while the user was at the prompt.

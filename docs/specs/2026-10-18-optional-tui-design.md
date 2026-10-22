@@ -9,18 +9,20 @@ Open the Ratatui/Crossterm TUI when a user runs bare `numan` in an interactive t
 
 The primary outcome is to help users understand what is installed, what is active for their current Nushell, and what an operation will change before running it. The TUI is a presentation layer over Numan operations, not another package manager or source of state.
 
-This document defines the full screen map and implementation boundaries. It does not claim the TUI, typed operation interfaces, or acceptance tests exist yet.
+This document defines a deliberately limited native surface and its implementation boundaries. The command inventory records explicit handoffs, not promised future native coverage. It does not claim the TUI, typed operation interfaces, or acceptance tests exist yet.
 
 ## Scope and packaging
 
-- Make Ratatui and Crossterm optional dependencies behind a Cargo feature named `tui`, excluded from default features. Official end-user release artifacts should enable it so bare `numan` opens the TUI after a normal binary installation. Ordinary builds remain usable without terminal UI dependencies.
+- Make Ratatui and Crossterm optional dependencies behind a Cargo feature named `tui`, excluded from default features. Once the native slice passes acceptance, official end-user release artifacts should enable it so bare `numan` opens the TUI after a normal binary installation. Do not enable unfinished TUI release builds during the dependency-only step. Ordinary builds remain usable without terminal UI dependencies.
 - With the feature disabled, bare `numan` prints help with a TUI-unavailable note and exits successfully. Retain a lightweight explicit `tui` command that explains the missing build capability and returns a nonzero status. Neither path initializes the root or terminal, downloads dependencies, or rebuilds the executable.
 - Require interactive stdin and stdout for the TUI. Bare `numan` in a redirected or non-interactive session prints ordinary help and exits successfully. Explicit `numan tui` rejects that session with a nonzero status before enabling raw mode; point users to ordinary CLI commands.
 - `numan --help` and `numan --version` retain their normal behavior and never enter the TUI. A supplied subcommand always dispatches to that command. No entry path invokes shell profile changes.
 - Honor `--root` and existing root resolution. Show the resolved root in context details. Opening the TUI must not create an absent root; offer explicit initialization instead.
 - Preserve Rust 1.88 support. Ratatui 0.30.2 declares Rust 1.88.0 and defaults to Crossterm 0.29. Validate the resolved dependency graph and feature-enabled build on the MSRV before pinning the implementation.
 
-At inspection time, the checkout already had uncommitted Ratatui 0.30.2 and Crossterm 0.29.0 dependency additions in `Cargo.toml` and `Cargo.lock`. They were not changed for this specification. Converting them to optional dependencies is future implementation work.
+The packaging prerequisite makes Ratatui and Crossterm optional under `tui`, with an empty default feature set. CI checks the active default normal/build dependency tree for Ratatui and Crossterm and checks the enabled feature with Clippy and Rust 1.88. The lockfile can retain optional packages without compiling them into default builds. This prerequisite does not implement the TUI or launch dispatch.
+
+`NUMAN_NO_TUI=1` disables both implicit and explicit TUI entry before terminal initialization. Bare `numan` then prints help and succeeds; explicit `numan tui` explains the environment override and fails. Other values do not disable the TUI. Existing subcommands are unaffected. Check this override before feature/TTY checks so it remains a dependable escape hatch.
 
 ### Launch dispatch
 
@@ -36,26 +38,29 @@ Make the parsed subcommand optional and resolve this dispatch before the current
 
 ## Information architecture
 
-Use six destinations. Packages opens by default. Avoid a dashboard of counts or a landing screen that delays package work.
+The initial navigation has only Packages and Updates. `Ctrl+P` opens the launcher. There are no Nushell, Registries, Snapshots, Health, or Integrations destinations in this delivery. A requested doctor scan opens a report overlay, not a separate Health section. Dedicated administration screens require a later product decision.
 
-| Destination | List or primary content | Contextual details and actions |
+| Surface | Purpose | Initial native scope |
 | --- | --- | --- |
-| Packages | Installed / Discover / Updates views | Package metadata, versions, origin, compatibility, activation identity; review package actions |
-| Nushell | Installed managed versions and current executable | Switch, install, remove, adopt PATH or existing binary; loader tools and configuration |
-| Registries | Configured registries and cached package catalogs | URL, key identity, verification evidence, cache age; sync, add, remove |
-| Health | Findings grouped by severity | Evidence, repair tier, effect and command; explicit scan or repair |
-| Snapshots | Stored snapshots | Inspect manifest and retained payloads; review rollback or deletion |
-| Integrations | nupm candidates, completions, initialization | Inspect/import/diff, completion preview/install, initialize/refresh paths |
+| Packages / Installed | Understand installed versions and activation | Read details; review single-package activation or removal |
+| Packages / Discover | Find packages from cached registry data | Search/filter, inspect versions, review single-package installation |
+| Updates | Inspect compatible candidates for installed packages | Requested check, then review a single-package update |
+| Launcher | Find supported native actions or obtain CLI commands | Native actions are labeled Native; all other entries are labeled CLI only |
+| Doctor report overlay | Understand local health findings | Explicit scan-only report; no repair controls |
 
-The header shows destination, resolved Nu version and executable, and whether that identity is known, missing, or stale. Opening a different version's details does not switch the active Nu. A context drawer exposes full executable path/hash, plugin registry, module autoload target, platform, and root.
+The header shows resolved Nu version and executable, and whether that identity is known, missing, or stale. A context drawer exposes full executable path/hash, plugin registry, module autoload target, platform, and root. Inspecting context never changes it.
 
-The footer shows only shortcuts valid for the focused pane. Long-running work has one compact status line with an expandable transcript. It must not replace package state with a transient success toast.
+The footer always shows a textual focus indicator such as `Focus: Package list`, as well as shortcuts valid for that focus. Long-running work has one compact status line with an expandable transcript. It must not replace authoritative state with a transient success toast.
+
+### No network on view entry
+
+This rule covers every surface, overlay, launcher, refresh, resize, and selection change. Entry reads local data only. No registry sync, remote release lookup, update download, trust refresh, or network doctor probe runs implicitly. Search uses cached catalogs; update resolution uses cached metadata. Missing/stale data is visible, never repaired by an automatic fetch. Future network actions must be explicitly named and invoked; CLI-only registry sync remains a handoff in the initial delivery. Lower-level helpers must be audited for indirect network requests before use in any query.
 
 ### Packages: the default workbench
 
 At wide sizes, use approximately 60% of the content width for the list and 40% for details. Reserve two header rows and two footer/status rows; allocate the remaining rows to content.
 
-Installed columns: package ID, version, type, and activation state. Keep origin in details unless there is room for an extra column. Discover searches the cached catalog and exposes an explicit option to include incompatible results. Updates performs a requested compatibility check; it never installs on view entry.
+Installed columns: package ID, version, type, and activation state. Keep origin in details unless there is room for an extra column. Discover searches the cached catalog and exposes an explicit option to include incompatible results. Updates performs an explicitly requested local compatibility check; entry never checks or installs anything.
 
 Details show the selected version, source/registry, platform and Nu constraints, package origin, and applicable actions. Expand provenance to inspect recorded signing key, index digest, artifact digest, and payload revision. Distinguish recorded verification from a fresh integrity check.
 
@@ -67,71 +72,60 @@ Use separate fields for installation, activation, and compatibility:
 
 Plugin activation uses executable hash, Nu version, and registry path. Module activation uses its own four-part identity, including the vendor autoload directory and managed file path. Do not reuse the current plugin-only display predicate in `cmd/list.rs` for modules.
 
-Default action on an installed inactive package is Review activation. Default action on an available package is Review installation. `try` is a separate action named Install and activate, with both effects stated. After inert installation, show Installed, inactive and offer activation as a separate next step.
+Default action on an installed inactive package is Review activation. Default action on an available package is Review installation. `try` remains CLI only. Do not expose a combined native Install and activate action in this delivery. After inert installation, show Installed, inactive and offer activation as a separate next step.
 
 ### Command launcher
 
 `Ctrl+P` opens a searchable list of typed actions and destinations. It filters known actions, not arbitrary shell input. Results include a destination, package context when required, and availability reason. Selecting a mutating action opens its review screen; it never executes directly.
 
-The launcher complements navigation and exposes infrequent features without adding permanent panels. It can explain the equivalent CLI command. Copying is optional and must not require native clipboard support; the command remains selectable in an ordinary transcript after exit when requested.
+The launcher contains two visibly separate groups: Native actions and CLI only. CLI-only results open a command explanation with the exact target/root and effects, plus `Print command and exit` and Back. They never look like in-app Execute buttons, spawn an operation, or promise a future native implementation.
 
-### Other destinations
+`Print command and exit` stores a shell-appropriate escaped command as a pending exit result. After terminal restoration, print that command followed by one newline to stdout; diagnostics go to stderr. Nothing is executed. Respect the selected Nushell/PowerShell/POSIX quoting policy and test spaces and quotes in paths. Printing requires no clipboard API. Ordinary quit prints no command; cancelling the handoff clears the pending result.
 
-Nushell defaults to inspecting installed versions. Switching previews the existing per-minor activation transition; it does not imply packages were reinstalled. Loader status is distinct from configuring tools. In particular, existing `--detect` configures discovered tools, so label it Detect and configure, not Scan. Adding a custom initialization command, installing tools, clearing caches, and appending a source line to `config.nu` are separate reviewed actions.
+The requested doctor scan uses the existing structured report with `scan: true` and `skip_network: true`. Show finding IDs, severity, repair tiers, evidence and command guidance. Repairs remain CLI only. Audit this scan for persistent writes and expose failures rather than quietly repairing them.
 
-Registries distinguish fresh remote data, verified cached data, last-known-good fallback, and failure. A successful command that fell back to cache must not appear as Freshly synced. Adding a registry displays its URL and supplied public-key fingerprint for review. Removing a registry describes configuration/trust effects without suggesting it uninstalls packages.
+## Native commitment and CLI-only inventory
 
-Health opens with no automatic repair. A requested local scan uses structured findings and disables optional network probes. Remote checks require an explicit action. Preserve finding IDs, severity, repair tier, and evidence. Do not promise individually selectable repairs while the handler only supports a broader repair pass: show the actual scope, or keep the action unavailable until a scoped service exists.
+The target native action set is **single-package install, activate, update, remove, and local doctor scan**, plus the reads that support them. The install/activate spike below gates the broader commitment: no native action ships until its request, prompts, effects and failure paths pass acceptance. Scope reduction after the spike must be explicit. There is no all-packages execution or arbitrary multi-action queue in this slice.
 
-Snapshots are recovery of Numan-managed state, not whole-machine backups. Inspect before rollback, explain missing payloads and Nu identity constraints, and never claim deleted package payloads can always be restored. Deletion can reduce future rollback choices; GC preserves payloads referenced by retained snapshots.
-
-Integrations keeps `NUPM_HOME` read-only. Import copies supported content into Numan ownership; it never runs `build.nu` or implies bidirectional sync. Show unsupported profiles and drift classifications. Completion preview is separate from installation into a shell-specific path. Initialization and path refresh are explicit operations.
-
-## Current command coverage
-
-The equivalent commands below describe existing CLI operations, not a requirement to spawn shell commands. Advanced flags belong in the action form or details, not in the primary navigation.
-
-| Existing command family | TUI location and entry point |
+| Command family | Delivery contract |
 | --- | --- |
-| `search`, `search --all`, `info`, `registry packages` | Packages / Discover, compatibility filter, package/version details; Registries / Catalog |
-| `list`, `activate --list`, `activate --check` | Packages / Installed; activation details and requested integrity check |
-| `install` including pinned versions and reinstall | Package / Review installation; explicit version and reinstall controls |
-| `activate`, `deactivate` | Package / Review activation or deactivation; explicit all-target scope when no IDs are supplied |
-| `try`, `try --no-activate` | Package / Install and activate or Install only; incompatibility guidance with a separate Nu setup/switch action |
-| `update --check`, package or all-package `update` | Packages / Updates; inspect compatible candidates, then review execution scope |
-| `update --self --check`, `update --self` | Launcher / Numan version; check first; follow install-source guidance or exit TUI before binary replacement |
-| `remove` and its force option | Package / Review removal; explain payload deletion and active-package restrictions |
-| `gc --dry-run`, `gc` | Launcher / Storage cleanup; show candidates and retained references before deletion |
-| `use list`, `use latest`, `use <version>` | Nushell / Versions; latest means latest installed, not an implicit download |
-| `setup nu [version]`, force, minimal, skip-path | Nushell / Install; review version, bundled plugins, replacement and PATH effects |
-| `setup nu remove`, `setup nu path`, `setup nu use <path>` | Nushell / Manage installation; expose destructive managed-tree replacement and force gates explicitly |
-| `setup loader`, status, detect, add, remove, clean, install/install-missing, force, configure | Nushell / Loader; separate inspection, configuration, download, and cache actions |
-| `registry list`, sync, add, remove | Registries / Details and reviewed actions |
-| `doctor --scan`, `doctor --json`, repair via `doctor` | Health / Scan and report; reviewed repair; JSON is a report representation, not another destination |
-| `snapshot list`, inspect, rollback, delete | Snapshots / List, details, reviewed actions |
-| `nupm status`, inspect path/all, import path/manifest, diff | Integrations / nupm; target and `--nupm-home` forms; explicit import IDs and batch scope |
-| `init`, `init --refresh` | Integrations / Initialize or refresh resolved Nu paths |
-| `completions <shell> --print`, completion install | Integrations / Completions; preview and explicit destination-path review |
-| `--root`, help, version, verbose output | Global context, help overlay, About, operation transcript |
+| `search`, `search --all`, `info`, `list` | Native cached queries and package details |
+| Single-package `install`, pinned version | Native review/execution after spike; forced reinstall remains CLI only |
+| Single-package `activate` | Native review/execution after spike; all-target activation remains CLI only |
+| Single-package `update`, `update --check` | Native local check/review/execution after calibration; all-target update remains CLI only |
+| Single-package `remove` | Native review/execution after calibration; force remains CLI only |
+| `doctor --scan` report | Native explicit local scan, with network disabled; repair and remote probes remain CLI only |
+| `deactivate`, `activate --list`, `activate --check`, `try` | CLI only; native details still display activation identity |
+| `registry list/sync/add/remove/packages` | CLI only; Discover may inspect existing cached catalogs |
+| `use list/latest/<version>`, all `setup nu` actions | CLI only; no native Nu installation or switch controls |
+| All `setup loader` actions/options | CLI only, including detect/configure, download/install and cache cleanup |
+| `snapshot list/inspect/rollback/delete`, `gc` including dry-run | CLI only; no cleanup or snapshot preview promises |
+| All `nupm` actions and completion preview/install | CLI only; no nupm import or completion writes inside the TUI |
+| `init`, `init --refresh` | CLI only; missing initialization links to command explanation |
+| `update --self` and its check mode | CLI only; user exits TUI before binary replacement |
+| `--root`, help, version, verbose output | Root context, help overlay, About and operation transcript |
 
-Hidden backward-compatibility aliases need no duplicate UI controls. `--yes` is not a persistent preference: a TUI confirmation authorizes exactly one reviewed request. Structured input must preserve supported options without treating a command preview as executable source.
+These handoffs are an intentional product boundary from day one, not placeholders for eventual full-CLI coverage. Advanced flags outside the native set remain command guidance. Hidden aliases do not need duplicate entries. `--yes` is never a persistent preference: a confirmation authorizes one exact native request.
 
 ## Keyboard, resize, and visual behavior
 
-| Key | Behavior |
-| --- | --- |
-| `Ctrl+P` | Open command launcher |
-| `Tab` / `Shift+Tab` | Move focus between navigation, list, details, and action controls |
-| Arrows; `j` / `k` outside text input | Move selection or scroll the focused pane |
-| `/` | Filter the current list; Discover labels registry search distinctly |
-| `Enter` | Open details or activate the focused review control; never mutate from a package row |
-| `Esc` | Close overlay, cancel an unsubmitted form, or return to list |
-| `a`, `d`, `i`, `u`, `x` outside text input | Open context-specific activation, deactivation, installation, update, or removal review |
-| `r` | Reload local view data; network sync has a separate named action |
-| `?` | Show context-sensitive help |
-| `q` | Quit when idle and outside text input; otherwise follow active-operation policy |
+Use explicit focus states: Navigation, PackageList, PackageDetails, UpdatesList, FilterInput, LauncherInput, ReviewForm, DoctorReport, Transcript, Help and ResizeNotice. Exactly one owns input. An open overlay captures all input; global letter handlers never run underneath it. Show focus in the footer and with a visible pane marker, including monochrome mode.
 
-At 120 columns and above, show navigation plus list/detail panes. At 80–119 columns, collapse navigation to a destination selector and retain two panes only when both remain readable. Below 80 columns, show a single list or detail screen with Back navigation. Below 60 columns or 16 rows, show a resize message and Quit, preserving any operation status. These thresholds are design defaults to validate with actual terminal rendering.
+| Focus | Enabled input |
+| --- | --- |
+| Navigation | Up/Down select a destination; Left/Right or Tab moves pane focus; Enter focuses the package list; `q` requests quit |
+| PackageList | Arrows or `j`/`k` select; `/` enters filter; Enter opens the selected package action menu with available and blocked actions; `i`/`a`/`x` open applicable install/activate/remove review; `r` reloads local data; `q` requests quit |
+| PackageDetails | Arrows or `j`/`k` scroll; `i`/`a`/`x` open applicable reviews; Esc returns to list; `r` reloads local data; `q` requests quit |
+| UpdatesList | Arrows or `j`/`k` select; `/` enters filter; Enter opens the selected package action menu; `u` opens selected-package review; `r` reloads local data; `q` requests quit |
+| FilterInput / LauncherInput | Printable characters, including `a/d/i/u/x/r/q/?/`, are text; Enter applies/opens the selected result; Esc cancels; no letter shortcuts |
+| ReviewForm | Tab/Shift+Tab select explicit controls; text fields consume printable input; Enter activates only the focused control; Esc cancels before submission; initial focus is Cancel |
+| DoctorReport / Transcript / Help | Arrows/PageUp/PageDown scroll; Esc closes; no package action or quit letter shortcuts |
+| ResizeNotice | Only `q`, Ctrl+C quit policy, and resize handling; no package actions |
+
+`Ctrl+P` opens the launcher from idle Navigation/PackageList/PackageDetails/UpdatesList only. It is disabled in input fields and overlays. `?` opens help from those same idle focuses; Tab/Shift+Tab cycles visible panes there. `d` has no shortcut because native deactivation is out of scope. `u` never updates from Packages, and `r` never fetches network data. Missing/inapplicable actions are omitted from hints and do nothing. Ctrl+C follows operation-safe quit behavior globally. Keys cannot trigger a second action through event propagation.
+
+At 120 columns and above, show the two-destination navigation plus list/detail panes. At 80–119 columns, collapse navigation to a destination selector and retain two panes only when both remain readable. Below 80 columns, show a single list or detail screen with Back navigation. Below 60 columns or 16 rows, show a resize message and Quit, preserving any operation status. These thresholds are design defaults to validate with actual terminal rendering.
 
 Use the terminal's default background, cyan focus, readable neutral text, and restrained amber/red for warnings/errors. State labels and a selection marker carry meaning without color. Support monochrome, ordinary Unicode and ASCII border fallback, wrapped diagnostics, and scrolling for long IDs/paths. No emoji or required Nerd Fonts. Mouse support is optional; every operation must work from the keyboard. Keep animations minimal and do not require truecolor.
 
@@ -139,18 +133,18 @@ Use the terminal's default background, cyan focus, readable neutral text, and re
 
 ### Separate presentation, query, and execution
 
-Proposed modules, added incrementally:
+Proposed boundaries; do not create a general operation framework before the spike:
 
 - `src/tui/`: terminal guard, application state/update loop, widgets, screens, launcher, review forms, and operation event handling. No authoritative state writes or plugin registration here.
-- `src/operations/`: typed query/request/result interfaces shared by the CLI and TUI. Adapt one workflow at a time; do not migrate every handler before delivering a read-only workbench.
+- A workflow-specific adapter, initially for install and activate only, provides typed requests/results and isolated interaction. Whether it belongs in `src/operations/` is decided after the spike. Prompt isolation, progress and safe cancellation are separate work per workflow, potentially multiple PRs; they are not implied by wrapping an existing handler.
 - Existing `core`, `install`, `state`, `nu`, and `nupm_compat`: keep resolution, trust, transaction, ownership, journal, and Nu lifecycle authority.
 - Existing `cmd`: retain argument parsing and human/JSON rendering. Delegate to shared operations as each workflow is integrated.
 
 Use a state/message/update loop. A single worker executes blocking operations off the rendering/input thread and sends typed progress/results through a bounded channel. Avoid adding an async runtime solely for UI responsiveness. Tag queries with root, Nu identity, and request generation; discard stale responses after context or filter changes.
 
-Use structured read models for package rows/details, Nu context, registry provenance, doctor findings, and snapshot summaries. Never parse human CLI output into application state. Reuse `DoctorReport` and existing nupm report types where suitable; add only missing presentation-neutral queries.
+Use structured read models for package rows/details, Nu context, cached registry provenance, and doctor findings. Never parse human CLI output into application state. Reuse `DoctorReport` where suitable; add only missing presentation-neutral queries.
 
-Queries must not initialize a root, sync registries, reconcile journals, switch Nu, or persist projections. Audit helpers before calling them from view loading: a read-shaped method name is insufficient. For example, current `gc --dry-run` acquires the mutation lock and can clear lifecycle journals before returning; it is not a pure query. Extract a candidate inspection path before wiring a cleanup preview. Signature-loading paths must also be checked for trust/cache persistence.
+Queries must not initialize a root, sync registries, reconcile journals, switch Nu, or persist projections. Audit helpers before calling them from view loading: a read-shaped method name is insufficient. For example, current `gc --dry-run` acquires the mutation lock and can clear lifecycle journals before returning; it is not a pure query. Keep cleanup CLI only; any future native preview requires a separate pure inspection path. Signature-loading paths must also be checked for trust/cache persistence.
 
 ### Review, execute, re-read
 
@@ -168,7 +162,7 @@ The UI must not duplicate snapshot creation or promise that every operation is r
 
 Several handlers currently print to process stdout/stderr or read stdin, including snapshot actions, removal, and Nu pin offers. Passing them a worker thread does not make them TUI-safe. Extract typed interaction/results before enabling those actions in the full-screen UI; do not redirect process-wide stdout or automatically answer every prompt with yes.
 
-Where extraction is deferred, show an exact CLI handoff and mark the action Run outside TUI. If a later implementation offers terminal handoff, it must restore raw mode/alternate screen first, run the existing executable with argument arrays and inherited streams, then reinitialize and reload. Never concatenate user input into a shell command. Self-update exits the TUI before replacement; do not keep an executing binary-replacement task inside a UI worker.
+Features outside the native commitment use the launcher CLI-only explanation and Print command and exit mechanism. There is no suspend/spawn/resume bridge in this delivery. Never concatenate user input into an executed shell command. No native self-update task runs in a UI worker.
 
 Only one mutation may be active in a session. External processes remain governed by existing filesystem locks. A busy lock produces a visible message, never lock-file deletion. Browse the last loaded data while busy with an explicit stale marker; disable additional mutation actions. Do not silently queue changes.
 
@@ -180,19 +174,20 @@ Restore terminal state on normal exit, returned errors, and panics. Abrupt termi
 
 ## Delivery sequence and acceptance
 
-1. **Read-only workbench:** optional feature, bare-command and explicit launch dispatch, terminal guard, Installed/Discover/details, launcher, local context, structured reads, empty/error states, responsive layouts. No live mutations are exposed. Navigation offers an honest CLI handoff for unintegrated features.
-2. **Package lifecycle:** typed install/activate/deactivate/try/update/remove requests, reviewed scope, worker events, authoritative reload, prompt isolation, active-plugin gates and recovery tests.
-3. **Administration:** integrate Nu/loader, registries, health repair, snapshots, GC, nupm and completions incrementally. Add self-update handoff. Full feature coverage is achieved only when every coverage-table row has a tested native action or an explicitly labeled CLI handoff; report native coverage separately.
+1. **Packaging prerequisite:** convert dependencies to optional `tui` feature; add the CI default dependency-tree gate and enabled-feature/MSRV checks. Keep this separately reviewable. No terminal behavior changes or release-feature enablement yet.
+2. **Install/activate spike:** implement one vertical journey through the selected workbench using isolated roots: inspect package, review/install, reload as Installed/inactive, then independently review/activate and reload its Nu-specific activation state. This is a calibration spike, not a production coverage promise. Isolate prompts, emit typed results and real progress events, and define unsupported cancellation honestly. Exercise a module and plugin where lifecycle paths differ. Compare the refactor/adapter cost, regression surface, and terminal acceptance before scheduling more native actions. Record findings and revise estimates/architecture rather than treating the spike as automatic approval of `src/operations/`.
+3. **First native release:** after the spike, deliver Packages + Updates + launcher with the five named native operations. Each workflow needs its own reviewed request/effects contract and failure tests; update and removal may span multiple PRs. Keep every other command CLI only with explicit handoff labels. Add bare launch, escape hatch, terminal guard, responsive focus/navigation and command-on-exit behavior. Enable the release feature only after acceptance passes.
+4. **Later decisions:** dedicated Nushell, Registries, Snapshots, Health and Integrations screens, native deactivation/try, batch actions, richer cancellation and clipboard integration are deferred. They are not required for this release or implied by the inventory.
 
 Required implementation checks:
 
-- Default-feature and `tui`-feature builds/tests/clippy, formatting, packaging, and Rust 1.88 checks with the resolved lockfile. Verify that default builds do not link terminal UI dependencies.
-- Launch-dispatch tests cover every invocation in the table with both feature configurations and TTY states, global root selection, invalid arguments, exit statuses, and absence of root/config writes during help or rejected launches. Verify official release builds enable the TUI feature.
-- Ratatui `TestBackend` layout checks at 60/80/120 columns, short heights, monochrome, empty state, long IDs/paths, errors and overlays; keyboard tests verify focus and that row selection never mutates.
-- Temp-root query tests prove no files are created or changed on browse, including missing roots, existing journals, cached trust state, and GC preview. Isolate HOME/config and block test network access.
-- Operation tests verify exact confirmation scope, stale-review rejection, lock contention, snapshots/journals, inert installation, separate activation, plugin/module identity, mutation-gate refusal, partial failure and reload. Use existing fake Nu/test seams.
-- Real terminal acceptance on Windows, Linux and macOS for resize, redirected I/O rejection, panic/error restoration, key handling, long-running work and Ctrl+C behavior. `TestBackend` is not proof of terminal restoration.
-- Real-Nu lifecycle acceptance against isolated roots and configuration before claiming end-to-end install/activate/update/recovery readiness. Ordinary CLI output and existing tests remain compatible.
+- Default-feature and `tui`-feature builds/tests/clippy, formatting, packaging, and Rust 1.88 checks with the resolved lockfile. CI must reject Ratatui (including split `ratatui-*` crates) and Crossterm in the default normal/build graph; retaining them in `Cargo.lock` is expected. Feature-enabled checks must compile them.
+- Launch-dispatch tests cover every invocation in the table with both features and TTY states, `NUMAN_NO_TUI=1` precedence, other environment values, root selection, invalid arguments, statuses, and no root/config writes on help or rejected launch. Future release builds enable the feature only when ready.
+- Ratatui `TestBackend` layout checks at 60/80/120 columns, short heights, monochrome, empty/error states and long IDs/paths. Focus tests send every action letter in every focus, proving text entry/overlays cannot execute actions or quit through event propagation.
+- Temp-root query tests prove no persistent writes or network requests on entry, filter, selection, refresh and overlay open. Include absent roots, retained journals and cached trust state; isolate HOME/config and deny network. Doctor scan is explicit and local.
+- Spike acceptance proves inert install, separate activation consent, plugin/module identity, prompt isolation, real result/progress events, lock contention, snapshot/journal behavior, stale-review rejection, partial failure and authoritative reload. Add equivalent contracts before enabling update/remove; never claim unsafe cancellation works.
+- Print-command exit tests restore the terminal before stdout output, print exactly one requested command/newline with shell-correct quoting, preserve root/target, write diagnostics to stderr, clear cancelled requests and execute nothing.
+- Real terminal acceptance on Windows, Linux and macOS covers resize, TTY rejection, restoration after error/panic, focus indicators and active-operation Ctrl+C. Real-Nu lifecycle acceptance uses isolated roots/configuration. Buffer tests and a successful build do not establish runtime readiness.
 
 ## Evidence and references
 

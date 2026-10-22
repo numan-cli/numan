@@ -515,7 +515,7 @@ mod tests {
         );
         let cli = Cli::try_parse_from(["numan", "try", "foo/bar", "--no-activate"]).unwrap();
         match cli.command {
-            Commands::Try(args) => {
+            Some(Commands::Try(args)) => {
                 assert!(args.no_activate);
                 assert_eq!(args.package.as_deref(), Some("foo/bar"));
             }

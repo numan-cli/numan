@@ -24,6 +24,7 @@
 //!    candidate over the live file, or deleting the managed file when all
 //!    modules are deactivated.
 
+use crate::util::output::eprintln;
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 

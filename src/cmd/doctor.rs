@@ -253,13 +253,9 @@ fn check_root_layout(root: &Path, findings: &mut Vec<Finding>) {
         return;
     }
 
-    match std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(root.join(".doctor-write-test"))
-    {
-        Ok(_) => {
-            let _ = std::fs::remove_file(root.join(".doctor-write-test"));
+    match tempfile::NamedTempFile::new_in(root) {
+        Ok(probe) => {
+            drop(probe);
             findings.push(finding(
                 "root.writable",
                 Severity::Ok,
