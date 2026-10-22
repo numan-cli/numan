@@ -391,6 +391,10 @@ pub fn install_package(
         }
     }
 
+    // Validate hook activation metadata before promoting the staged payload.
+    // A malformed declaration must not leave an orphaned immutable install.
+    let hook_bindings = persist_hook_bindings(resolved.activation.as_ref(), &id.to_string())?;
+
     // 9. Snapshot lockfile before mutation (after download/extraction preflight succeeds).
     // Skip when the lockfile is empty — there is no prior state worth restoring.
     if !Lockfile::load(options.root)?.packages.is_empty() {
@@ -442,8 +446,6 @@ pub fn install_package(
         .map(|spec| spec.import.clone());
 
     let overlay = overlay_package_spec(resolved.activation.as_ref(), &pkg.package_type, &id)?;
-    let hook_bindings = persist_hook_bindings(resolved.activation.as_ref(), &id.to_string())?;
-
     let locked_dependencies: BTreeMap<String, String> = resolved
         .dependencies
         .iter()
@@ -538,14 +540,19 @@ fn persist_hook_bindings(
     activation: Option<&RegistryActivationSpec>,
     package_id: &str,
 ) -> Result<Option<Vec<HookBinding>>> {
-    let Some(spec) = activation.filter(|spec| spec.kind == "nu-hook") else {
+    let Some(spec) = activation else {
         return Ok(None);
     };
+    if spec.kind != "nu-hook" {
+        return Ok(None);
+    }
     let bindings = spec
         .bindings
         .as_ref()
         .filter(|bindings| !bindings.is_empty())
-        .with_context(|| format!("Hook package '{package_id}' has no activation.bindings"))?;
+        .with_context(|| {
+            format!("Hook package '{package_id}' has missing or empty activation.bindings")
+        })?;
     Ok(Some(bindings.clone()))
 }
 
@@ -598,5 +605,10 @@ mod tests {
             bindings: Some(Vec::new()),
         };
         assert!(persist_hook_bindings(Some(&spec), "owner/tool").is_err());
+        let null_bindings = RegistryActivationSpec {
+            bindings: None,
+            ..spec
+        };
+        assert!(persist_hook_bindings(Some(&null_bindings), "owner/tool").is_err());
     }
 }

@@ -56,13 +56,13 @@ These workflows are covered by unit tests, hermetic integration tests, and real-
 
 ## Registry package support
 
-| Registry package type | Install, verify, and lock | `numan activate` | Support tier |
+| Registry package type | Install, verify, and lock | Activation command | Support tier |
 | ----------------------- | ---------------------------- | ------------------ | -------------- |
-| Plugin | Yes | Yes, through Nu's plugin registry | Supported |
-| Module | Yes | Yes, through a numan-managed vendor autoload file | Supported |
-| Hook profile | Yes | Yes, through `numan hook enable` and an owned vendor-autoload file | Explicit opt-in; handlers run only on declared interactive events |
-| Script | Yes | No | Install-only; activation is deferred |
-| Completion package | Yes | No | Install-only; activation is deferred |
+| Plugin | Yes | `numan activate` (Nu plugin registry) | Supported |
+| Module | Yes | `numan activate` (managed vendor autoload) | Supported |
+| Hook profile | Yes | `numan hook enable` (owned vendor autoload) | Explicit opt-in; handlers run only on declared interactive events |
+| Script | Yes | None | Install-only; activation is deferred |
+| Completion package | Yes | None | Install-only; activation is deferred |
 
 Install-only packages remain inert: numan downloads, verifies, locks, lists,
 removes, and garbage-collects their payloads, but does not execute them or

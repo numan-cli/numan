@@ -26,6 +26,7 @@ pub struct HookProfile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "HookBindingRecordWire")]
 pub struct HookBindingRecord {
     pub id: String,
     pub event: String,
@@ -34,6 +35,35 @@ pub struct HookBindingRecord {
     pub filter: Option<String>,
     pub package_id: String,
     pub activated_at: String,
+}
+
+#[derive(Deserialize)]
+struct HookBindingRecordWire {
+    id: String,
+    event: String,
+    handler: String,
+    #[serde(default)]
+    filter: Option<String>,
+    package_id: String,
+    activated_at: String,
+}
+
+impl TryFrom<HookBindingRecordWire> for HookBindingRecord {
+    type Error = String;
+
+    fn try_from(value: HookBindingRecordWire) -> Result<Self, Self::Error> {
+        if !crate::nu::hooks::is_allowed_event(&value.event) {
+            return Err(format!("unsupported Nushell hook event '{}'", value.event));
+        }
+        Ok(Self {
+            id: value.id,
+            event: value.event,
+            handler: value.handler,
+            filter: value.filter,
+            package_id: value.package_id,
+            activated_at: value.activated_at,
+        })
+    }
 }
 
 impl HookProfile {
@@ -112,5 +142,12 @@ mod tests {
     fn allowed_events_non_empty() {
         assert!(!crate::nu::hooks::ALLOWED_HOOK_EVENTS.is_empty());
         assert!(crate::nu::hooks::ALLOWED_HOOK_EVENTS.contains(&"pre_prompt"));
+    }
+
+    #[test]
+    fn deserialization_rejects_unsupported_hook_events() {
+        let json = r#"{"bindings":[{"id":"x","event":"display_output","handler":"h.nu","package_id":"owner/pkg","activated_at":"now"}]}"#;
+        let error = serde_json::from_str::<HookProfile>(json).unwrap_err();
+        assert!(error.to_string().contains("unsupported Nushell hook event"));
     }
 }

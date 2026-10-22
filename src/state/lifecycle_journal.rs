@@ -65,6 +65,8 @@ pub enum LifecycleStage {
     OverlayStateCommitted,
     /// Rollback: hook profile (`nu_state/hook_profile.json`) committed or cleared.
     HookProfileCommitted,
+    /// Rollback: generated hook integration committed or deleted.
+    HookIntegrationCommitted,
     /// Rollback: all owned state committed; journal clear pending.
     Completed,
 }

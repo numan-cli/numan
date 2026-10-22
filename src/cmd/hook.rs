@@ -52,6 +52,9 @@ fn enable(args: &HookEnableArgs, root: &Path, runner: Option<&dyn CandidateRunne
     let _lock = acquire_mutation_lock(root)?;
     let nu_paths = NuPaths::load(root)?;
     nu_paths.validate_drift()?;
+    if runner.is_none() {
+        nu_paths.validate_vendor_drift_live()?;
+    }
     let vendor_dir = nu_paths
         .vendor_autoload_dir
         .as_deref()
@@ -78,7 +81,12 @@ fn enable(args: &HookEnableArgs, root: &Path, runner: Option<&dyn CandidateRunne
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>()
     } else {
-        args.packages.clone()
+        args.packages
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     };
     if requested.is_empty() {
         if profile.bindings.is_empty() {
@@ -98,7 +106,7 @@ fn enable(args: &HookEnableArgs, root: &Path, runner: Option<&dyn CandidateRunne
         return Ok(());
     }
 
-    let active_binding_ids: BTreeSet<String> = profile
+    let mut active_binding_ids: BTreeSet<String> = profile
         .bindings
         .iter()
         .map(|binding| binding.id.clone())
@@ -122,6 +130,12 @@ fn enable(args: &HookEnableArgs, root: &Path, runner: Option<&dyn CandidateRunne
         validate_declarations(package_id, declarations, &active_binding_ids)?;
         let mut resolved = Vec::new();
         for binding in declarations {
+            if !active_binding_ids.insert(binding.id.clone()) {
+                bail!(
+                    "Hook binding ID '{}' is already active or declared by another requested package.",
+                    binding.id
+                );
+            }
             let handler = resolve_entry(
                 root,
                 &entry.payload_path,
@@ -156,6 +170,7 @@ fn enable(args: &HookEnableArgs, root: &Path, runner: Option<&dyn CandidateRunne
         return Ok(());
     }
 
+    let enabled_binding_count: usize = targets.iter().map(|(_, bindings)| bindings.len()).sum();
     let activated_at = format_timestamp();
     for (package_id, bindings) in targets {
         let ids = bindings.iter().map(|binding| binding.id.clone()).collect();
@@ -185,7 +200,7 @@ fn enable(args: &HookEnableArgs, root: &Path, runner: Option<&dyn CandidateRunne
     )?;
     println!(
         "Enabled {} hook binding(s). Hooks load in new Nushell sessions.",
-        profile.bindings.len()
+        enabled_binding_count
     );
     Ok(())
 }
@@ -197,10 +212,64 @@ fn disable(
 ) -> Result<()> {
     let _lock = acquire_mutation_lock(root)?;
     let nu_paths = NuPaths::load(root)?;
+    nu_paths.validate_drift()?;
     let mut lockfile = Lockfile::load(root)?;
     let mut profile = HookProfile::load(root)?;
     if profile.bindings.is_empty() {
-        println!("No active hooks.");
+        let stale_packages: Vec<String> = lockfile
+            .packages
+            .iter()
+            .filter(|(_, entry)| entry.hook_activation.is_some())
+            .map(|(package_id, _)| package_id.clone())
+            .collect();
+        let managed_path = profile
+            .managed_file_path
+            .as_deref()
+            .map(PathBuf::from)
+            .or_else(|| {
+                nu_paths
+                    .vendor_autoload_dir
+                    .as_deref()
+                    .map(|dir| Path::new(dir).join(HOOK_AUTOLOAD_FILE))
+            });
+        let has_stale_file = managed_path.as_ref().is_some_and(|path| path.exists());
+        if stale_packages.is_empty() && !has_stale_file {
+            println!("No active hooks.");
+            return Ok(());
+        }
+        for package_id in &stale_packages {
+            if let Some(entry) = lockfile.packages.get_mut(package_id) {
+                entry.hook_activation = None;
+            }
+        }
+        if let Some(managed_path) = managed_path {
+            if managed_path.exists() {
+                assert_managed_file_owned(&managed_path)?;
+            }
+            set_profile_identity(&mut profile, &nu_paths, &managed_path);
+            commit_profile(
+                root,
+                &nu_paths,
+                &profile,
+                &mut lockfile,
+                runner,
+                SnapshotTrigger::Deactivate,
+            )?;
+        } else {
+            create_snapshot(
+                root,
+                SnapshotReason::PreMutation,
+                SnapshotTrigger::Deactivate,
+                None,
+                None,
+            )?;
+            lockfile.save(root)?;
+            HookProfile::delete(root)?;
+        }
+        println!(
+            "Reconciled {} stale hook activation record(s).",
+            stale_packages.len()
+        );
         return Ok(());
     }
 
@@ -366,8 +435,11 @@ fn commit_profile(
             .as_deref()
             .context("Missing managed hook path")?,
     );
-    let profile_path = root.join("nu_state").join("hook_profile.json");
+    let profile_path = HookProfile::profile_path(&root.canonicalize()?);
     let content = generate_hook_autoload_content(profile, &profile_path)?;
+    // Snapshot before creating the temporary candidate so a snapshot failure
+    // cannot strand a candidate file in the vendor-autoload directory.
+    create_snapshot(root, SnapshotReason::PreMutation, trigger, None, None)?;
     let candidate = write_candidate(&managed_path, &content)?;
     let real_runner;
     let runner = if let Some(runner) = runner {
@@ -382,8 +454,6 @@ fn commit_profile(
         .map(|binding| binding.package_id.as_str())
         .collect();
     validate_candidate(&candidate, runner, &packages)?;
-
-    create_snapshot(root, SnapshotReason::PreMutation, trigger, None, None)?;
 
     // Lockfile is a projection of the profile. Save it first; the owned Nu file
     // checks exact profile equality and stays inert during any interrupted gap.
@@ -495,7 +565,7 @@ mod tests {
 
         enable(
             &HookEnableArgs {
-                packages: vec!["owner/tool".into()],
+                packages: vec!["owner/tool".into(), "owner/tool".into()],
             },
             root,
             Some(&AcceptRunner),
@@ -514,7 +584,12 @@ mod tests {
         let managed = vendor.join(HOOK_AUTOLOAD_FILE);
         assert!(std::fs::read_to_string(&managed)
             .unwrap()
-            .contains("source \""));
+            .contains("source r#'"));
+        assert_eq!(
+            HookProfile::load(root).unwrap().bindings.len(),
+            1,
+            "duplicate package arguments must not duplicate callbacks"
+        );
 
         disable(
             &HookDisableArgs {
@@ -531,6 +606,51 @@ mod tests {
         assert!(!std::fs::read_to_string(managed)
             .unwrap()
             .contains("hooks/pre_prompt.nu"));
+    }
+
+    #[test]
+    fn snapshot_failure_does_not_leave_candidate_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let vendor = root.join("vendor/autoload");
+        std::fs::create_dir_all(&vendor).unwrap();
+        std::fs::create_dir_all(root.join("nu_state")).unwrap();
+        std::fs::write(HookProfile::profile_path(root), "invalid json").unwrap();
+        let nu_executable = root.join("nu.exe");
+        std::fs::write(&nu_executable, "fixture").unwrap();
+        let nu_paths = NuPaths {
+            nu_executable: nu_executable.to_string_lossy().into_owned(),
+            nu_version: "0.116.1".into(),
+            plugin_registry_path: root
+                .join("plugins/registry.msgpackz")
+                .to_string_lossy()
+                .into_owned(),
+            nu_executable_hash: "hash".into(),
+            platform: "test".into(),
+            data_dir: None,
+            vendor_autoload_dirs: vec![],
+            vendor_autoload_dir: Some(vendor.to_string_lossy().into_owned()),
+        };
+        let profile = HookProfile {
+            managed_file_path: Some(
+                vendor
+                    .join(HOOK_AUTOLOAD_FILE)
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            ..HookProfile::default()
+        };
+        let mut lockfile = Lockfile::empty();
+        assert!(commit_profile(
+            root,
+            &nu_paths,
+            &profile,
+            &mut lockfile,
+            Some(&AcceptRunner),
+            SnapshotTrigger::Activate,
+        )
+        .is_err());
+        assert!(std::fs::read_dir(vendor).unwrap().next().is_none());
     }
 
     fn test_entry() -> LockfileEntry {

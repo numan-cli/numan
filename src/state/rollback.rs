@@ -14,7 +14,7 @@
 //! interruption at any stage is: run the same rollback again.
 
 use anyhow::{bail, Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::nu::autoload::{validate_candidate, write_candidate, CandidateRunner};
 use crate::nu::paths::NuPaths;
@@ -27,6 +27,8 @@ use crate::state::snapshot::{
     create_snapshot, load_snapshot, verify_payloads, ManagedAutoloadProjection, Snapshot,
     SnapshotPaths, SnapshotReason, SnapshotRelation, SnapshotSidecar, SnapshotTrigger,
 };
+
+const HOOK_AUTOLOAD_FILE: &str = "numan-hooks.nu";
 
 /// Outcome summary of a completed rollback.
 #[derive(Debug)]
@@ -84,6 +86,25 @@ pub fn rollback_to_snapshot(
     }
 
     let snapshot = load_snapshot(root, id)?;
+    let current_hook_profile = HookProfile::load(root).ok();
+    let current_hook_managed_path = current_hook_profile
+        .and_then(|profile| profile.managed_file_path.map(PathBuf::from))
+        .or_else(|| {
+            NuPaths::load(root)
+                .ok()
+                .and_then(|paths| paths.vendor_autoload_dir)
+                .map(|dir| Path::new(&dir).join(HOOK_AUTOLOAD_FILE))
+        });
+    if matches!(
+        snapshot.hook_profile.as_ref(),
+        Some(SnapshotSidecar::Absent)
+    ) {
+        if let Some(managed_path) = &current_hook_managed_path {
+            if managed_path.exists() {
+                crate::util::fs_safety::assert_managed_file_owned(managed_path)?;
+            }
+        }
+    }
 
     // Exact-payload precondition: never approximate a rollback.
     let payload_errors = verify_payloads(
@@ -149,6 +170,7 @@ pub fn rollback_to_snapshot(
             )?;
             if value.nu_executable_sha256.as_deref() != Some(&nu_paths.nu_executable_hash)
                 || value.nu_version.as_deref() != Some(&nu_paths.nu_version)
+                || value.nu_executable.as_deref() != Some(&nu_paths.nu_executable)
             {
                 bail!(
                     "Snapshot '{}' contains hooks for a different Nu identity. Disable or re-enable hooks under the current Nu before rollback.",
@@ -217,6 +239,56 @@ pub fn rollback_to_snapshot(
             journal.stage = LifecycleStage::CandidateValidated;
             journal.save(root)?;
             Some((candidate, managed_path.to_path_buf()))
+        }
+        _ => None,
+    };
+
+    // Stage and validate hook integration with the caller's current Nu runner
+    // before restoring the snapshot's paths.json or committing the profile.
+    let staged_hook_candidate = match &snapshot.hook_profile {
+        Some(SnapshotSidecar::Present { value, .. }) => {
+            let managed_path = value
+                .managed_file_path
+                .as_deref()
+                .map(PathBuf::from)
+                .or_else(|| current_hook_managed_path.clone());
+            if let Some(managed_path) = managed_path {
+                if managed_path.exists() {
+                    crate::util::fs_safety::assert_managed_file_owned(&managed_path)?;
+                }
+                if let Some(parent) = managed_path.parent() {
+                    std::fs::create_dir_all(parent).with_context(|| {
+                        format!(
+                            "Failed to create hook vendor-autoload directory '{}'",
+                            parent.display()
+                        )
+                    })?;
+                }
+                let content = crate::nu::hooks::generate_hook_autoload_content(
+                    value,
+                    &HookProfile::profile_path(&current_root),
+                )?;
+                let candidate = write_candidate(&managed_path, &content)?;
+                journal.stage = LifecycleStage::CandidateStaged;
+                journal.save(root)?;
+                let package_ids: Vec<&str> = value
+                    .bindings
+                    .iter()
+                    .map(|binding| binding.package_id.as_str())
+                    .collect();
+                validate_candidate(&candidate, runner, &package_ids)
+                    .context("Restored hook integration failed Nu validation")?;
+                journal.stage = LifecycleStage::CandidateValidated;
+                journal.save(root)?;
+                Some((candidate, managed_path))
+            } else if value.bindings.is_empty() {
+                None
+            } else {
+                bail!(
+                    "Snapshot '{}' has active hooks but no managed hook integration path.",
+                    id
+                );
+            }
         }
         _ => None,
     };
@@ -319,33 +391,24 @@ pub fn rollback_to_snapshot(
         None => {}
         Some(SnapshotSidecar::Present { value, .. }) => {
             value.save(root)?;
-            if !value.bindings.is_empty() {
-                if let Some(managed_path) = value.managed_file_path.as_deref() {
-                    let nu_paths = crate::nu::paths::NuPaths::load(root)?;
-                    let content = crate::nu::hooks::generate_hook_autoload_content(
-                        value,
-                        &HookProfile::profile_path(root),
-                    )?;
-                    let managed_path = std::path::Path::new(managed_path);
-                    let candidate = crate::nu::autoload::write_candidate(managed_path, &content)?;
-                    let runner =
-                        crate::nu::autoload::NuCandidateRunner::new(&nu_paths.nu_executable);
-                    crate::nu::autoload::validate_candidate(
-                        &candidate,
-                        &runner,
-                        &value
-                            .bindings
-                            .iter()
-                            .map(|binding| binding.package_id.as_str())
-                            .collect::<Vec<_>>(),
-                    )?;
-                    crate::nu::autoload::replace_managed_file(managed_path, &candidate)?;
+            journal.stage = LifecycleStage::HookProfileCommitted;
+            journal.save(root)?;
+            if let Some((candidate, managed_path)) = staged_hook_candidate {
+                crate::nu::autoload::replace_managed_file(&managed_path, &candidate)?;
+            }
+        }
+        Some(SnapshotSidecar::Absent) => {
+            HookProfile::delete(root)?;
+            journal.stage = LifecycleStage::HookProfileCommitted;
+            journal.save(root)?;
+            if let Some(managed_path) = &current_hook_managed_path {
+                if managed_path.exists() {
+                    crate::nu::autoload::delete_managed_file(managed_path)?;
                 }
             }
         }
-        Some(SnapshotSidecar::Absent) => HookProfile::delete(root)?,
     }
-    journal.stage = LifecycleStage::HookProfileCommitted;
+    journal.stage = LifecycleStage::HookIntegrationCommitted;
     journal.save(root)?;
 
     journal.stage = LifecycleStage::Completed;
@@ -834,6 +897,91 @@ mod tests {
         let restored_content = std::fs::read_to_string(&managed_path).unwrap();
         assert!(restored_content.contains("v1"));
         assert!(!restored_content.contains("v2"));
+    }
+
+    #[test]
+    fn rollback_removes_stale_hook_file_when_snapshot_profile_was_absent() {
+        let dir = make_root();
+        let root = dir.path();
+        let snap = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Deactivate,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let vendor = root.join("vendor/autoload");
+        std::fs::create_dir_all(&vendor).unwrap();
+        let managed_path = vendor.join(HOOK_AUTOLOAD_FILE);
+        let profile = HookProfile {
+            managed_file_path: Some(managed_path.to_string_lossy().into_owned()),
+            ..HookProfile::default()
+        };
+        profile.save(root).unwrap();
+        std::fs::write(
+            &managed_path,
+            format!(
+                "{}\n# stale hook integration\n",
+                crate::util::fs_safety::OWNERSHIP_MARKER
+            ),
+        )
+        .unwrap();
+
+        rollback_to_snapshot(root, &snap.id, &FakeCandidateRunner::success()).unwrap();
+        assert!(!HookProfile::profile_path(root).exists());
+        assert!(!managed_path.exists());
+    }
+
+    #[test]
+    fn rollback_refuses_hook_profile_when_nu_executable_path_changed() {
+        let dir = make_root();
+        let root = dir.path();
+        save_fake_paths(root, "same-hash", "0.116.1");
+        let nu_paths = NuPaths::load(root).unwrap();
+        let profile = HookProfile {
+            bindings: vec![crate::state::hook_profile::HookBindingRecord {
+                id: "owner/tool/prompt".into(),
+                event: "pre_prompt".into(),
+                handler: root
+                    .join("packages/tool/prompt.nu")
+                    .to_string_lossy()
+                    .into_owned(),
+                filter: None,
+                package_id: "owner/tool".into(),
+                activated_at: "now".into(),
+            }],
+            nu_executable: Some(nu_paths.nu_executable.clone()),
+            nu_executable_sha256: Some(nu_paths.nu_executable_hash.clone()),
+            nu_version: Some(nu_paths.nu_version.clone()),
+            managed_file_path: Some(
+                root.join("vendor/autoload/numan-hooks.nu")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            ..HookProfile::default()
+        };
+        profile.save(root).unwrap();
+        let snap = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Deactivate,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let mut moved_nu_paths = nu_paths;
+        moved_nu_paths.nu_executable = root.join("moved-nu.exe").to_string_lossy().into_owned();
+        moved_nu_paths.save(root).unwrap();
+        let error =
+            rollback_to_snapshot(root, &snap.id, &FakeCandidateRunner::success()).unwrap_err();
+        assert!(
+            error.to_string().contains("different Nu identity"),
+            "{error}"
+        );
+        assert!(PendingLifecycle::load(root).unwrap().is_none());
     }
 
     #[test]

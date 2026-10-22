@@ -325,6 +325,16 @@ where
         snapshot_trigger: crate::state::snapshot::SnapshotTrigger::Install,
     };
 
+    if Lockfile::load(root)?
+        .packages
+        .get(package_id)
+        .is_some_and(|entry| entry.hook_activation.is_some())
+    {
+        bail!(
+            "Package '{package_id}' has active Nushell hooks. Run `numan hook disable {package_id}` before trying another version."
+        );
+    }
+
     let result = install(package_id, version, &options)
         .with_context(|| format!("Failed to install '{package_id}'"))?;
 

@@ -7,8 +7,10 @@ owned bindings with `numan hook disable [owner/name ...]`.
 
 ## Binding contract
 
-- Supported events: `pre_prompt`, `pre_execution`, `env_change`, and
-  `display_output`. Unknown events fail closed.
+- Supported events: `pre_prompt`, `pre_execution`, and `env_change`. Unknown
+  events fail closed. `display_output` is not supported because Nu represents it
+  as a single string or closure rather than a composable hook list; replacing
+  it could discard the user's configured output renderer.
 - Each binding ID is unique within a package and across the active profile.
 - Handler paths must be relative `.nu` files contained in the installed payload.
   Numan resolves and canonicalizes each handler before enabling it.
@@ -36,7 +38,9 @@ disables Numan hooks until a later hook command repairs the projection; it canno
 leave a partially merged callback set.
 
 Duplicate IDs, missing handlers, unsafe paths, empty declarations, unsupported
-events, invalid filters, and unresolved dependencies fail before activation.
+events, and unresolved dependencies fail before activation. Filters are parsed
+as part of the generated candidate by Nu before activation; Numan does not
+evaluate filter expressions, so runtime type or command errors remain possible.
 Active hook packages must be disabled before update or removal. Ordinary
 `numan activate` and `numan deactivate` do not manage the hook capability.
 

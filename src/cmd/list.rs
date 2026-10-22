@@ -1,7 +1,10 @@
+use crate::nu::hooks::generate_hook_autoload_content;
 use crate::nu::paths::NuPaths;
 use crate::nupm_compat::schema::NUPM_IMPORT_ORIGIN;
+use crate::state::hook_profile::HookProfile;
 use crate::state::lockfile::{Lockfile, BUNDLED_NU_ORIGIN};
 use anyhow::Result;
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 
@@ -13,6 +16,20 @@ pub fn execute(root: &Path) -> Result<()> {
 fn execute_to(root: &Path, out: &mut dyn Write) -> Result<()> {
     let lockfile = Lockfile::load(root)?;
     let nu_paths = NuPaths::load(root).ok();
+    let active_hook_packages = nu_paths.as_ref().and_then(|paths| {
+        let profile = HookProfile::load(root).ok()?;
+        let managed_path = profile.managed_file_path.as_deref()?;
+        let profile_path = HookProfile::profile_path(&root.canonicalize().ok()?);
+        let expected_content = generate_hook_autoload_content(&profile, &profile_path).ok()?;
+        if profile.nu_executable.as_deref() != Some(&paths.nu_executable)
+            || profile.nu_executable_sha256.as_deref() != Some(&paths.nu_executable_hash)
+            || profile.nu_version.as_deref() != Some(&paths.nu_version)
+            || std::fs::read_to_string(managed_path).ok()? != expected_content
+        {
+            return None;
+        }
+        Some(profile)
+    });
 
     if lockfile.is_empty() {
         writeln!(out, "No packages installed.")?;
@@ -24,9 +41,21 @@ fn execute_to(root: &Path, out: &mut dyn Write) -> Result<()> {
     for (id, entry) in &lockfile.packages {
         let status = match &nu_paths {
             Some(p)
-                if entry.hook_activation.as_ref().is_some_and(|activation| {
-                    activation.nu_executable_sha256 == p.nu_executable_hash
-                        && activation.nu_version == p.nu_version
+                if active_hook_packages.as_ref().is_some_and(|profile| {
+                    entry.hook_activation.as_ref().is_some_and(|activation| {
+                        let profile_ids: BTreeSet<&str> = profile
+                            .bindings
+                            .iter()
+                            .filter(|binding| binding.package_id == *id)
+                            .map(|binding| binding.id.as_str())
+                            .collect();
+                        let activation_ids: BTreeSet<&str> =
+                            activation.binding_ids.iter().map(String::as_str).collect();
+                        !profile_ids.is_empty()
+                            && profile_ids == activation_ids
+                            && activation.nu_executable_sha256 == p.nu_executable_hash
+                            && activation.nu_version == p.nu_version
+                    })
                 }) =>
             {
                 "hooks enabled"
@@ -62,7 +91,7 @@ fn execute_to(root: &Path, out: &mut dyn Write) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::lockfile::{LockfileEntry, PluginActivation};
+    use crate::state::lockfile::{HookActivation, LockfileEntry, PluginActivation};
 
     fn base_entry(version: &str, package_type: &str) -> LockfileEntry {
         LockfileEntry {
@@ -163,5 +192,83 @@ mod tests {
         assert!(s.contains("Installed packages (2):"));
         assert!(s.contains("owner/active  v1.0.0  [plugin]  activated"));
         assert!(s.contains("owner/inactive  v2.0.0  [module]  installed"));
+    }
+
+    #[test]
+    fn hooks_enabled_requires_matching_profile_and_managed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let vendor = root.join("vendor/autoload");
+        std::fs::create_dir_all(&vendor).unwrap();
+        std::fs::create_dir_all(root.join("nu_state")).unwrap();
+        let nu_executable = root.join("nu");
+        std::fs::write(&nu_executable, "fixture").unwrap();
+        let paths = NuPaths {
+            nu_executable: nu_executable.to_string_lossy().into_owned(),
+            nu_version: "0.116.1".into(),
+            plugin_registry_path: root
+                .join("plugins/registry.msgpackz")
+                .to_string_lossy()
+                .into_owned(),
+            nu_executable_hash: "hash".into(),
+            platform: "test".into(),
+            data_dir: None,
+            vendor_autoload_dirs: vec![],
+            vendor_autoload_dir: Some(vendor.to_string_lossy().into_owned()),
+        };
+        paths.save(root).unwrap();
+
+        let profile = HookProfile {
+            bindings: vec![crate::state::hook_profile::HookBindingRecord {
+                id: "owner/pkg/prompt".into(),
+                event: "pre_prompt".into(),
+                handler: root
+                    .join("package/prompt.nu")
+                    .to_string_lossy()
+                    .into_owned(),
+                filter: None,
+                package_id: "owner/pkg".into(),
+                activated_at: "now".into(),
+            }],
+            nu_executable: Some(paths.nu_executable.clone()),
+            nu_executable_sha256: Some(paths.nu_executable_hash.clone()),
+            nu_version: Some(paths.nu_version.clone()),
+            vendor_autoload_dir: Some(vendor.to_string_lossy().into_owned()),
+            managed_file_path: Some(vendor.join("numan-hooks.nu").to_string_lossy().into_owned()),
+        };
+        profile.save(root).unwrap();
+        std::fs::write(
+            profile.managed_file_path.as_ref().unwrap(),
+            generate_hook_autoload_content(
+                &profile,
+                &HookProfile::profile_path(&root.canonicalize().unwrap()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut entry = base_entry("1.0.0", "plugin");
+        entry.hook_activation = Some(HookActivation {
+            binding_ids: vec!["owner/pkg/prompt".into()],
+            nu_executable_sha256: "hash".into(),
+            nu_version: "0.116.1".into(),
+            activated_at: "now".into(),
+        });
+        let mut lock = Lockfile::empty();
+        lock.packages.insert("owner/pkg".into(), entry);
+        lock.save(root).unwrap();
+
+        let mut out = Vec::new();
+        execute_to(root, &mut out).unwrap();
+        assert!(String::from_utf8(out)
+            .unwrap()
+            .contains("[plugin]  hooks enabled"));
+
+        std::fs::write(profile.managed_file_path.as_ref().unwrap(), "stale").unwrap();
+        let mut out = Vec::new();
+        execute_to(root, &mut out).unwrap();
+        assert!(String::from_utf8(out)
+            .unwrap()
+            .contains("[plugin]  installed"));
     }
 }
