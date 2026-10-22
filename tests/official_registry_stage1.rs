@@ -275,6 +275,9 @@ fn stage1_official_registry() {
         .expect("failed to create isolated Stage 1 acceptance run");
     match run.execute() {
         Ok(summary) => {
+            // The evidence path identifies the acceptance run; it is not a
+            // secret and is needed to inspect the generated evidence.
+            // codeql[rust/cleartext-logging]
             println!(
                 "Stage 1 passed: package={} version={} evidence={}",
                 summary.package_id,
