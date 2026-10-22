@@ -126,6 +126,7 @@ impl ModuleTestEnv {
         .unwrap();
 
         let entry = LockfileEntry {
+            hook_activation: None,
             version: version.to_string(),
             package_type: "module".to_string(),
             source: "archive".to_string(),

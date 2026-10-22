@@ -91,6 +91,7 @@ impl InitRefreshEnv {
         lockfile.packages.insert(
             "owner/foo".to_string(),
             LockfileEntry {
+                hook_activation: None,
                 version: "1.0.0".to_string(),
                 package_type: "module".to_string(),
                 source: "archive".to_string(),

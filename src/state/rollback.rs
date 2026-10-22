@@ -377,6 +377,7 @@ mod tests {
 
     fn entry_for(payload_rel: &str) -> crate::state::lockfile::LockfileEntry {
         crate::state::lockfile::LockfileEntry {
+            hook_activation: None,
             version: "1.0.0".to_string(),
             package_type: "module".to_string(),
             source: "archive".to_string(),

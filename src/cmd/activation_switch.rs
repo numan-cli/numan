@@ -712,6 +712,7 @@ mod tests {
 
     fn plugin_entry(paths: &NuPaths, payload: &str, active: bool) -> LockfileEntry {
         LockfileEntry {
+            hook_activation: None,
             version: "1.0.0".to_string(),
             package_type: "plugin".to_string(),
             source: "binary".to_string(),
@@ -756,6 +757,7 @@ mod tests {
         let vendor = paths.vendor_autoload_dir.clone().unwrap();
         let managed = format!("{vendor}/numan.nu");
         LockfileEntry {
+            hook_activation: None,
             version: "1.0.0".to_string(),
             package_type: "module".to_string(),
             source: "archive".to_string(),
@@ -974,6 +976,7 @@ mod tests {
         lockfile.packages.insert(
             "a/p".into(),
             LockfileEntry {
+                hook_activation: None,
                 version: "1.0.0".to_string(),
                 package_type: "plugin".to_string(),
                 source: "binary".to_string(),

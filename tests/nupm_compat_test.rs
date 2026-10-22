@@ -259,6 +259,7 @@ fn t18_registry_collision_fails_without_lockfile_change() {
     lockfile.packages.insert(
         "test/minimal".to_string(),
         numan_cli::state::lockfile::LockfileEntry {
+            hook_activation: None,
             version: "9.9.9".to_string(),
             package_type: "module".to_string(),
             source: "registry".to_string(),

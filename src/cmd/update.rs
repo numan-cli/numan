@@ -690,6 +690,7 @@ mod tests {
 
     fn base_entry() -> LockfileEntry {
         LockfileEntry {
+            hook_activation: None,
             version: "1.0.0".to_string(),
             package_type: "plugin".to_string(),
             source: "binary".to_string(),
@@ -897,6 +898,7 @@ mod tests {
             lockfile.packages.insert(
                 pkg_id.clone(),
                 LockfileEntry {
+                    hook_activation: None,
                     version: "1.0.0".to_string(),
                     package_type: "plugin".to_string(),
                     source: "binary".to_string(),

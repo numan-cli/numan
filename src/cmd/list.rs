@@ -58,6 +58,7 @@ mod tests {
 
     fn base_entry(version: &str, package_type: &str) -> LockfileEntry {
         LockfileEntry {
+            hook_activation: None,
             version: version.to_string(),
             package_type: package_type.to_string(),
             source: "binary".to_string(),

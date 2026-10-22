@@ -454,6 +454,7 @@ pub fn install_package(
     };
 
     let entry = LockfileEntry {
+        hook_activation: None,
         version: version_str.clone(),
         package_type: pkg.package_type.to_string(),
         source: resolved.artifact.kind.clone(),

@@ -134,6 +134,7 @@ impl Fixture {
                     entry: None,
                     overlay_name: None,
                     exports: None,
+                    bindings: None,
                 }),
                 provenance: None,
                 evidence_tier: None,
