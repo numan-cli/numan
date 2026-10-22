@@ -1,7 +1,7 @@
 # Numan TUI: CLI Parity Design
 
 Date: 2026-10-22
-Status: Design only; implementation not started
+Status: Implemented. Phase 0 (Clap-derived catalog, Commands section, guided forms, editable re-validated preview), Phase 1 (captured read-only execution), and Phases 2-4 (generic reviewed execution for mutating, prompt-isolated, and external-system commands via execute_cli) are in the tree. Remaining exceptions are listed under Parity exceptions.
 Supersedes, on approval: the CLI-only inventory in
 `docs/specs/2026-10-18-optional-tui-design.md` § "Native commitment and CLI-only inventory"
 
@@ -233,7 +233,7 @@ revert to hand-off:
    renames the live executable. Executing it from the TUI worker replaces the binary
    mid-session. Options: (a) `--check` in-TUI, update scheduled as a post-exit step
    the user confirms in the review; (b) in-TUI execution with forced exit-on-success.
-   Decision needed before Phase 4; until then the row stays preview-only, labeled.
+   Resolved during implementation: option (b) - executes in the TUI after the generic review; on success the result advises restarting numan, since the running process keeps the old image.
 2. **`overlay use|hide`.** The Numan-side record executes in-TUI, but the effect —
    `overlay use "<path>"` in the caller's Nushell — cannot be applied to a shell the
    TUI does not own (the CLI has the same limit; it prints the statement,

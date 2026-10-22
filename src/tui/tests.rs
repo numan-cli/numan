@@ -1,5 +1,6 @@
 use super::{
     app::{App, Command, Focus, Overlay, Shell, View},
+    catalog::FieldState,
     operations::{self, Action},
     ui,
 };
@@ -549,6 +550,295 @@ fn real_nu_module_install_activate_spike() {
         String::from_utf8_lossy(&result.stderr)
     );
     assert!(String::from_utf8_lossy(&result.stdout).contains("version 1"));
+}
+
+#[test]
+fn commands_view_form_editing_never_leaks_action_keys() {
+    let root = Path::new("/tmp/numan-commands-test");
+    let mut app = App::new(root);
+    app.view = View::Commands;
+    app.focus = Focus::List;
+    assert_eq!(app.command_specs().len(), 40);
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.command_selected, 1);
+    app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.command_selected, 0);
+
+    app.open_command_form("snapshot rollback");
+    assert!(matches!(app.overlay, Some(Overlay::CommandForm(_))));
+    // Enter edits the first field; typed action letters are text, never shortcuts.
+    assert!(app
+        .key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .is_none());
+    for c in "qixaur".chars() {
+        assert!(app.key(key(c)).is_none());
+        assert!(!app.exit);
+        assert!(matches!(app.overlay, Some(Overlay::CommandForm(_))));
+    }
+    assert!(app
+        .key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .is_none());
+    if let Some(Overlay::CommandForm(form)) = &app.overlay {
+        assert_eq!(form.fields[0].value, "qixaur");
+    } else {
+        panic!("form closed unexpectedly");
+    }
+    // Move to the preview row and edit it: appending a space keeps it valid,
+    // and committing must re-parse and rebuild the form.
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    app.key(key(' '));
+    assert!(app
+        .key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .is_none());
+    if let Some(Overlay::CommandForm(form)) = &app.overlay {
+        assert!(form.error.is_none(), "{:?}", form.error);
+        assert!(form
+            .notice
+            .as_deref()
+            .is_some_and(|notice| notice.contains("Preview valid")));
+    } else {
+        panic!("form closed unexpectedly");
+    }
+    // Invalid preview edits stay in the editor with an error.
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    app.key(key(';'));
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    if let Some(Overlay::CommandForm(form)) = &app.overlay {
+        assert!(form.error.is_some());
+        assert!(form.editing.is_some(), "invalid edit must stay editable");
+    } else {
+        panic!("form closed unexpectedly");
+    }
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.overlay.is_none());
+    assert!(!app.exit);
+}
+
+#[test]
+fn commands_browsing_and_form_editing_are_inert() {
+    let fixture = Fixture::new(false);
+    let before = inventory(fixture.root());
+    let mut app = app(&fixture);
+    app.focus = Focus::Navigation;
+    for _ in 0..3 {
+        app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    }
+    assert_eq!(app.view, View::Commands);
+    app.focus = Focus::List;
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    app.open_command_form("registry add");
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    for c in "custom".chars() {
+        app.key(key(c));
+    }
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.overlay.is_none());
+    assert_eq!(inventory(fixture.root()), before);
+}
+
+#[test]
+fn commands_layout_lists_catalog_and_details() {
+    let fixture = Fixture::new(false);
+    let mut app = app(&fixture);
+    app.view = View::Commands;
+    let mut terminal = Terminal::new(TestBackend::new(120, 35)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    let text = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(text.contains("Commands"), "{text}");
+    assert!(text.contains("Command details"), "{text}");
+    assert!(text.contains("Phase"), "{text}");
+}
+
+#[test]
+fn read_only_execution_captures_output_and_refuses_mutations() {
+    let fixture = Fixture::new(false);
+    let listed = operations::execute_read_only(fixture.root(), &["list".into()]).unwrap();
+    assert!(listed.contains("No packages installed"), "{listed}");
+    let registries =
+        operations::execute_read_only(fixture.root(), &["registry".into(), "list".into()]).unwrap();
+    assert!(!registries.is_empty());
+    let snapshots =
+        operations::execute_read_only(fixture.root(), &["snapshot".into(), "list".into()]).unwrap();
+    assert!(snapshots.contains("No snapshots"), "{snapshots}");
+    for argv in [
+        vec!["remove", "owner/pkg"],
+        vec![
+            "snapshot",
+            "rollback",
+            "018f0000-0000-7000-8000-000000000000",
+        ],
+        vec!["registry", "sync"],
+        vec!["update", "--self"],
+    ] {
+        let argv: Vec<String> = argv.into_iter().map(str::to_string).collect();
+        assert!(
+            operations::execute_read_only(fixture.root(), &argv).is_err(),
+            "{argv:?} must refuse in Phase 1"
+        );
+    }
+    // Read-only execution must not write.
+    let before = inventory(fixture.root());
+    operations::execute_read_only(fixture.root(), &["list".into()]).unwrap();
+    assert_eq!(inventory(fixture.root()), before);
+}
+
+#[test]
+fn form_execute_row_returns_read_only_command() {
+    let root = Path::new("/tmp/numan-commands-test");
+    let mut app = App::new(root);
+    app.open_command_form("list");
+    // No fields: row 0 is preview, row 1 is execute.
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert!(matches!(
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        Some(Command::ExecuteReadOnly(argv)) if argv == vec!["list".to_string()]
+    ));
+    assert!(app.overlay.is_none());
+    // A mutating command has no execute row in Phase 1.
+    app.open_command_form("remove");
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert!(
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .is_none()
+            || matches!(app.overlay, Some(Overlay::CommandForm(_)))
+    );
+}
+
+#[test]
+fn generic_review_gates_mutating_execution_and_mode_classifies() {
+    use crate::tui::catalog::{self, ExecutionMode};
+    assert_eq!(
+        catalog::execution_mode("tui", &[]),
+        ExecutionMode::Blocked("The TUI cannot open inside itself.")
+    );
+    assert_eq!(
+        catalog::execution_mode("list", &[]),
+        ExecutionMode::ReadOnly
+    );
+
+    let root = Path::new("/tmp/numan-commands-test");
+    let mut app = App::new(root);
+    let remove = catalog::spec("remove").unwrap();
+    assert_eq!(
+        catalog::execution_mode(
+            "remove",
+            &remove
+                .fields
+                .iter()
+                .map(FieldState::from_spec)
+                .collect::<Vec<_>>()
+        ),
+        ExecutionMode::Reviewed
+    );
+    app.open_command_form("remove");
+    // Fill the required package field.
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    for c in "owner/pkg".chars() {
+        app.key(key(c));
+    }
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    // Fields: package, yes, force. Preview is row 3, execute is row 4.
+    for _ in 0..4 {
+        app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    }
+    assert!(app
+        .key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .is_none());
+    match &app.overlay {
+        Some(Overlay::GenericReview {
+            effects, confirm, ..
+        }) => {
+            assert!(!confirm, "review must default to Cancel");
+            assert!(effects.iter().any(|line| line.contains("Destructive")));
+            assert!(effects.iter().any(|line| line.contains("--yes")));
+        }
+        other => panic!("expected generic review, got {}", other.is_some()),
+    }
+    // Enter on Cancel does nothing; Tab arms Confirm; Enter executes.
+    assert!(app
+        .key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .is_none());
+    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert!(matches!(
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        Some(Command::ExecuteReadOnly(argv)) if argv == vec!["remove".to_string(), "owner/pkg".to_string()]
+    ));
+}
+
+#[test]
+fn generic_executor_installs_and_removes_and_refuses_nested_tui() {
+    let fixture = Fixture::new(false);
+    let installed = quiet(|| {
+        operations::execute_cli(
+            fixture.root(),
+            &["install".to_string(), fixture.id().to_string()],
+        )
+    })
+    .unwrap();
+    assert!(installed.contains("completed"), "{installed}");
+    assert!(Lockfile::load(fixture.root())
+        .unwrap()
+        .packages
+        .contains_key(fixture.id()));
+    // gc --dry-run runs through the reviewed executor without deleting.
+    quiet(|| operations::execute_cli(fixture.root(), &["gc".into(), "--dry-run".into()])).unwrap();
+    assert!(Lockfile::load(fixture.root())
+        .unwrap()
+        .packages
+        .contains_key(fixture.id()));
+    // Remove injects --yes only at execution; the lockfile entry must be gone.
+    quiet(|| {
+        operations::execute_cli(
+            fixture.root(),
+            &["remove".to_string(), fixture.id().to_string()],
+        )
+    })
+    .unwrap();
+    assert!(Lockfile::load(fixture.root()).unwrap().is_empty());
+    // Nested TUI and unknown execution refuse without state changes.
+    assert!(operations::execute_cli(fixture.root(), &["tui".into()]).is_err());
+    assert!(operations::execute_cli(
+        fixture.root(),
+        &[
+            "snapshot".into(),
+            "rollback".into(),
+            "018f0000-0000-7000-8000-000000000000".into()
+        ]
+    )
+    .is_err());
+}
+
+#[test]
+fn commands_list_shows_scrollbar_and_tier_badges() {
+    let fixture = Fixture::new(false);
+    let mut app = app(&fixture);
+    app.view = View::Commands;
+    // Short height: 40 catalog rows cannot fit, so a scrollbar thumb appears.
+    let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    let text = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(text.contains("\u{2588}"), "scrollbar thumb missing: {text}");
+    assert!(text.contains("Destructive"), "{text}");
+    assert!(text.contains("ReadOnly"), "{text}");
 }
 
 #[test]
