@@ -184,7 +184,7 @@ fn ensure_no_pending(root: &Path) -> Result<()> {
 fn fingerprint(root: &Path) -> Result<String> {
     fn hash_path(path: &Path, hash: &mut Sha256) -> Result<()> {
         hash.update(path.to_string_lossy().as_bytes());
-        if !path.exists() {
+        if path.symlink_metadata().is_err() {
             hash.update(b"missing");
             return Ok(());
         }
