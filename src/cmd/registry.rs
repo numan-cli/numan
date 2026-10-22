@@ -33,7 +33,7 @@ pub enum RegistryCommands {
     Packages,
 }
 
-#[cfg_attr(not(feature = "tui"), allow(dead_code))] // used by the TUI read-only executor
+#[allow(dead_code)] // caller is the TUI executor in an upper stack layer
 pub(crate) fn execute_to(cmd: &RegistryCommands, root: &Path, out: &mut dyn Write) -> Result<()> {
     match cmd {
         RegistryCommands::List => list_registries(root, out),

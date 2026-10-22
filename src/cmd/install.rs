@@ -10,7 +10,6 @@ use crate::core::registry::RegistryManager;
 use crate::core::resolve::Resolver;
 use crate::install::transaction;
 use crate::util::fs_safety::acquire_mutation_lock;
-use crate::util::output::eprintln;
 
 /// Install a package
 #[derive(Parser)]

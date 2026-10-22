@@ -40,7 +40,7 @@ pub enum SnapshotCommands {
     },
 }
 
-#[cfg_attr(not(feature = "tui"), allow(dead_code))] // used by the TUI read-only executor
+#[allow(dead_code)] // caller is the TUI executor in an upper stack layer
 pub(crate) fn execute_to(cmd: &SnapshotCommands, root: &Path, out: &mut dyn Write) -> Result<()> {
     match cmd {
         SnapshotCommands::List => list(root, out),
