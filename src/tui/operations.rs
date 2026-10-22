@@ -530,6 +530,10 @@ pub fn scan(root: &Path) -> Result<String> {
         ..Default::default()
     };
     let report = doctor::run_checks_with_options(&args, root, &options)?;
+    Ok(format_scan(report))
+}
+
+fn format_scan(report: doctor::DoctorReport) -> String {
     let mut lines = vec![format!(
         "Local doctor scan: {} errors, {} warnings. No repairs or network probes.",
         report.summary.errors, report.summary.warnings
@@ -543,7 +547,249 @@ pub fn scan(root: &Path) -> Result<String> {
             lines.push(format!("  CLI only: {fix}"));
         }
     }
-    Ok(lines.join("\n"))
+    lines.join("\n")
+}
+
+/// Phase 1: execute a read-only CLI command and capture its output as text.
+/// Mutating, network, and repair variants refuse here; they arrive in later
+/// phases with their own reviews.
+pub fn execute_read_only(root: &Path, argv: &[String]) -> Result<String> {
+    use crate::cli::{Cli, Commands};
+    let parsed =
+        Cli::try_parse_from(std::iter::once("numan".to_string()).chain(argv.iter().cloned()))?;
+    let mut out: Vec<u8> = Vec::new();
+    match parsed.command {
+        Some(Commands::Search(args)) => crate::cmd::search::execute_to(&args, root, &mut out)?,
+        Some(Commands::Info { id }) => crate::cmd::info::execute_to(&id, root, &mut out)?,
+        Some(Commands::List) => crate::cmd::list::execute_to(root, &mut out)?,
+        Some(Commands::Registry(cmd)) => {
+            crate::cmd::registry::execute_to(&cmd, root, &mut out)?
+        }
+        Some(Commands::Snapshot(cmd)) => {
+            crate::cmd::snapshot::execute_to(&cmd, root, &mut out)?
+        }
+        Some(Commands::Nupm(args)) => crate::cmd::nupm::execute(&args, root, &mut out)?,
+        Some(Commands::Hook(crate::cmd::hook::HookCommands::List)) => {
+            crate::cmd::hook::list_to(root, &mut out)?
+        }
+        Some(Commands::Overlay(crate::cmd::overlay::OverlayCommands::List)) => {
+            crate::cmd::overlay::list_overlays_to(root, &mut out)?
+        }
+        Some(Commands::Use(args)) if args.version == "list" => {
+            crate::cmd::use_cmd::list_to(root, &mut out)?
+        }
+        Some(Commands::Completions(args)) if args.print => {
+            return crate::cmd::completions::generate_script(args.shell);
+        }
+        Some(Commands::Doctor(args)) => {
+            let doctor_args = doctor::DoctorArgs {
+                scan: true,
+                json: args.json,
+                nupm_home: args.nupm_home,
+            };
+            let options = doctor::DoctorOptions {
+                skip_network: true,
+                ..Default::default()
+            };
+            let report = doctor::run_checks_with_options(&doctor_args, root, &options)?;
+            if args.json {
+                return Ok(serde_json::to_string_pretty(&report)?);
+            }
+            return Ok(format_scan(report));
+        }
+        _ => bail!(
+            "This command is not executable in the TUI yet. It stays listed with its phase; no state was changed."
+        ),
+    }
+    let text = String::from_utf8_lossy(&out).trim_end().to_string();
+    Ok(if text.is_empty() {
+        "Command completed with no output.".into()
+    } else {
+        text
+    })
+}
+
+const READ_ONLY_DISPLAYS: &[&str] = &[
+    "search",
+    "info",
+    "list",
+    "registry list",
+    "registry packages",
+    "snapshot list",
+    "snapshot inspect",
+    "nupm status",
+    "nupm inspect",
+    "nupm diff",
+    "hook list",
+    "overlay list",
+    "use list",
+];
+
+fn catalog_display(argv: &[String]) -> Option<String> {
+    crate::tui::catalog::catalog()
+        .iter()
+        .filter(|spec| argv.starts_with(&spec.path))
+        .max_by_key(|spec| spec.path.len())
+        .map(|spec| spec.display.clone())
+}
+
+/// Commands whose CLI handlers prompt for confirmation. The TUI review is
+/// that confirmation, so `--yes` is appended after review, never before it.
+fn needs_yes(argv: &[String]) -> bool {
+    matches!(
+        argv.first().map(String::as_str),
+        Some("remove" | "migrate" | "setup")
+    ) || matches!(
+        (
+            argv.first().map(String::as_str),
+            argv.get(1).map(String::as_str)
+        ),
+        (Some("snapshot"), Some("delete" | "rollback")) | (Some("nupm"), Some("import"))
+    )
+}
+
+/// Phases 2-4: execute any catalog command from the Commands form.
+///
+/// Read-only commands delegate to the capturing Phase 1 path. Mutating
+/// commands run only after the generic review (the caller in `app.rs`), which
+/// is why confirmation flags are injected here and never in the form. Each
+/// handler keeps its own lock, snapshot, and journal discipline; no outer
+/// mutation lock is held, and no shell or subprocess is involved.
+pub fn execute_cli(root: &Path, argv: &[String]) -> Result<String> {
+    use crate::cli::{Cli, Commands};
+    let display = catalog_display(argv).unwrap_or_default();
+    let mut argv = argv.to_vec();
+    if needs_yes(&argv) && !argv.iter().any(|arg| arg == "--yes") {
+        argv.push("--yes".into());
+    }
+    // Doctor read-only only when the form asks for scan/JSON; otherwise it is
+    // the reviewed repair path below.
+    let doctor_read_only =
+        display != "doctor" || argv.iter().any(|arg| arg == "--scan" || arg == "--json");
+    if READ_ONLY_DISPLAYS.contains(&display.as_str())
+        || (display == "completions" && argv.iter().any(|arg| arg == "--print"))
+        || (display == "doctor" && doctor_read_only)
+    {
+        return execute_read_only(root, &argv);
+    }
+
+    let parsed =
+        Cli::try_parse_from(std::iter::once("numan".to_string()).chain(argv.iter().cloned()))?;
+    let note = format!(
+        "{display} completed. Handler output is in the transcript (l); state was reloaded."
+    );
+    match parsed.command {
+        Some(Commands::Tui) => bail!("The TUI cannot open inside itself."),
+        Some(Commands::Activate(args)) => {
+            if args.list || args.check {
+                crate::cmd::activate::execute(&args, root)?;
+                return Ok(note);
+            }
+            ensure_no_pending(root)?;
+            crate::cmd::activate::execute(&args, root)?;
+            Ok(note)
+        }
+        Some(Commands::Update(args)) => {
+            if argv.iter().any(|a| a == "--check") && !argv.iter().any(|a| a == "--self") {
+                crate::cmd::update::execute(&args, root)?;
+                return Ok(note);
+            }
+            ensure_no_pending(root)?;
+            crate::cmd::update::execute(&args, root)?;
+            if argv.iter().any(|a| a == "--self") && !argv.iter().any(|a| a == "--check") {
+                return Ok(format!(
+                    "{note} Numan binary was replaced; restart numan to run the new version."
+                ));
+            }
+            Ok(note)
+        }
+        Some(Commands::Install(args)) => {
+            ensure_no_pending(root)?;
+            crate::cmd::install::execute(&args, root)?;
+            Ok(note)
+        }
+        Some(Commands::Remove(args)) => {
+            crate::cmd::remove::execute(&args, root)?;
+            Ok(note)
+        }
+        Some(Commands::Gc(args)) => {
+            crate::cmd::gc::execute(&args, root)?;
+            Ok(note)
+        }
+        Some(Commands::Deactivate(args)) => {
+            ensure_no_pending(root)?;
+            crate::cmd::deactivate::execute(&args, root)?;
+            Ok(note)
+        }
+        Some(Commands::Hook(cmd)) => {
+            ensure_no_pending(root)?;
+            crate::cmd::hook::execute(cmd, root)?;
+            Ok(note)
+        }
+        Some(Commands::Init(args)) => {
+            crate::cmd::init::execute(&args, root)?;
+            Ok(note)
+        }
+        Some(Commands::Registry(cmd)) => {
+            crate::cmd::registry::execute(cmd, root)?;
+            Ok(note)
+        }
+        Some(Commands::Snapshot(cmd)) => {
+            crate::cmd::snapshot::execute(cmd, root)?;
+            Ok(note)
+        }
+        Some(Commands::Nupm(args)) => {
+            ensure_no_pending(root)?;
+            let mut out: Vec<u8> = Vec::new();
+            crate::cmd::nupm::execute(&args, root, &mut out)?;
+            let text = String::from_utf8_lossy(&out).trim_end().to_string();
+            Ok(if text.is_empty() { note } else { text })
+        }
+        Some(Commands::Migrate(args)) => {
+            ensure_no_pending(root)?;
+            let mut out: Vec<u8> = Vec::new();
+            crate::cmd::migrate::execute(&args, root, &mut out)?;
+            let text = String::from_utf8_lossy(&out).trim_end().to_string();
+            Ok(if text.is_empty() { note } else { text })
+        }
+        Some(Commands::Completions(args)) => {
+            crate::cmd::completions::execute(&args)?;
+            Ok(format!(
+                "{note} Completions were written outside the Numan root."
+            ))
+        }
+        Some(Commands::Doctor(args)) => {
+            let code = crate::cmd::doctor::execute(&args, root)?;
+            if code != 0 {
+                bail!("Doctor finished with exit code {code}; see transcript (l).");
+            }
+            Ok(note)
+        }
+        Some(Commands::Setup(cmd)) => {
+            crate::cmd::setup::execute(cmd, root)?;
+            Ok(format!(
+                "{note} Setup may have changed files outside the Numan root."
+            ))
+        }
+        Some(Commands::Try(args)) => {
+            ensure_no_pending(root)?;
+            crate::cmd::try_cmd::execute(&args, root)?;
+            Ok(note)
+        }
+        Some(Commands::Use(args)) => {
+            ensure_no_pending(root)?;
+            crate::cmd::use_cmd::execute(&args, root)?;
+            Ok(note)
+        }
+        Some(Commands::Overlay(cmd)) => {
+            ensure_no_pending(root)?;
+            crate::cmd::overlay::execute(cmd, root)?;
+            Ok(format!(
+                "{note} For overlay use/hide, run the Nushell statement shown in the transcript in your current shell."
+            ))
+        }
+        _ => bail!("This command is not executable in the TUI yet; no state was changed."),
+    }
 }
 
 /// Explicit network action; never called by view loading or ordinary reload.
