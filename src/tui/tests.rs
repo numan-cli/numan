@@ -680,7 +680,7 @@ fn read_only_execution_captures_output_and_refuses_mutations() {
         vec![
             "snapshot",
             "rollback",
-            "018f0000-0000-7000-8000-000000000000",
+            "test-snapshot-id",
         ],
         vec!["registry", "sync"],
         vec!["update", "--self"],

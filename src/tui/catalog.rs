@@ -578,7 +578,7 @@ mod tests {
                     }
                     FieldKind::PackageId => field.value = "owner/pkg".into(),
                     FieldKind::SnapshotId => {
-                        field.value = "018f0000-0000-7000-8000-000000000000".into()
+                        field.value = "test-snapshot-id".into()
                     }
                     FieldKind::RegistryName => field.value = "custom".into(),
                     FieldKind::Path => field.value = "/tmp/x".into(),
