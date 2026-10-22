@@ -468,8 +468,10 @@ fn check_nu_paths(
 
     // Invisible-activation bootstrap file drift (issue #32).
     let init_path = root.join("nu_state").join("numan_init.nu");
-    let expected = crate::nu::init_file::expected_init_content(&paths);
-    let init_ok = std::fs::read(&init_path).ok().as_deref() == Some(expected.as_slice());
+    let expected = crate::nu::init_file::expected_init_content(root, &paths);
+    let overlay_ok = crate::nu::overlay::is_current(root);
+    let init_ok =
+        overlay_ok && std::fs::read(&init_path).ok().as_deref() == Some(expected.as_slice());
     if init_ok {
         findings.push(finding(
             "nu_init.drift",

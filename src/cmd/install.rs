@@ -33,6 +33,12 @@ pub fn execute(args: &InstallArgs, root: &Path) -> Result<()> {
     match install_once(args, root, &platform, &nu_version) {
         Ok(()) => Ok(()),
         Err(first_err) => {
+            if first_err
+                .downcast_ref::<crate::state::overlay_state::OverlayReservationError>()
+                .is_some()
+            {
+                return Err(first_err);
+            }
             let diagnosis = match diagnose_target(root, &args.package, &platform, &nu_version) {
                 Ok(Some(d)) => d,
                 Ok(None) | Err(_) => return Err(first_err),

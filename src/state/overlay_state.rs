@@ -1,18 +1,24 @@
-//! Overlay activation state (issue #17, Phase 5 — data model only).
+//! Caller-shell overlay transactions and payload reservations.
 //!
-//! Tracks which overlays are currently active and their scope. Ephemeral:
+//! Tracks pending, active, and degraded overlays and their scope. Ephemeral:
 //! session-scoped overlays are recorded for status/drift but cannot be
 //! auto-restored in a new shell.
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::util::atomic::write_json_atomic;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, thiserror::Error)]
+#[error("Package '{package_id}' is pinned by an overlay session. Hide it in that shell or close the shell and run `numan overlay reconcile` first.")]
+pub struct OverlayReservationError {
+    pub package_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct OverlayState {
-    /// Active overlays.
+    /// Overlay transactions, including unconfirmed payload reservations.
     #[serde(default)]
     pub overlays: Vec<OverlayRecord>,
 }
@@ -25,7 +31,18 @@ pub enum OverlayScope {
     Project,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum OverlayStatus {
+    #[default]
+    Pending,
+    Active,
+    /// Execution failed or ownership no longer agrees with the shell. Keep
+    /// the payload pinned until the shell exits and reconciliation prunes it.
+    Degraded,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OverlayRecord {
     pub package_id: String,
     pub overlay_name: String,
@@ -36,9 +53,73 @@ pub struct OverlayRecord {
     #[serde(default)]
     pub project_root: Option<String>,
     pub activated_at: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub pid: Option<u32>,
+    #[serde(default)]
+    pub process_started: Option<u64>,
+    #[serde(default)]
+    pub txn: Option<String>,
+    #[serde(default)]
+    pub status: OverlayStatus,
+    #[serde(default)]
+    pub payload_path: Option<String>,
 }
 
 impl OverlayState {
+    /// Called under the root mutation lock. All transaction states pin payloads.
+    pub fn ensure_package_mutable(root: &Path, package_id: &str) -> Result<()> {
+        if Self::load(root)?
+            .overlays
+            .iter()
+            .any(|r| r.package_id == package_id)
+        {
+            return Err(OverlayReservationError {
+                package_id: package_id.to_owned(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    pub fn referenced_payloads(root: &Path) -> Result<Vec<PathBuf>> {
+        let canonical_root = root.canonicalize()?;
+        let mut paths = Vec::new();
+        for record in Self::load(root)?.overlays {
+            let entry = PathBuf::from(&record.entry_path);
+            let entry = entry
+                .canonicalize()
+                .context("Cannot resolve reserved overlay entry; refusing garbage collection")?;
+            let path = if let Some(payload) = record.payload_path {
+                PathBuf::from(payload)
+            } else {
+                let relative = entry
+                    .strip_prefix(&canonical_root)
+                    .context("Overlay entry is outside the Numan root")?;
+                canonical_root.join(relative.components().take(5).collect::<PathBuf>())
+            };
+            if path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
+                bail!("Overlay payload contains parent traversal");
+            }
+            let path = path
+                .canonicalize()
+                .context("Cannot resolve reserved overlay payload; refusing garbage collection")?;
+            let packages = canonical_root.join("packages");
+            if !path.starts_with(&packages)
+                || path.strip_prefix(&packages)?.components().count() != 4
+                || !entry.starts_with(&path)
+            {
+                bail!("Overlay payload is outside Numan's package storage");
+            }
+            paths.push(path);
+        }
+        Ok(paths)
+    }
+
     fn validate(&self) -> Result<()> {
         for overlay in &self.overlays {
             if overlay.scope == OverlayScope::Project && overlay.project_root.is_none() {
@@ -88,6 +169,24 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn unresolved_reserved_entry_aborts_payload_enumeration() {
+        let dir = tempdir().unwrap();
+        write_json_atomic(
+            &dir.path().join("nu_state/overlays.json"),
+            &serde_json::json!({"overlays": [{
+                "package_id": "owner/tool", "overlay_name": "tool",
+                "entry_path": dir.path().join("packages/modules/owner/tool/1/mod.nu"),
+                "scope": "session", "activated_at": "now"
+            }]}),
+        )
+        .unwrap();
+        assert!(OverlayState::referenced_payloads(dir.path())
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot resolve reserved overlay entry"));
+    }
+
+    #[test]
     fn roundtrip() {
         let dir = tempdir().unwrap();
         let root = dir.path();
@@ -104,6 +203,12 @@ mod tests {
                 scope,
                 project_root: project_root.map(String::from),
                 activated_at: "2026-01-01T00:00:00Z".to_string(),
+                session_id: None,
+                pid: None,
+                process_started: None,
+                txn: None,
+                status: OverlayStatus::Pending,
+                payload_path: None,
             });
         }
         state.save(root).unwrap();
@@ -152,6 +257,12 @@ mod tests {
             scope: OverlayScope::Project,
             project_root: None,
             activated_at: "2026-01-01T00:00:00Z".to_string(),
+            session_id: None,
+            pid: None,
+            process_started: None,
+            txn: None,
+            status: OverlayStatus::Pending,
+            payload_path: None,
         });
 
         let err = state.save(dir.path()).unwrap_err();

@@ -577,7 +577,8 @@ pub fn execute_read_only(root: &Path, argv: &[String]) -> Result<String> {
         Some(Commands::Hook(crate::cmd::hook::HookCommands::List)) => {
             crate::cmd::hook::list_to(root, &mut out)?
         }
-        Some(Commands::Overlay(crate::cmd::overlay::OverlayCommands::List)) => {
+        Some(Commands::Overlay(crate::cmd::overlay::OverlayCommands::List(args)))
+            if args.session.is_none() => {
             crate::cmd::overlay::list_overlays_to(root, &mut out)?
         }
         Some(Commands::Use(args)) if args.version == "list" => {
@@ -675,7 +676,11 @@ pub fn execute_cli(root: &Path, argv: &[String]) -> Result<String> {
     // Doctor is read-only only when the form asks for scan/JSON; otherwise
     // it is the reviewed repair path below. `use list` is the read-only form
     // of the `use` leaf.
-    let is_read_only = READ_ONLY_DISPLAYS.contains(&display.as_str())
+    let session_list = display == "overlay list"
+        && argv
+            .iter()
+            .any(|arg| arg == "--session" || arg.starts_with("--session="));
+    let is_read_only = (READ_ONLY_DISPLAYS.contains(&display.as_str()) && !session_list)
         || (display == "use" && argv.get(1).map(String::as_str) == Some("list"))
         || (display == "completions" && argv.iter().any(|arg| arg == "--print"))
         || (display == "doctor" && argv.iter().any(|arg| arg == "--scan" || arg == "--json"));
@@ -805,10 +810,19 @@ pub fn execute_cli(root: &Path, argv: &[String]) -> Result<String> {
         }
         Some(Commands::Overlay(cmd)) => {
             ensure_no_pending(root)?;
+            let needs_shell = matches!(
+                cmd,
+                crate::cmd::overlay::OverlayCommands::Use(_)
+                    | crate::cmd::overlay::OverlayCommands::Hide(_)
+            );
             crate::cmd::overlay::execute(cmd, root)?;
-            Ok(format!(
-                "{note} For overlay use/hide, run the Nushell statement the handler printed to the terminal in your current shell."
-            ))
+            if needs_shell {
+                Ok(format!(
+                    "{note} To track overlay use/hide, run `numan init` (or `numan init --refresh` for an existing installation), start an interactive Nushell session, and use its Numan overlay commands."
+                ))
+            } else {
+                Ok(note)
+            }
         }
         _ => bail!("This command is not executable in the TUI yet; no state was changed."),
     }
