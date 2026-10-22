@@ -806,13 +806,6 @@ fn capture_hook_profile_sidecar(root: &Path) -> Result<SnapshotSidecar<HookProfi
         value,
     })
 }
-    let sha256 = compute_sha256(content.as_bytes());
-    Ok(SnapshotSidecar::Present {
-        content,
-        sha256,
-        value,
-    })
-}
 
 fn compute_payload_revisions(root: &Path, lockfile: &Lockfile) -> Result<BTreeMap<String, String>> {
     let mut revisions = BTreeMap::new();

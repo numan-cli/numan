@@ -579,6 +579,7 @@ mod tests {
             kind: "nu-hook".into(),
             import: ModuleImportMode::Module,
             bindings: Some(hooks.clone()),
+            ..Default::default()
         };
         let persisted = persist_hook_bindings(Some(&hook_spec), "owner/tool")
             .unwrap()
@@ -590,6 +591,7 @@ mod tests {
             kind: "nu-module".into(),
             import: ModuleImportMode::Module,
             bindings: None,
+            ..Default::default()
         };
         assert!(persist_hook_bindings(Some(&module_spec), "owner/tool")
             .unwrap()
@@ -603,6 +605,7 @@ mod tests {
             kind: "nu-hook".into(),
             import: ModuleImportMode::Module,
             bindings: Some(Vec::new()),
+            ..Default::default()
         };
         assert!(persist_hook_bindings(Some(&spec), "owner/tool").is_err());
         let null_bindings = RegistryActivationSpec {

@@ -250,6 +250,9 @@ mod tests {
         pkg.versions[0].activation = Some(crate::core::package::RegistryActivationSpec {
             kind: "nu-hook".into(),
             import: Default::default(),
+            entry: None,
+            overlay_name: None,
+            exports: None,
             bindings: Some(vec![crate::core::package::HookBinding {
                 id: "before-prompt".into(),
                 event: "pre_prompt".into(),
