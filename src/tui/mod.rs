@@ -35,7 +35,7 @@ impl Worker {
                 },
                 || match command {
                     Command::Sync => Completion::Finished(operations::sync(&root)),
-                    Command::ExecuteReadOnly(argv) => {
+                    Command::ExecuteCli(argv) => {
                         Completion::Finished(operations::execute_cli(&root, &argv))
                     }
                     Command::Reload => Completion::Loaded(operations::load(&root).map(Box::new)),

@@ -31,6 +31,7 @@ pub struct FieldSpec {
     /// Option/flag (`--key value` or `--flag`); otherwise positional.
     pub option: bool,
     pub long: Option<String>,
+    pub short: Option<char>,
     pub possible: Vec<String>,
     pub multi: bool,
     pub hidden: bool,
@@ -143,7 +144,7 @@ fn field_kind(path: &str, id: &str, possible: &[String]) -> FieldKind {
     } else if id.contains("path") || id.contains("home") || id.contains("root") || id == "manifest"
     {
         FieldKind::Path
-    } else if id.contains("version") || (id == "package" && path == "install") {
+    } else if id.contains("version") {
         FieldKind::Version
     } else {
         FieldKind::Text
@@ -154,7 +155,7 @@ fn build_fields(path: &str, cmd: &clap::Command) -> Vec<FieldSpec> {
     let mut fields = Vec::new();
     for arg in cmd.get_arguments() {
         let id = arg.get_id().to_string();
-        if matches!(id.as_str(), "help" | "version" | "root") {
+        if id == "root" || matches!(arg.get_action(), ArgAction::Help | ArgAction::Version) {
             continue;
         }
         let possible: Vec<String> = arg
@@ -179,6 +180,7 @@ fn build_fields(path: &str, cmd: &clap::Command) -> Vec<FieldSpec> {
             required: arg.is_required_set(),
             option: arg.get_long().is_some() || arg.get_short().is_some(),
             long: arg.get_long().map(str::to_string),
+            short: arg.get_short(),
             possible,
             multi: matches!(arg.get_action(), ArgAction::Append)
                 || arg
@@ -294,7 +296,12 @@ pub fn build_argv(spec: &CommandSpec, fields: &[FieldState]) -> Vec<String> {
             ));
         }
         if field.spec.multi {
-            argv.extend(value.split_whitespace().map(str::to_string));
+            argv.extend(
+                value
+                    .split(|c: char| c == ',' || c.is_whitespace())
+                    .filter(|token| !token.is_empty())
+                    .map(str::to_string),
+            );
         } else {
             argv.push(value.to_string());
         }
@@ -348,6 +355,9 @@ pub fn execution_mode(display: &str, fields: &[FieldState]) -> ExecutionMode {
     if display == "tui" {
         return ExecutionMode::Blocked("The TUI cannot open inside itself.");
     }
+    if spec(display).is_some_and(|found| found.tier == "Unclassified") {
+        return ExecutionMode::Blocked("No catalog classification for this command.");
+    }
     if phase1_executable(display, fields) {
         ExecutionMode::ReadOnly
     } else {
@@ -377,6 +387,23 @@ pub fn fields_from_argv(spec: &CommandSpec, rest: &[String]) -> Vec<FieldState> 
                     field.value = value;
                     index += 1;
                     continue;
+                } else if index + 1 < rest.len() {
+                    field.value = rest[index + 1].clone();
+                    index += 2;
+                    continue;
+                }
+            }
+            index += 1;
+            continue;
+        }
+        if token.starts_with('-') && !token.starts_with("--") && token.len() > 1 {
+            let short = token.chars().nth(1);
+            if let Some(field) = fields
+                .iter_mut()
+                .find(|f| f.spec.short.is_some() && f.spec.short == short)
+            {
+                if field.spec.kind == FieldKind::Bool {
+                    field.enabled = true;
                 } else if index + 1 < rest.len() {
                     field.value = rest[index + 1].clone();
                     index += 2;
@@ -466,6 +493,12 @@ pub fn validate_preview(root: &Path, input: &str) -> Result<(CommandSpec, Vec<St
         return Err("Preview root is fixed to the TUI root; --root cannot be edited.".into());
     }
     let rest = &tokens[3..];
+    if rest
+        .iter()
+        .any(|token| token == "--root" || token.starts_with("--root="))
+    {
+        return Err("Preview may not repeat --root; the TUI root is fixed.".into());
+    }
     let found = catalog()
         .iter()
         .filter(|spec| rest.starts_with(&spec.path))
@@ -569,6 +602,30 @@ mod tests {
             let rebuilt = fields_from_argv(&parsed, &rest);
             assert_eq!(build_argv(&parsed, &rebuilt), argv, "{display}");
         }
+    }
+
+    #[test]
+    fn positional_version_fields_and_short_options_survive() {
+        for display in ["use", "setup nu"] {
+            let found = spec(display).unwrap();
+            let version = found
+                .fields
+                .iter()
+                .find(|field| field.id == "version")
+                .unwrap_or_else(|| panic!("{display} lost its version field"));
+            assert_eq!(version.kind, FieldKind::Version);
+        }
+        let install = spec("install").unwrap();
+        assert!(install.fields.iter().any(|field| field.short == Some('v')));
+        let fields = fields_from_argv(install, &["owner/pkg".into(), "-v".into()]);
+        let verbose = fields.iter().find(|f| f.spec.id == "verbose").unwrap();
+        assert!(verbose.enabled);
+    }
+
+    #[test]
+    fn preview_rejects_a_second_root() {
+        let root = Path::new("/tmp/numan-root");
+        assert!(validate_preview(root, "numan --root /tmp/numan-root list --root /etc").is_err());
     }
 
     #[test]

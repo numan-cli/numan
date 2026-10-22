@@ -568,7 +568,12 @@ pub fn execute_read_only(root: &Path, argv: &[String]) -> Result<String> {
         Some(Commands::Snapshot(cmd)) => {
             crate::cmd::snapshot::execute_to(&cmd, root, &mut out)?
         }
-        Some(Commands::Nupm(args)) => crate::cmd::nupm::execute(&args, root, &mut out)?,
+        Some(Commands::Nupm(args)) => match &args.command {
+            crate::cmd::nupm::NupmCommands::Import(_) => {
+                bail!("nupm import is not read-only; it requires the reviewed executor.")
+            }
+            _ => crate::cmd::nupm::execute(&args, root, &mut out)?,
+        },
         Some(Commands::Hook(crate::cmd::hook::HookCommands::List)) => {
             crate::cmd::hook::list_to(root, &mut out)?
         }
@@ -622,7 +627,6 @@ const READ_ONLY_DISPLAYS: &[&str] = &[
     "nupm diff",
     "hook list",
     "overlay list",
-    "use list",
 ];
 
 fn catalog_display(argv: &[String]) -> Option<String> {
@@ -660,16 +664,22 @@ pub fn execute_cli(root: &Path, argv: &[String]) -> Result<String> {
     let display = catalog_display(argv).unwrap_or_default();
     let mut argv = argv.to_vec();
     if needs_yes(&argv) && !argv.iter().any(|arg| arg == "--yes") {
-        argv.push("--yes".into());
+        if argv.first().map(String::as_str) == Some("setup")
+            && argv.get(1).map(String::as_str) == Some("nu")
+        {
+            argv.insert(2, "--yes".into());
+        } else {
+            argv.push("--yes".into());
+        }
     }
-    // Doctor read-only only when the form asks for scan/JSON; otherwise it is
-    // the reviewed repair path below.
-    let doctor_read_only =
-        display != "doctor" || argv.iter().any(|arg| arg == "--scan" || arg == "--json");
-    if READ_ONLY_DISPLAYS.contains(&display.as_str())
+    // Doctor is read-only only when the form asks for scan/JSON; otherwise
+    // it is the reviewed repair path below. `use list` is the read-only form
+    // of the `use` leaf.
+    let is_read_only = READ_ONLY_DISPLAYS.contains(&display.as_str())
+        || (display == "use" && argv.get(1).map(String::as_str) == Some("list"))
         || (display == "completions" && argv.iter().any(|arg| arg == "--print"))
-        || (display == "doctor" && doctor_read_only)
-    {
+        || (display == "doctor" && argv.iter().any(|arg| arg == "--scan" || arg == "--json"));
+    if is_read_only {
         return execute_read_only(root, &argv);
     }
 
@@ -709,6 +719,7 @@ pub fn execute_cli(root: &Path, argv: &[String]) -> Result<String> {
             Ok(note)
         }
         Some(Commands::Remove(args)) => {
+            ensure_no_pending(root)?;
             crate::cmd::remove::execute(&args, root)?;
             Ok(note)
         }
@@ -731,10 +742,12 @@ pub fn execute_cli(root: &Path, argv: &[String]) -> Result<String> {
             Ok(note)
         }
         Some(Commands::Registry(cmd)) => {
+            ensure_no_pending(root)?;
             crate::cmd::registry::execute(cmd, root)?;
             Ok(note)
         }
         Some(Commands::Snapshot(cmd)) => {
+            ensure_no_pending(root)?;
             crate::cmd::snapshot::execute(cmd, root)?;
             Ok(note)
         }
@@ -759,11 +772,18 @@ pub fn execute_cli(root: &Path, argv: &[String]) -> Result<String> {
             ))
         }
         Some(Commands::Doctor(args)) => {
-            let code = crate::cmd::doctor::execute(&args, root)?;
+            let mut out: Vec<u8> = Vec::new();
+            let code = crate::cmd::doctor::execute_to_with_options(
+                &args,
+                root,
+                crate::cmd::doctor::DoctorOptions::default(),
+                &mut out,
+            )?;
+            let text = String::from_utf8_lossy(&out).trim_end().to_string();
             if code != 0 {
-                bail!("Doctor finished with exit code {code}; see transcript (l).");
+                bail!("Doctor finished with exit code {code}:\n{text}");
             }
-            Ok(note)
+            Ok(if text.is_empty() { note } else { text })
         }
         Some(Commands::Setup(cmd)) => {
             crate::cmd::setup::execute(cmd, root)?;
@@ -785,7 +805,7 @@ pub fn execute_cli(root: &Path, argv: &[String]) -> Result<String> {
             ensure_no_pending(root)?;
             crate::cmd::overlay::execute(cmd, root)?;
             Ok(format!(
-                "{note} For overlay use/hide, run the Nushell statement shown in the transcript in your current shell."
+                "{note} For overlay use/hide, run the Nushell statement the handler printed to the terminal in your current shell."
             ))
         }
         _ => bail!("This command is not executable in the TUI yet; no state was changed."),
