@@ -724,6 +724,7 @@ pub fn execute_cli(root: &Path, argv: &[String]) -> Result<String> {
             Ok(note)
         }
         Some(Commands::Gc(args)) => {
+            ensure_no_pending(root)?;
             crate::cmd::gc::execute(&args, root)?;
             Ok(note)
         }
@@ -738,6 +739,7 @@ pub fn execute_cli(root: &Path, argv: &[String]) -> Result<String> {
             Ok(note)
         }
         Some(Commands::Init(args)) => {
+            ensure_no_pending(root)?;
             crate::cmd::init::execute(&args, root)?;
             Ok(note)
         }
