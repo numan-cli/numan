@@ -811,7 +811,7 @@ fn generic_executor_installs_and_removes_and_refuses_nested_tui() {
         )
     })
     .unwrap();
-    assert!(installed.contains("completed"), "{installed}");
+    assert!(installed.contains("completed"));
     assert!(Lockfile::load(fixture.root())
         .unwrap()
         .packages
