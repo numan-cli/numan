@@ -40,6 +40,7 @@ impl Shell {
                     .replace('\n', "\\n")
                     .replace('\r', "\\r")
                     .replace('\t', "\\t")
+                    .replace('$', "\\$")
             ),
             Self::Pwsh => format!("'{}'", value.replace('\'', "''")),
             Self::Posix => format!("'{}'", value.replace('\'', "'\"'\"'")),
@@ -160,11 +161,12 @@ impl App {
             return Vec::new();
         };
         let default = &data.default_registry;
+        let nu = data.nu_valid.then_some(data.nu.as_ref()).flatten();
         let mut rows = Vec::new();
         if self.view == View::Discover {
             for item in &data.catalog {
-                let compatible = operations::candidate(item, data.nu.as_ref());
-                if compatible.is_none() && !self.show_all && data.nu.is_some() {
+                let compatible = operations::candidate(item, nu);
+                if compatible.is_none() && !self.show_all && data.nu_valid {
                     continue;
                 }
                 let id = item.package.id.to_string();
@@ -180,7 +182,7 @@ impl App {
                     "installed"
                 } else if compatible.is_some() {
                     "compatible"
-                } else if data.nu.is_none() {
+                } else if !data.nu_valid {
                     "not checked"
                 } else {
                     "incompatible"
@@ -202,7 +204,7 @@ impl App {
                     .catalog
                     .iter()
                     .find(|item| item.registry == registry && item.package.id.to_string() == *id);
-                let next = item.and_then(|item| operations::candidate(item, data.nu.as_ref()));
+                let next = item.and_then(|item| operations::candidate(item, nu));
                 let newer = next.as_ref().is_some_and(|v| {
                     match (
                         v.parse::<semver::Version>(),
@@ -355,8 +357,22 @@ impl App {
             .as_ref()
             .and_then(|d| d.installed.packages.get(&row.id));
         match self.view {
-            View::Discover if installed.is_none() => vec![Action::Install],
-            View::Updates => vec![Action::Update],
+            View::Discover if installed.is_none() && row.state == "compatible" => {
+                vec![Action::Install]
+            }
+            View::Updates => {
+                let Some(entry) = installed else {
+                    return Vec::new();
+                };
+                let active = entry.activation.is_some() || entry.module_activation.is_some();
+                let allowed = !active
+                    || std::env::var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION").as_deref() == Ok("1");
+                if allowed && (!active || entry.package_type == "plugin") {
+                    vec![Action::Update]
+                } else {
+                    Vec::new()
+                }
+            }
             _ => match installed {
                 Some(entry) if entry.activation.is_none() && entry.module_activation.is_none() => {
                     let mut actions = vec![Action::Remove];
@@ -542,6 +558,10 @@ impl App {
                         KeyCode::Up | KeyCode::PageUp => scroll = scroll.saturating_sub(1),
                         KeyCode::Enter if confirm && !self.busy => {
                             return Some(Command::Execute(review))
+                        }
+                        KeyCode::Enter if confirm => {
+                            self.status = "Operation running; review discarded. Wait for completion, then review again.".into();
+                            return None;
                         }
                         KeyCode::Enter if !confirm => return None,
                         _ => {}

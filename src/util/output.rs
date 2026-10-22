@@ -38,18 +38,41 @@ pub fn download(received: u64, total: Option<u64>) {
 }
 
 pub(crate) fn line(args: fmt::Arguments<'_>, error: bool) {
+    let text = redact_uuids(&args.to_string());
     SINK.with(|slot| {
         if let Some(sink) = slot.borrow().as_ref() {
-            sink(OutputEvent::Message {
-                text: args.to_string(),
-                error,
-            });
+            sink(OutputEvent::Message { text, error });
         } else if error {
-            std::eprintln!("{args}");
+            std::eprintln!("{text}");
         } else {
-            std::println!("{args}");
+            std::println!("{text}");
         }
     });
+}
+
+fn redact_uuids(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut result = String::with_capacity(text.len());
+    let mut cursor = 0;
+    let mut start = 0;
+    while start + 36 <= bytes.len() {
+        let uuid = (0..36).all(|offset| match offset {
+            8 | 13 | 18 | 23 => bytes[start + offset] == b'-',
+            _ => bytes[start + offset].is_ascii_hexdigit(),
+        });
+        let boundary_before = start == 0 || !bytes[start - 1].is_ascii_hexdigit();
+        let boundary_after = start + 36 == bytes.len() || !bytes[start + 36].is_ascii_hexdigit();
+        if uuid && boundary_before && boundary_after {
+            result.push_str(&text[cursor..start]);
+            result.push_str("[redacted UUID]");
+            cursor = start + 36;
+            start = cursor;
+        } else {
+            start += 1;
+        }
+    }
+    result.push_str(&text[cursor..]);
+    result
 }
 
 macro_rules! println {
@@ -66,6 +89,15 @@ pub(crate) use {eprintln, println};
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn redacts_uuid_values_from_output() {
+        assert_eq!(
+            redact_uuids("Created snapshot 018f1f1f-1234-7abc-8def-1234567890ab."),
+            "Created snapshot [redacted UUID]."
+        );
+        assert_eq!(redact_uuids("No identifier"), "No identifier");
+    }
 
     #[test]
     fn capture_is_thread_local_and_restores_after_unwind() {

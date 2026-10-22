@@ -26,7 +26,7 @@ struct Worker {
 }
 impl Worker {
     fn start(root: PathBuf, command: Command) -> Self {
-        let (send, events) = mpsc::sync_channel(256);
+        let (send, events) = mpsc::channel();
         let handle = thread::spawn(move || {
             output::with_sink(
                 move |event| {
@@ -106,7 +106,7 @@ pub fn run(root: &Path) -> Result<Option<String>> {
         if worker.as_ref().is_some_and(|w| w.ready()) {
             let active = worker.take().expect("worker was present");
             // Take the handle while keeping the error-path worker guard valid.
-            let completion = finish(active)?;
+            let completion = finish(active, &mut app)?;
             app.busy = false;
             match completion {
                 Completion::Loaded(result) => match result {
@@ -151,7 +151,7 @@ pub fn run(root: &Path) -> Result<Option<String>> {
         if app.exit && worker.is_none() {
             break;
         }
-        if event::poll(Duration::from_millis(50))? {
+        if event::poll(Duration::from_millis(50))? && !app.exit {
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Release {
                     if let Some(command) = app.key(key) {
@@ -169,13 +169,15 @@ pub fn run(root: &Path) -> Result<Option<String>> {
     Ok(app.exit_command)
 }
 
-fn finish(mut worker: Worker) -> Result<Completion> {
+fn finish(mut worker: Worker, app: &mut App) -> Result<Completion> {
     // Worker::drop protects unfinished operations. At this point it is already finished.
-    worker
+    let result = worker
         .handle
         .take()
         .expect("worker handle exists")
         .join()
         .map_err(|_| anyhow::anyhow!("TUI worker panicked; inspect root recovery state"))
-        .context("Worker failed")
+        .context("Worker failed");
+    worker.drain(app);
+    result
 }

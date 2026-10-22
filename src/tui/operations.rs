@@ -146,8 +146,9 @@ pub fn candidate(item: &CatalogItem, nu: Option<&NuPaths>) -> Option<String> {
 
 pub fn registry_for(entry: &LockfileEntry, default: &str) -> String {
     entry
-        .registry_url
+        .origin
         .as_deref()
+        .or(entry.registry_url.as_deref())
         .and_then(|value| value.strip_prefix("registry:"))
         .unwrap_or(default)
         .to_string()
@@ -184,11 +185,15 @@ fn ensure_no_pending(root: &Path) -> Result<()> {
 fn fingerprint(root: &Path) -> Result<String> {
     fn hash_path(path: &Path, hash: &mut Sha256) -> Result<()> {
         hash.update(path.to_string_lossy().as_bytes());
-        if path.symlink_metadata().is_err() {
-            hash.update(b"missing");
-            return Ok(());
-        }
-        if path.symlink_metadata()?.file_type().is_symlink() {
+        let metadata = match path.symlink_metadata() {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                hash.update(b"missing");
+                return Ok(());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if metadata.file_type().is_symlink() {
             bail!("Refusing linked review input: {}", path.display());
         }
         if path.is_dir() {
@@ -213,7 +218,6 @@ fn fingerprint(root: &Path) -> Result<String> {
         "nu_state",
         "registry",
         "state/activation-profile.json",
-        "autoload-state.json",
     ] {
         hash_path(&root.join(name), &mut hash)?;
     }
@@ -240,17 +244,17 @@ pub fn prepare(
     ensure_no_pending(root)?;
     let before = fingerprint(root)?;
     let data = load(root)?;
-    let nu = data
-        .nu
-        .as_ref()
-        .context("Initialize Nu context before modifying packages.")?;
-    nu.validate_drift()?;
+    let nu = data.nu.as_ref();
+    if action != Action::Remove {
+        nu.context("Initialize Nu context before modifying packages.")?
+            .validate_drift()?;
+    }
     crate::core::package::ScopedId::parse(id)?;
     let entry = data.installed.packages.get(id);
-    let mut effects = vec![
-        format!("Root: {}", root.display()),
-        format!("Nu: {} ({})", nu.nu_version, nu.nu_executable),
-    ];
+    let mut effects = vec![format!("Root: {}", root.display())];
+    if let Some(nu) = nu {
+        effects.push(format!("Nu: {} ({})", nu.nu_version, nu.nu_executable));
+    }
     let version = match action {
         Action::Install | Action::Update => {
             if action == Action::Install && entry.is_some() {
@@ -265,7 +269,10 @@ pub fn prepare(
                 .find(|item| item.registry == registry && item.package.id.to_string() == id)
                 .context("Package is unavailable in the verified cached registry.")?;
             let platform = Platform::detect();
-            let nu_version = NuVersion::parse(&nu.nu_version)?;
+            let nu_version = NuVersion::parse(
+                &nu.context("Initialize Nu context before modifying packages.")?
+                    .nu_version,
+            )?;
             let resolver = Resolver::new(&platform, &nu_version);
             let selected = if let Some(version) = pinned {
                 resolver.resolve_exact(&item.package, &version.parse()?)?
@@ -349,6 +356,7 @@ pub fn prepare(
             if !matches!(entry.package_type.as_str(), "plugin" | "module") {
                 bail!("Activation is unsupported for this package type.");
             }
+            let nu = nu.context("Initialize Nu context before modifying packages.")?;
             if activation(entry, Some(nu)) == "active" {
                 bail!("Already active for the current Nu.");
             }
