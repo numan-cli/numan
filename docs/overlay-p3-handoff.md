@@ -1,100 +1,87 @@
 # Overlay P3 handoff
 
-## Checkout and scope
+## Checkout and publication
 
 - Worktree: `C:\Users\tonyt\.codex\worktrees\overlay-p3\numan`
-- Branch: `codex/overlay-p3`
-- Base: `origin/master` at `3ac4150`. PRs #147 and #150 are already merged, so
-  open the eventual P3 PR against master, not their historical head branches.
-- User approved implementing the pasted overlay recommendation, then requested
-  committing this work with a handoff because usage was running low.
-- No P3 PR has been created and this branch has not been pushed.
-- Do not modify the user's live Nu config or repair the unrelated stale vendor
-  autoload mentioned in the original recommendation.
+- Branch: `codex/overlay-p3`, pushed to origin.
+- PR: https://github.com/numan-cli/numan/pull/160, targeting master.
+- Overlay P1/P2 PRs #147 and #150 are merged. Master through TUI parity PR #157
+  was merged into this branch; do not retarget to the old overlay branches.
+- The primary checkout, other worktrees, and live Nu configuration were preserved.
 
-## Implemented
+## Implementation
 
-Nu wrappers for `numan overlay use`, `hide`, and `list` load from an owned
-`nu_state/numan_overlay.nu`, sourced by the regenerated `numan_init.nu`. Other
-Numan commands still use the external CLI. Native overlay statements execute
-through cleanup/string/verify pre_prompt entries at REPL scope. The exact use
-statement is parsed with nu-check before arming. Activation occurs at the next
-prompt; same-line invocation of newly exported commands is unsupported.
+The owned `nu_state/numan_overlay.nu` defines Nu-side use/hide/list commands and
+loads through regenerated `numan_init.nu`. Native statements execute at REPL scope
+through one-shot cleanup/string/verify pre_prompt entries. The exact statement
+passes nu-check before arming. Activation takes effect at the next prompt;
+same-line use of newly exported commands is unsupported. Existing user hooks are
+preserved, and repeated sourcing does not duplicate the reconciliation hook.
 
-Rust helpers reserve payloads under the mutation lock with snapshots and atomic
-writes. Records carry session UUID, PID, process start time, transaction UUID,
-payload path, and pending/active/degraded status. Both the ownership marker and
-active overlay name must be observed before activation is confirmed. Failed
-execution is degraded and remains pinned because Nu may leave callable commands.
-Hide preserves PWD, and records are removed after both marker and overlay vanish.
-Marker-only or overlay-only observations remain degraded. Failed reconciliation
-retries without acknowledging its signature. The stable hook is idempotently
-registered without discarding user hooks. Dead sessions/PID reuse are pruned.
+Rust helpers validate metadata, acquire the mutation lock, snapshot changes, and
+atomically reserve immutable payloads. Records carry session UUID, PID, process
+start time, transaction UUID, payload path, and pending/active/degraded status.
+Only matching markers plus active overlay observations confirm activation.
+Marker-only, overlay-only, and partial execution remain degraded and pinned.
+Failed reconciliation retries without acknowledging its signature. Hide preserves
+PWD and releases records only after both overlay and ownership marker disappear.
 
-External CLI use/hide only emit guidance/native statements and do not fabricate
-activation. Per-shell export/name conflict checks refuse foreign overlays.
-Project root records origin only; there is no project discovery.
+Session identity is record-valued and not exported to children. Process start
+time detects PID reuse. Missing process inventory entries require OS confirmation
+of absence before pruning: Unix signal-zero ESRCH or Windows OpenProcess invalid
+parameter. Permission errors and unknown errors retain reservations. Zero start
+times retain existing reservations; new observations require verifiable identity.
 
-Pending, active, and degraded transactions protect payloads in remove, update,
-direct install, GC, nupm import, and snapshot rollback. Snapshot overlay sidecars
-remain historical evidence; rollback preserves current session observations.
-Legacy P2 records are unconfirmed and discarded on reconciliation. Users of the
-old manually emitted statements should restart those shells before migration.
+Reservations protect remove, update, install replacement, GC, nupm import, and
+rollback. GC fails closed on invalid/unresolvable reserved paths. Rollback must
+preserve reserved payloads and never restores historical overlay sidecars over
+live observations. Legacy P2 records are unconfirmed and pruned on reconciliation;
+restart shells that used manually emitted P2 statements before migration.
 
-## Verification actually completed
+External CLI use/hide emits guidance/native statements without fabricating state.
+The TUI captures last-observed listing, classifies reconciliation as a mutation,
+and excludes hidden protocol helpers from command forms. Project root records
+origin only; automatic project discovery is not implemented.
 
-- `cargo check --all-targets -j 1`: passed during implementation.
-- `cargo clippy --lib --bins -j 1 -- -D warnings`: passed before the last small
-  identity/containment hardening edits; rerun on the final commit.
-- Final `cargo test --lib -j 1`: **820 passed, 0 failed, 2 ignored**.
-- Final `cargo fmt --all --check` and `git diff --check`: passed.
-- Actual Nu 0.116.1 PTY acceptance: **4 passed, 0 failed** with
-  `cargo test -j 1 --test overlay_session_test -- --ignored --nocapture --test-threads=1`.
-  Coverage includes actual regenerated init sourcing, exported commands/env,
-  duplicate use/hide, changed PWD preservation, foreign name refusal, native
-  hide, marker-preserving native hide, failed reconcile retry after lock release,
-  parse failure after nu-check, no prompt replay, degraded payload protection,
-  independent shells, and dead-shell cleanup.
-- PTY harness retains its master and answers cursor-position requests. It uses
-  OSC 133 completion/prompt synchronization and isolated home/config/vendor/root
-  directories. Observations are written by Nu to JSON, not inferred from echo.
-- Read-only auditor found the marker-only reservation gap; it was fixed and
-  covered by unit and real PTY tests. No other concrete audit finding remained.
+## Verification evidence
 
-## Remaining work before publishing
+- Initial implementation library suite: 820 passed, 2 ignored.
+- Windows Nu 0.116.1 interactive PTY acceptance: 4 passed.
+- Post-merge standard suite with process-visibility hardening: passed; library
+  portion 823 passed, 2 ignored, and all standard integration targets passed.
+- Rust 1.88 all-target check passed after moving the build cache off a full C:
+  drive. The earlier failed attempt reported disk-full, not an MSRV incompatibility.
+- Current code revision `c9d1ca5` CI passed Clippy, MSRV, formatting, packaging,
+  dependency/license checks, workflow validation, and Linux/macOS real-Nu
+  acceptance on Nu 0.115.0 at the time this handoff was refreshed.
+- Final local TUI library tests and Windows Nu 0.115.0 PTY tests were launched;
+  final results and remaining CI status belong in the PR description.
+- The first CI revision failed an existing bootstrap PATH assertion in its TUI
+  suite. Matrix fail-fast canceled the other standard platform jobs; these were
+  not independent overlay failures. Follow the current-head rerun evidence.
 
-1. Review the final diff and rerun Clippy. The final library suite already passed.
-2. Check new dependency/MSRV compatibility on Rust 1.88 and run standard
-   integration tests. Added sysinfo 0.36 (minimal system feature) and portable-pty
-   0.9 as a dev dependency; local toolchain was Rust 1.97.1 on Windows.
-3. Run the PTY tests on Linux/macOS and Nu 0.115.0 (the current CI Nu pin).
-   Only Windows Nu 0.116.1 interactive behavior has been verified locally.
-4. Audit process-enumeration failure behavior: sysinfo start-time zero is treated
-   conservatively, but a process absent from its inventory is considered dead.
-   Confirm behavior on supported platforms, especially restricted processes.
-5. Review generated bootstrap/doctor drift behavior, helper session protocol,
-   rollback guards, and migration documentation. `OverlayState`'s older module
-   header still describes the original P1 model and can be updated for clarity.
-6. Push this branch and create a PR against master when ready. Attach the PR to
-   this chat with the Codex artifact tool. Inspect CI failures and review comments
-   using evidence; do not weaken tests or hand-edit generated live files.
+PTY tests use isolated home/config/vendor/root directories, actual generated init
+sourcing, OSC 133 prompt synchronization, and JSON observations from Nu. Coverage
+includes command/env exports, duplicate use/hide, PWD preservation, foreign names,
+native hide, marker-only degradation, failed reconciliation retry, preflight and
+execution failure, prompt replay prevention, two independent shells, payload
+protection, and dead-shell pruning.
 
-Primary files: `src/cmd/overlay.rs`, `src/state/overlay_state.rs`,
-`src/nu/overlay.rs`, `src/nu/overlay_shell.nu`, `tests/overlay_session_test.rs`,
-and `docs/overlay-sessions.md`. Mutation guards are intentionally scoped to
-overlay reservations. The primary checkout and older PR worktrees were preserved.
+## Review and remaining limits
 
-## Continuation: review and publication
+Review hardening replaced unchecked metadata/transaction lookups with contextual
+errors, loaded rollback's lockfile once, and rejected unresolved GC reservations.
+The reported legacy promotion issue is already prevented by requiring a nonempty
+matching transaction. Failed CLI reconciliation throws before acknowledging the
+signature; hide-env uses ignore-errors, matching the retry contract.
 
-Master advanced through the TUI parity PRs #154–#157. Merged it into this branch
-and preserved captured overlay listing, classified reconciliation, and excluded
-hidden helper commands from TUI forms. Added a focused captured-list regression
-test and corrected the state module documentation. Final pre-merge Clippy passed.
-Rust 1.88 all-target checks and the standard suite are running; Windows PTY tests
-will also run against the installed CI-pinned Nu 0.115.0. Publication starts as a
-draft while these checks and cross-platform CI complete.
+Restricted-process permission errors are retained conservatively in code but have
+not been exercised with an actual elevated/other-user shell. Nested child Nu
+identity inheritance has not received a dedicated PTY case. Degraded execution
+requires closing the affected shell and reconciling; no automatic repair of
+arbitrary partial Nu state is claimed. Review the PR's latest checks before merge.
 
-The process-inventory limitation remains explicit: unavailable process entries
-are treated as dead. Zero start times are retained conservatively. Restricted
-process visibility and Linux/macOS PTY behavior need platform evidence; do not
-interpret Windows acceptance as proof for those environments.
+Build output is stored at `D:\Dev\numan_workspace\.codex-build\overlay-p3-target`
+through a junction at this worktree's `target`. Local check logs are alongside it
+as `overlay-p3-standard.log`, `overlay-p3-tui.log`, and `overlay-p3-nu115.log`.
+User-facing contract: `docs/overlay-sessions.md`.
