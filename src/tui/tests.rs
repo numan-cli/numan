@@ -554,11 +554,14 @@ fn real_nu_module_install_activate_spike() {
 
 #[test]
 fn commands_view_form_editing_never_leaks_action_keys() {
-    let root = Path::new("/tmp/numan-commands-test");
-    let mut app = App::new(root);
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::new(dir.path());
     app.view = View::Commands;
     app.focus = Focus::List;
-    assert_eq!(app.command_specs().len(), 40);
+    assert_eq!(
+        app.command_specs().len(),
+        crate::tui::catalog::catalog().len()
+    );
     app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.command_selected, 1);
     app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
@@ -696,24 +699,33 @@ fn read_only_execution_captures_output_and_refuses_mutations() {
 
 #[test]
 fn form_execute_row_returns_read_only_command() {
-    let root = Path::new("/tmp/numan-commands-test");
-    let mut app = App::new(root);
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::new(dir.path());
     app.open_command_form("list");
     // No fields: row 0 is preview, row 1 is execute.
     app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert!(matches!(
         app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-        Some(Command::ExecuteReadOnly(argv)) if argv == vec!["list".to_string()]
+        Some(Command::ExecuteCli(argv)) if argv == vec!["list".to_string()]
     ));
     assert!(app.overlay.is_none());
-    // A mutating command has no execute row in Phase 1.
+    // A mutating command opens the generic review instead of executing.
     app.open_command_form("remove");
-    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    // Fields: package, yes, force. Preview is row 3, execute is row 4.
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    for c in "owner/pkg".chars() {
+        app.key(key(c));
+    }
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    for _ in 0..4 {
+        app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    }
+    assert!(app
+        .key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .is_none());
     assert!(
-        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .is_none()
-            || matches!(app.overlay, Some(Overlay::CommandForm(_)))
+        matches!(app.overlay, Some(Overlay::GenericReview { .. })),
+        "remove must stop at the review, not execute"
     );
 }
 
@@ -767,14 +779,29 @@ fn generic_review_gates_mutating_execution_and_mode_classifies() {
         }
         other => panic!("expected generic review, got {}", other.is_some()),
     }
-    // Enter on Cancel does nothing; Tab arms Confirm; Enter executes.
+    // Enter on the default Cancel choice closes the review without executing.
     assert!(app
         .key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
         .is_none());
+    assert!(app.overlay.is_none(), "Cancel must close the review");
+    // Re-open the review, arm Confirm with Tab, and execute.
+    app.open_command_form("remove");
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    for c in "owner/pkg".chars() {
+        app.key(key(c));
+    }
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    for _ in 0..4 {
+        app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    }
+    assert!(app
+        .key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .is_none());
+    assert!(matches!(app.overlay, Some(Overlay::GenericReview { .. })));
     app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     assert!(matches!(
         app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-        Some(Command::ExecuteReadOnly(argv)) if argv == vec!["remove".to_string(), "owner/pkg".to_string()]
+        Some(Command::ExecuteCli(argv)) if argv == vec!["remove".to_string(), "owner/pkg".to_string()]
     ));
 }
 
@@ -815,7 +842,7 @@ fn generic_executor_installs_and_removes_and_refuses_nested_tui() {
         &[
             "snapshot".into(),
             "rollback".into(),
-            "018f0000-0000-7000-8000-000000000000".into()
+            "test-snapshot-id".into()
         ]
     )
     .is_err());

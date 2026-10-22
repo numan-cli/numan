@@ -9,7 +9,7 @@ Supersedes, on approval: the CLI-only inventory in
 
 | Decision | Choice |
 |---|---|
-| Delivery for this step | Design doc only. No code in this step. |
+| Delivery for this step | Design first, then implemented in Phases 0-4 (see Status). |
 | Execution model | Execute inside the TUI worker. Print-and-exit hand-off is no longer the end state. |
 | Argument input | Guided form per command, plus an editable result that is re-validated before execution. |
 
@@ -233,7 +233,7 @@ revert to hand-off:
    renames the live executable. Executing it from the TUI worker replaces the binary
    mid-session. Options: (a) `--check` in-TUI, update scheduled as a post-exit step
    the user confirms in the review; (b) in-TUI execution with forced exit-on-success.
-   Resolved during implementation: option (b) - executes in the TUI after the generic review; on success the result advises restarting numan, since the running process keeps the old image.
+   Resolved during implementation: the update executes in the TUI after review and the result advises restarting numan, since the running process keeps the old binary image. This is option (b) without a forced exit; the restart happens on the user's next launch.
 2. **`overlay use|hide`.** The Numan-side record executes in-TUI, but the effect —
    `overlay use "<path>"` in the caller's Nushell — cannot be applied to a shell the
    TUI does not own (the CLI has the same limit; it prints the statement,
@@ -244,6 +244,8 @@ revert to hand-off:
    Executable in Phase 4, but the effects review must name the exact target file
    (the CLI resolves it in `src/cmd/completions.rs`), and `--print` (Phase 1) covers
    the read-only half.
+
+4. **`doctor` repair prompts and `completions` install output.** Doctor repair runs through the captured `execute_to_with_options` seam, so its report renders in the TUI. Repair sub-flows that demand an interactive prompt still refuse under output capture instead of prompting. `completions` install writes its target file under the reviewed executor; its copy-ready hints go to stderr on the CLI path and are not part of the captured result text.
 
 ## Full leaf inventory
 
