@@ -68,8 +68,10 @@ pub fn expected_init_content(root: &Path, nu_paths: &crate::nu::paths::NuPaths) 
         .canonicalize()
         .unwrap_or_else(|_| root.to_path_buf())
         .join("nu_state/numan_overlay.nu");
-    if let Ok(literal) = crate::cmd::overlay::nu_literal(&path.to_string_lossy()) {
-        content.extend_from_slice(format!("source {literal}\n").as_bytes());
+    if assert_managed_file_owned(&path).is_ok() {
+        if let Ok(literal) = crate::cmd::overlay::nu_literal(&path.to_string_lossy()) {
+            content.extend_from_slice(format!("source {literal}\n").as_bytes());
+        }
     }
     content
 }
@@ -175,6 +177,20 @@ mod tests {
             format!("{}# managed\n", OWNERSHIP_MARKER),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn overlay_source_requires_owned_file_at_generation_time() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = make_paths(None);
+        let rendered = || String::from_utf8(expected_init_content(root.path(), &paths)).unwrap();
+        assert!(!rendered().contains("numan_overlay.nu"));
+        std::fs::create_dir(root.path().join("nu_state")).unwrap();
+        std::fs::write(root.path().join("nu_state/numan_overlay.nu"), "unowned").unwrap();
+        assert!(!rendered().contains("numan_overlay.nu"));
+        std::fs::remove_file(root.path().join("nu_state/numan_overlay.nu")).unwrap();
+        crate::nu::overlay::regenerate(root.path()).unwrap();
+        assert!(rendered().contains("numan_overlay.nu"));
     }
 
     #[test]

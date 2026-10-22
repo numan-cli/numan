@@ -60,6 +60,12 @@ Legacy P2 records have no confirmed session and are discarded during
 reconciliation. Restart shells that used P2's manually emitted statements before
 using this integration.
 
+Overlay state changes follow Numan's existing pre-mutation snapshot policy.
+Frequent overlay lifecycles can grow snapshot storage; inspect and remove old
+snapshots with the snapshot commands. Snapshot creation verifies installed
+payload revisions, so missing or corrupted unrelated payloads can block an
+overlay state write until those exact revisions are restored.
+
 An existing overlay with the same name and no matching Numan ownership marker
 is refused. Numan never merges into or hides a user's unowned overlay.
 
