@@ -416,7 +416,9 @@ pub(super) fn validate(root: &Path, review: &Review) -> Result<()> {
     if fingerprint(root)? != review.fingerprint {
         bail!("State changed since review. Reload and confirm a new review.");
     }
-    NuPaths::load(root)?.validate_drift()?;
+    if review.action != Action::Remove {
+        NuPaths::load(root)?.validate_drift()?;
+    }
     Ok(())
 }
 
