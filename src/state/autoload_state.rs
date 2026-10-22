@@ -249,6 +249,7 @@ mod tests {
                         activated_at: "0".to_string(),
                     }),
                     module_import_mode: Some(ModuleImportMode::Module),
+                    overlay: None,
                     locked_dependencies: BTreeMap::new(),
                 },
             );

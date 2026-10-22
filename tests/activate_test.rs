@@ -125,6 +125,7 @@ impl TestEnv {
             origin: None,
             module_activation: None,
             module_import_mode: None,
+            overlay: None,
             locked_dependencies: std::collections::BTreeMap::new(),
         }
     }
@@ -336,6 +337,7 @@ fn test_activate_path_with_spaces() {
             origin: None,
             module_activation: None,
             module_import_mode: None,
+            overlay: None,
             locked_dependencies: std::collections::BTreeMap::new(),
         },
     );

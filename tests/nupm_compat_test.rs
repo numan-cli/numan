@@ -289,6 +289,7 @@ fn t18_registry_collision_fails_without_lockfile_change() {
             selection_reason: None,
             module_activation: None,
             module_import_mode: None,
+            overlay: None,
             locked_dependencies: Default::default(),
         },
     );

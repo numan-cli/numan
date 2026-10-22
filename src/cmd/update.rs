@@ -720,6 +720,7 @@ mod tests {
             origin: None,
             module_activation: None,
             module_import_mode: None,
+            overlay: None,
             locked_dependencies: BTreeMap::new(),
         }
     }
@@ -931,6 +932,7 @@ mod tests {
                     origin: Some("registry:official".to_string()),
                     module_activation: None,
                     module_import_mode: None,
+                    overlay: None,
                     locked_dependencies: BTreeMap::new(),
                 },
             );

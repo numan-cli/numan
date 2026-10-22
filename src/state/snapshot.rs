@@ -3,7 +3,8 @@
 //! Snapshots are stored under `<root>/state/snapshots/<uuid-v7>/` and are
 //! immutable after creation. Each snapshot captures the authoritative lockfile,
 //! the managed module-autoload projection (including exact `numan.nu` content),
-//! nupm-import provenance, and the Nu path cache (`nu_state/paths.json`).
+//! nupm-import provenance, the Nu path cache (`nu_state/paths.json`), and
+//! overlay activation records (`nu_state/overlays.json`).
 //! Payloads are never duplicated; snapshots reference immutable payload
 //! directories by path and a computed revision hash.
 
@@ -25,6 +26,7 @@ use crate::state::lifecycle_journal::PendingLifecycle;
 use crate::state::lockfile::LockfileEntry;
 use crate::state::lockfile::{compute_revision_id, Lockfile};
 use crate::state::nupm_import::NupmImportsFile;
+use crate::state::overlay_state::OverlayState;
 use crate::util::atomic::write_json_atomic;
 use crate::util::fs_safety::is_symlink_or_reparse;
 
@@ -105,6 +107,9 @@ pub struct SidecarDigests {
     /// snapshots that predate activation-profile capture.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activation_profile_sha256: Option<String>,
+    /// Digest of the `overlays.json` sidecar. `None` on legacy snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlays_sha256: Option<String>,
 }
 
 /// Captured Nu path-cache sidecar (`nu_state/paths.json`).
@@ -174,6 +179,8 @@ pub struct Snapshot {
     pub imports: Option<NupmImportsFile>,
     pub paths: Option<SnapshotPaths>,
     pub activation_profile: Option<SnapshotSidecar<ActivationProfile>>,
+    /// Overlay activations recorded at snapshot time; `None` for legacy snapshots.
+    pub overlays: Option<SnapshotSidecar<OverlayState>>,
 }
 
 /// A legacy timestamp-only snapshot directory.
@@ -238,6 +245,7 @@ pub fn create_snapshot(
     let paths = capture_paths_sidecar(root)?;
     let payload_revisions = compute_payload_revisions(root, &lockfile)?;
     let activation_profile = capture_activation_profile_sidecar(root)?;
+    let overlays = capture_overlay_state_sidecar(root)?;
 
     let sidecar_digests = SidecarDigests {
         lockfile_sha256: sha256_json(&lockfile)?,
@@ -245,6 +253,7 @@ pub fn create_snapshot(
         imports_sha256: imports.as_ref().and_then(|i| sha256_json(i).ok()),
         paths_sha256: Some(sha256_json(&paths)?),
         activation_profile_sha256: Some(sha256_json(&activation_profile)?),
+        overlays_sha256: Some(sha256_json(&overlays)?),
     };
 
     let manifest = SnapshotManifest {
@@ -278,6 +287,7 @@ pub fn create_snapshot(
     }
     write_json_atomic(&stage.join("paths.json"), &paths)?;
     write_json_atomic(&stage.join("activation-profile.json"), &activation_profile)?;
+    write_json_atomic(&stage.join("overlays.json"), &overlays)?;
 
     let dest = snapshot_dir(root, &id);
     std::fs::rename(&stage, &dest).with_context(|| {
@@ -377,6 +387,21 @@ pub fn load_snapshot(root: &Path, id: &str) -> Result<Snapshot> {
         None
     };
 
+    let overlays = if let Some(expected) = manifest.sidecar_digests.overlays_sha256.as_deref() {
+        let overlays_path = dir.join("overlays.json");
+        if !overlays_path.exists() {
+            bail!(
+                "Snapshot '{}' declares an overlays sidecar digest but overlays.json is missing. Refuse to load an incomplete snapshot.",
+                id
+            );
+        }
+        let sidecar: SnapshotSidecar<OverlayState> = read_json(&overlays_path)?;
+        verify_digest(&sidecar, expected, "overlays")?;
+        Some(sidecar)
+    } else {
+        None
+    };
+
     Ok(Snapshot {
         manifest,
         lockfile,
@@ -384,6 +409,7 @@ pub fn load_snapshot(root: &Path, id: &str) -> Result<Snapshot> {
         imports,
         paths,
         activation_profile,
+        overlays,
     })
 }
 
@@ -720,6 +746,23 @@ fn capture_activation_profile_sidecar(root: &Path) -> Result<SnapshotSidecar<Act
     })
 }
 
+fn capture_overlay_state_sidecar(root: &Path) -> Result<SnapshotSidecar<OverlayState>> {
+    let path = root.join("nu_state/overlays.json");
+    if !path.is_file() {
+        return Ok(SnapshotSidecar::Absent);
+    }
+    let content = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read overlay state '{}'", path.display()))?;
+    let value: OverlayState = serde_json::from_str(&content)
+        .with_context(|| format!("Malformed overlay state at '{}'", path.display()))?;
+    let sha256 = compute_sha256(content.as_bytes());
+    Ok(SnapshotSidecar::Present {
+        content,
+        sha256,
+        value,
+    })
+}
+
 fn compute_payload_revisions(root: &Path, lockfile: &Lockfile) -> Result<BTreeMap<String, String>> {
     let mut revisions = BTreeMap::new();
     for (package_id, entry) in &lockfile.packages {
@@ -828,6 +871,7 @@ mod tests {
             origin: None,
             module_activation: None,
             module_import_mode: None,
+            overlay: None,
             locked_dependencies: BTreeMap::new(),
         }
     }
@@ -1087,6 +1131,67 @@ mod tests {
         );
         let loaded = load_snapshot(root, &manifest.id).unwrap();
         assert!(matches!(loaded.paths, Some(SnapshotPaths::Absent)));
+    }
+
+    #[test]
+    fn create_snapshot_captures_overlay_state_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let state = OverlayState {
+            overlays: vec![crate::state::overlay_state::OverlayRecord {
+                package_id: "owner/tool".to_string(),
+                overlay_name: "tool".to_string(),
+                entry_path: "C:/numan/tool/overlay.nu".to_string(),
+                scope: crate::state::overlay_state::OverlayScope::Session,
+                project_root: None,
+                activated_at: "now".to_string(),
+            }],
+        };
+        state.save(root).unwrap();
+
+        let manifest = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Activate,
+            None,
+            None,
+        )
+        .unwrap();
+        let snapshot = load_snapshot(root, &manifest.id).unwrap();
+        match snapshot.overlays.unwrap() {
+            SnapshotSidecar::Present { value, .. } => {
+                assert_eq!(value.overlays.len(), 1);
+                assert_eq!(value.overlays[0].package_id, "owner/tool");
+            }
+            SnapshotSidecar::Absent => panic!("overlay state was present"),
+        }
+    }
+
+    #[test]
+    fn load_snapshot_rejects_missing_overlays_sidecar_when_digest_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        OverlayState::default().save(root).unwrap();
+
+        let manifest = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Activate,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(manifest.sidecar_digests.overlays_sha256.is_some());
+
+        let snap_dir = root.join(format!("state/snapshots/{}", manifest.id));
+        std::fs::remove_file(snap_dir.join("overlays.json")).unwrap();
+
+        let err = load_snapshot(root, &manifest.id).unwrap_err();
+        assert!(
+            err.to_string().contains("overlays.json is missing"),
+            "expected missing overlays sidecar rejection, got: {err}"
+        );
     }
 
     #[test]

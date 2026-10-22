@@ -1609,6 +1609,7 @@ mod tests {
                 origin: None,
                 module_activation: None,
                 module_import_mode: None,
+                overlay: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -1689,6 +1690,7 @@ mod tests {
                 origin: None,
                 module_activation: None,
                 module_import_mode: None,
+                overlay: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -1775,6 +1777,7 @@ mod tests {
                     activated_at: "0".to_string(),
                 }),
                 module_import_mode: Some(ModuleImportMode::Module),
+                overlay: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -1857,6 +1860,7 @@ mod tests {
                 origin: None,
                 module_activation: None,
                 module_import_mode: Some(ModuleImportMode::Module),
+                overlay: None,
                 locked_dependencies: deps, // has dependencies — not activatable
             },
         );

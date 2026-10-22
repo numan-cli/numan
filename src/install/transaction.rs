@@ -6,13 +6,13 @@ use std::time::UNIX_EPOCH;
 
 use crate::core::integrity;
 use crate::core::nu_version::NuVersion;
-use crate::core::package::{ModuleImportMode, PackageType, ScopedId};
+use crate::core::package::{ModuleImportMode, PackageType, RegistryActivationSpec, ScopedId};
 use crate::core::platform::Platform;
 use crate::core::registry::RegistryManager;
 use crate::core::resolve::Resolver;
 use crate::install::download;
 use crate::install::extract::{self, ArchiveFormat, ExtractConfig};
-use crate::state::lockfile::{Lockfile, LockfileEntry};
+use crate::state::lockfile::{Lockfile, LockfileEntry, OverlayPackageSpec};
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::hints::{self, CMD_REGISTRY_SYNC};
 use std::collections::BTreeMap;
@@ -44,6 +44,25 @@ pub struct VerifiedIndex {
     pub registry_name: String,
     pub index_sha256: String,
     pub signing_key_fingerprint: Option<String>,
+}
+
+/// Overlay metadata for `nu-overlay` activations. Only module packages can be
+/// overlay-activated, so metadata on any other package type is rejected.
+fn overlay_package_spec(
+    activation: Option<&RegistryActivationSpec>,
+    package_type: &PackageType,
+    id: &ScopedId,
+) -> Result<Option<OverlayPackageSpec>> {
+    let Some(spec) = activation.filter(|spec| spec.kind == "nu-overlay") else {
+        return Ok(None);
+    };
+    if *package_type != PackageType::Module {
+        bail!("Overlay package '{}' must have type 'module'", id);
+    }
+    Ok(Some(OverlayPackageSpec {
+        name: spec.overlay_name.clone().unwrap_or_else(|| id.name.clone()),
+        exports: spec.exports.clone().unwrap_or_default(),
+    }))
 }
 
 pub fn install_package(
@@ -155,11 +174,29 @@ pub fn install_package(
     let lock_key = id.to_string();
 
     if !options.force {
-        if let Some(entry) = lockfile.packages.get(&lock_key) {
+        if let Some(entry) = lockfile.packages.get_mut(&lock_key) {
             if entry.version == version_str {
                 // Use the path stored in the lockfile entry — not a recomputed path
                 let pkg_dir = options.root.join(entry.payload_path());
                 if pkg_dir.exists() {
+                    if entry.overlay.is_none() {
+                        if let Some(overlay) = overlay_package_spec(
+                            resolved.activation.as_ref(),
+                            &pkg.package_type,
+                            &id,
+                        )? {
+                            entry.overlay = Some(overlay);
+                            // Same precedence as the fresh-install path: the overlay entry
+                            // from the registry activation, then the artifact entry.
+                            entry.entry = resolved
+                                .activation
+                                .as_ref()
+                                .filter(|spec| spec.kind == "nu-overlay")
+                                .and_then(|spec| spec.entry.clone())
+                                .or_else(|| resolved.artifact.entry.clone());
+                            lockfile.save(options.root)?;
+                        }
+                    }
                     if options.verbose {
                         println!(
                             "{} {}@{} is already installed",
@@ -275,10 +312,27 @@ pub fn install_package(
     std::fs::create_dir_all(parent_dir)?;
     let tmp_dir = tempfile::tempdir_in(parent_dir).context("Failed to create staging directory")?;
 
+    // Rejects overlay metadata on non-module packages before anything is extracted.
+    overlay_package_spec(resolved.activation.as_ref(), &pkg.package_type, &id)?;
+    let activation_entry = resolved
+        .activation
+        .as_ref()
+        .filter(|spec| spec.kind == "nu-overlay")
+        .and_then(|spec| spec.entry.clone());
+    if resolved
+        .activation
+        .as_ref()
+        .is_some_and(|spec| spec.kind == "nu-overlay")
+        && activation_entry.is_none()
+    {
+        bail!("Overlay package '{}' is missing activation.entry", id);
+    }
     let extract_config = ExtractConfig {
         archive_root: resolved.artifact.archive_root.clone(),
         include: resolved.artifact.include.clone(),
-        entry: resolved.artifact.entry.clone(),
+        entry: activation_entry
+            .clone()
+            .or_else(|| resolved.artifact.entry.clone()),
         ..ExtractConfig::default()
     };
 
@@ -322,7 +376,10 @@ pub fn install_package(
     }
 
     // Validate entry point if specified
-    if let Some(ref entry_name) = resolved.artifact.entry {
+    if let Some(ref entry_name) = activation_entry
+        .as_ref()
+        .or(resolved.artifact.entry.as_ref())
+    {
         if !extract_result.entry_found {
             bail!(
                 "Expected entry point '{}' not found in archive for '{}'",
@@ -372,7 +429,7 @@ pub fn install_package(
     // Compute payload manifest hash after extraction for drift detection.
     let revision_id = crate::state::lockfile::compute_revision_id(&install_dir);
 
-    // Capture module-specific activation metadata from registry at install time
+    // Capture activation metadata from registry at install time
     // so that activation can proceed without re-querying the registry.
     // Only persist import mode for known "nu-module" kind — unknown/future kinds
     // must not be silently treated as Nu module autoloads.
@@ -381,6 +438,8 @@ pub fn install_package(
         .as_ref()
         .filter(|spec| spec.kind == "nu-module")
         .map(|spec| spec.import.clone());
+
+    let overlay = overlay_package_spec(resolved.activation.as_ref(), &pkg.package_type, &id)?;
 
     let locked_dependencies: BTreeMap<String, String> = resolved
         .dependencies
@@ -404,7 +463,7 @@ pub fn install_package(
         executable_path,
         archive_root: resolved.artifact.archive_root.clone(),
         include: resolved.artifact.include.clone(),
-        entry: resolved.artifact.entry.clone(),
+        entry: activation_entry.or_else(|| resolved.artifact.entry.clone()),
         installed_at,
         nu_version_at_install: Some(options.nu_version.version.clone()),
         activation: None,
@@ -425,6 +484,7 @@ pub fn install_package(
         origin: Some(format!("registry:{}", verified.registry_name)),
         module_activation: None,
         module_import_mode,
+        overlay,
         locked_dependencies,
     };
 

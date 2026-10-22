@@ -21,6 +21,7 @@ use crate::nu::paths::NuPaths;
 use crate::state::activation_profile::ActivationProfile;
 use crate::state::autoload_state::AutoloadState;
 use crate::state::lifecycle_journal::{LifecycleOp, LifecycleStage, PendingLifecycle};
+use crate::state::overlay_state::OverlayState;
 use crate::state::snapshot::{
     create_snapshot, load_snapshot, verify_payloads, ManagedAutoloadProjection, Snapshot,
     SnapshotPaths, SnapshotReason, SnapshotRelation, SnapshotSidecar, SnapshotTrigger,
@@ -280,6 +281,21 @@ pub fn rollback_to_snapshot(
     journal.stage = LifecycleStage::ActivationProfileCommitted;
     journal.save(root)?;
 
+    // Commit 7: overlay state. Legacy snapshots do not carry this sidecar and
+    // leave the current overlay records untouched.
+    match &snapshot.overlays {
+        None => {}
+        Some(SnapshotSidecar::Present { value, .. }) => value.save(root)?,
+        Some(SnapshotSidecar::Absent) => OverlayState::delete(root)?,
+    }
+    journal.stage = LifecycleStage::OverlayStateCommitted;
+    journal.save(root)?;
+    if snapshot.overlays.is_some() {
+        eprintln!(
+            "Warning: overlay records were restored from the snapshot. The current Nushell shell may still have overlays active; reconcile it with `numan overlay list`."
+        );
+    }
+
     journal.stage = LifecycleStage::Completed;
     journal.save(root)?;
     PendingLifecycle::clear(root)?;
@@ -391,6 +407,7 @@ mod tests {
             origin: None,
             module_activation: None,
             module_import_mode: None,
+            overlay: None,
             locked_dependencies: BTreeMap::new(),
         }
     }

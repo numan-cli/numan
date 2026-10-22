@@ -50,6 +50,14 @@ pub struct ModuleActivation {
     pub activated_at: String,
 }
 
+/// Registry metadata persisted for a package that can be activated as a Nu overlay.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OverlayPackageSpec {
+    pub name: String,
+    #[serde(default)]
+    pub exports: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lockfile {
     pub version: u32,
@@ -158,6 +166,10 @@ pub struct LockfileEntry {
     /// for module packages whose registry entry omits `activation.import`.
     #[serde(default)]
     pub module_import_mode: Option<ModuleImportMode>,
+
+    /// Registry overlay metadata, present only for `activation.kind = "nu-overlay"`.
+    #[serde(default)]
+    pub overlay: Option<OverlayPackageSpec>,
 
     /// Registry dependency map captured at install time.
     /// Activation requires this to be empty in Phase 4.
@@ -392,6 +404,7 @@ mod tests {
             origin: None,
             module_activation: None,
             module_import_mode: None,
+            overlay: None,
             locked_dependencies: BTreeMap::new(),
         }
     }
@@ -447,6 +460,7 @@ mod tests {
                 origin: None,
                 module_activation: None,
                 module_import_mode: None,
+                overlay: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -522,6 +536,7 @@ mod tests {
             origin: None,
             module_activation: None,
             module_import_mode: None,
+            overlay: None,
             locked_dependencies: BTreeMap::new(),
         }
     }
@@ -604,6 +619,7 @@ mod tests {
             package_type: "module".to_string(),
             entry: Some("mod.nu".to_string()),
             module_import_mode: Some(ModuleImportMode::Module),
+            overlay: None,
             locked_dependencies: BTreeMap::new(),
             ..make_base_entry()
         };
@@ -632,6 +648,7 @@ mod tests {
             package_type: "module".to_string(),
             entry: Some("mod.nu".to_string()),
             module_import_mode: Some(ModuleImportMode::All),
+            overlay: None,
             locked_dependencies: {
                 let mut m = BTreeMap::new();
                 m.insert("owner/dep".to_string(), "^1.0.0".to_string());
@@ -664,6 +681,7 @@ mod tests {
                 source: "archive".to_string(),
                 entry: Some("mod.nu".to_string()),
                 module_import_mode: Some(ModuleImportMode::All),
+                overlay: None,
                 locked_dependencies: deps,
                 module_activation: Some(ModuleActivation {
                     entry_path: "/root/packages/modules/owner/mymod/1.0.0-aaa/mod.nu".to_string(),

@@ -588,6 +588,7 @@ fn commit_imports(
             origin: Some(NUPM_IMPORT_ORIGIN.to_string()),
             module_activation: None,
             module_import_mode: Some(ModuleImportMode::Module),
+            overlay: None,
             locked_dependencies: BTreeMap::new(),
         };
         lockfile.packages.insert(resolved.package_id.clone(), entry);
@@ -968,6 +969,7 @@ mod tests {
             origin: None,
             module_activation: None,
             module_import_mode: None,
+            overlay: None,
             locked_dependencies: BTreeMap::new(),
         }
     }

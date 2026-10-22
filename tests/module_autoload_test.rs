@@ -156,6 +156,7 @@ impl ModuleTestEnv {
             origin: None,
             module_activation: None,
             module_import_mode: Some(import_mode),
+            overlay: None,
             locked_dependencies: BTreeMap::new(),
         };
 

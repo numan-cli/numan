@@ -11,6 +11,7 @@ pub mod list;
 pub mod migrate;
 pub mod nu_pin_offer;
 pub mod nupm;
+pub mod overlay;
 pub mod plugin_lifecycle;
 pub mod registry;
 pub mod remove;

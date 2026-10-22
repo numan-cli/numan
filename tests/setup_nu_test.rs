@@ -727,6 +727,7 @@ fn list_shows_bundled_with_nu_tag() {
             origin: Some(BUNDLED_NU_ORIGIN.to_string()),
             module_activation: None,
             module_import_mode: None,
+            overlay: None,
             locked_dependencies: Default::default(),
         },
     );
