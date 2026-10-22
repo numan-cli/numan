@@ -104,20 +104,28 @@ pub fn execute_with_hooks_and_refresh(
 
 /// List all installed Nu versions, marking the active one.
 fn execute_list(root: &Path) -> Result<()> {
+    let mut out = std::io::stdout();
+    list_to(root, &mut out)
+}
+
+pub(crate) fn list_to(root: &Path, out: &mut dyn std::io::Write) -> Result<()> {
     let versions = version_manager::list_installed_versions(root)?;
     let active = version_manager::read_active_version(root)?;
 
     if versions.is_empty() {
-        println!("No Nu versions installed.");
-        println!("Run 'numan setup nu' or 'numan setup nu <version>' to install.");
+        writeln!(out, "No Nu versions installed.")?;
+        writeln!(
+            out,
+            "Run 'numan setup nu' or 'numan setup nu <version>' to install."
+        )?;
         return Ok(());
     }
 
-    println!("Installed Nu versions:");
+    writeln!(out, "Installed Nu versions:")?;
     for version in versions {
         let is_active = active.as_ref().is_some_and(|a| a.version == version);
         let marker = if is_active { " (active)" } else { "" };
-        println!("  {}{}", version, marker);
+        writeln!(out, "  {}{}", version, marker)?;
     }
 
     Ok(())

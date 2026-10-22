@@ -40,6 +40,15 @@ pub enum SnapshotCommands {
     },
 }
 
+#[allow(dead_code)] // caller is the TUI executor in an upper stack layer
+pub(crate) fn execute_to(cmd: &SnapshotCommands, root: &Path, out: &mut dyn Write) -> Result<()> {
+    match cmd {
+        SnapshotCommands::List => list(root, out),
+        SnapshotCommands::Inspect { id } => inspect(root, id, out),
+        _ => anyhow::bail!("snapshot command is not read-only"),
+    }
+}
+
 pub fn execute(cmd: SnapshotCommands, root: &Path) -> Result<()> {
     match cmd {
         SnapshotCommands::List => list(root, &mut std::io::stdout()),

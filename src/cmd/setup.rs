@@ -14,6 +14,7 @@ use crate::util::atomic::write_bytes_atomic;
 use crate::util::fs_safety::{
     assert_managed_file_owned, assert_not_symlink, setup_subcommand_lock,
 };
+use crate::util::output::{eprintln, println};
 
 /// Snapshot established Numan state before a `setup nu` mutation.
 fn snapshot_before_setup_mutation(root: &Path, trigger: SnapshotTrigger) -> Result<()> {
