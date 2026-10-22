@@ -35,6 +35,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Gc(args) => numan_cli::cmd::gc::execute(&args, &root),
         Commands::Activate(args) => numan_cli::cmd::activate::execute(&args, &root),
         Commands::Deactivate(args) => numan_cli::cmd::deactivate::execute(&args, &root),
+        Commands::Hook(command) => numan_cli::cmd::hook::execute(command, &root),
         Commands::List => numan_cli::cmd::list::execute(&root),
         Commands::Init(args) => numan_cli::cmd::init::execute(&args, &root),
         Commands::Registry(cmd) => numan_cli::cmd::registry::execute(cmd, &root),

@@ -21,6 +21,7 @@ use crate::state::autoload_journal::PendingAutoload;
 #[cfg(test)]
 use crate::state::autoload_journal::SCHEMA_VERSION as AUTOLOAD_SCHEMA_VERSION;
 use crate::state::autoload_state::AutoloadState;
+use crate::state::hook_profile::HookProfile;
 use crate::state::lifecycle_journal::PendingLifecycle;
 #[cfg(test)]
 use crate::state::lockfile::LockfileEntry;
@@ -110,6 +111,9 @@ pub struct SidecarDigests {
     /// Digest of the `overlays.json` sidecar. `None` on legacy snapshots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overlays_sha256: Option<String>,
+    /// Digest of the hook-profile sidecar. `None` on legacy snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_profile_sha256: Option<String>,
 }
 
 /// Captured Nu path-cache sidecar (`nu_state/paths.json`).
@@ -181,6 +185,8 @@ pub struct Snapshot {
     pub activation_profile: Option<SnapshotSidecar<ActivationProfile>>,
     /// Overlay activations recorded at snapshot time; `None` for legacy snapshots.
     pub overlays: Option<SnapshotSidecar<OverlayState>>,
+    /// Hook profile at snapshot time; `None` for legacy snapshots.
+    pub hook_profile: Option<SnapshotSidecar<HookProfile>>,
 }
 
 /// A legacy timestamp-only snapshot directory.
@@ -246,6 +252,7 @@ pub fn create_snapshot(
     let payload_revisions = compute_payload_revisions(root, &lockfile)?;
     let activation_profile = capture_activation_profile_sidecar(root)?;
     let overlays = capture_overlay_state_sidecar(root)?;
+    let hook_profile = capture_hook_profile_sidecar(root)?;
 
     let sidecar_digests = SidecarDigests {
         lockfile_sha256: sha256_json(&lockfile)?,
@@ -254,6 +261,7 @@ pub fn create_snapshot(
         paths_sha256: Some(sha256_json(&paths)?),
         activation_profile_sha256: Some(sha256_json(&activation_profile)?),
         overlays_sha256: Some(sha256_json(&overlays)?),
+        hook_profile_sha256: Some(sha256_json(&hook_profile)?),
     };
 
     let manifest = SnapshotManifest {
@@ -288,6 +296,7 @@ pub fn create_snapshot(
     write_json_atomic(&stage.join("paths.json"), &paths)?;
     write_json_atomic(&stage.join("activation-profile.json"), &activation_profile)?;
     write_json_atomic(&stage.join("overlays.json"), &overlays)?;
+    write_json_atomic(&stage.join("hook-profile.json"), &hook_profile)?;
 
     let dest = snapshot_dir(root, &id);
     std::fs::rename(&stage, &dest).with_context(|| {
@@ -402,6 +411,23 @@ pub fn load_snapshot(root: &Path, id: &str) -> Result<Snapshot> {
         None
     };
 
+    let hook_profile = if let Some(expected) =
+        manifest.sidecar_digests.hook_profile_sha256.as_deref()
+    {
+        let hook_profile_path = dir.join("hook-profile.json");
+        if !hook_profile_path.exists() {
+            bail!(
+                "Snapshot '{}' declares a hook-profile sidecar digest but hook-profile.json is missing. Refuse to load an incomplete snapshot.",
+                id
+            );
+        }
+        let sidecar: SnapshotSidecar<HookProfile> = read_json(&hook_profile_path)?;
+        verify_digest(&sidecar, expected, "hook profile")?;
+        Some(sidecar)
+    } else {
+        None
+    };
+
     Ok(Snapshot {
         manifest,
         lockfile,
@@ -410,6 +436,7 @@ pub fn load_snapshot(root: &Path, id: &str) -> Result<Snapshot> {
         paths,
         activation_profile,
         overlays,
+        hook_profile,
     })
 }
 
@@ -763,6 +790,23 @@ fn capture_overlay_state_sidecar(root: &Path) -> Result<SnapshotSidecar<OverlayS
     })
 }
 
+fn capture_hook_profile_sidecar(root: &Path) -> Result<SnapshotSidecar<HookProfile>> {
+    let path = root.join("nu_state/hook_profile.json");
+    if !path.is_file() {
+        return Ok(SnapshotSidecar::Absent);
+    }
+    let content = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read hook profile '{}'", path.display()))?;
+    let value: HookProfile = serde_json::from_str(&content)
+        .with_context(|| format!("Malformed hook profile at '{}'", path.display()))?;
+    let sha256 = compute_sha256(content.as_bytes());
+    Ok(SnapshotSidecar::Present {
+        content,
+        sha256,
+        value,
+    })
+}
+
 fn compute_payload_revisions(root: &Path, lockfile: &Lockfile) -> Result<BTreeMap<String, String>> {
     let mut revisions = BTreeMap::new();
     for (package_id, entry) in &lockfile.packages {
@@ -842,6 +886,7 @@ mod tests {
     fn empty_lockfile_entry() -> LockfileEntry {
         LockfileEntry {
             hook_activation: None,
+            hook_bindings: None,
             version: "1.0.0".to_string(),
             package_type: "module".to_string(),
             source: "archive".to_string(),
@@ -1109,6 +1154,53 @@ mod tests {
             loaded.manifest.sidecar_digests.paths_sha256,
             manifest.sidecar_digests.paths_sha256
         );
+    }
+
+    #[test]
+    fn create_snapshot_captures_hook_profile_sidecar_and_verifies_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let profile = crate::state::hook_profile::HookProfile {
+            bindings: vec![crate::state::hook_profile::HookBindingRecord {
+                id: "owner/tool/prompt".into(),
+                event: "pre_prompt".into(),
+                handler: root
+                    .join("packages/tool/hooks/prompt.nu")
+                    .to_string_lossy()
+                    .into_owned(),
+                filter: None,
+                package_id: "owner/tool".into(),
+                activated_at: "now".into(),
+            }],
+            nu_executable: None,
+            nu_executable_sha256: Some("hash".into()),
+            nu_version: Some("0.116.1".into()),
+            vendor_autoload_dir: Some(root.join("vendor/autoload").to_string_lossy().into_owned()),
+            managed_file_path: Some(
+                root.join("vendor/autoload/numan-hooks.nu")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        };
+        profile.save(root).unwrap();
+
+        let manifest = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Activate,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(manifest.sidecar_digests.hook_profile_sha256.is_some());
+        let loaded = load_snapshot(root, &manifest.id).unwrap();
+        match loaded.hook_profile.unwrap() {
+            SnapshotSidecar::Present { value, .. } => {
+                assert_eq!(value.bindings.len(), 1);
+                assert_eq!(value.bindings[0].package_id, "owner/tool");
+            }
+            SnapshotSidecar::Absent => panic!("hook profile was present"),
+        }
     }
 
     #[test]

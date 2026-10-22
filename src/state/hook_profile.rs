@@ -1,4 +1,4 @@
-//! Hook profile state (issue #16, Phase 5 — data model only).
+//! Hook profile state and active bindings (issue #16).
 //!
 //! Tracks Numan-owned hook bindings and their scope. Ephemeral merge state is
 //! regenerated, never partially merged.
@@ -13,9 +13,20 @@ use crate::util::atomic::write_json_atomic;
 pub struct HookProfile {
     #[serde(default)]
     pub bindings: Vec<HookBindingRecord>,
+    #[serde(default)]
+    pub nu_executable: Option<String>,
+    #[serde(default)]
+    pub nu_executable_sha256: Option<String>,
+    #[serde(default)]
+    pub nu_version: Option<String>,
+    #[serde(default)]
+    pub vendor_autoload_dir: Option<String>,
+    #[serde(default)]
+    pub managed_file_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "HookBindingRecordWire")]
 pub struct HookBindingRecord {
     pub id: String,
     pub event: String,
@@ -26,9 +37,42 @@ pub struct HookBindingRecord {
     pub activated_at: String,
 }
 
+#[derive(Deserialize)]
+struct HookBindingRecordWire {
+    id: String,
+    event: String,
+    handler: String,
+    #[serde(default)]
+    filter: Option<String>,
+    package_id: String,
+    activated_at: String,
+}
+
+impl TryFrom<HookBindingRecordWire> for HookBindingRecord {
+    type Error = String;
+
+    fn try_from(value: HookBindingRecordWire) -> Result<Self, Self::Error> {
+        if !crate::nu::hooks::is_allowed_event(&value.event) {
+            return Err(format!("unsupported Nushell hook event '{}'", value.event));
+        }
+        Ok(Self {
+            id: value.id,
+            event: value.event,
+            handler: value.handler,
+            filter: value.filter,
+            package_id: value.package_id,
+            activated_at: value.activated_at,
+        })
+    }
+}
+
 impl HookProfile {
+    pub fn profile_path(root: &Path) -> std::path::PathBuf {
+        root.join("nu_state").join("hook_profile.json")
+    }
+
     pub fn load(root: &Path) -> Result<Self> {
-        let path = root.join("nu_state").join("hook_profile.json");
+        let path = Self::profile_path(root);
         if !path.exists() {
             return Ok(Self::default());
         }
@@ -39,12 +83,12 @@ impl HookProfile {
     }
 
     pub fn save(&self, root: &Path) -> Result<()> {
-        let path = root.join("nu_state").join("hook_profile.json");
+        let path = Self::profile_path(root);
         write_json_atomic(&path, self)
     }
 
     pub fn delete(root: &Path) -> Result<()> {
-        let path = root.join("nu_state").join("hook_profile.json");
+        let path = Self::profile_path(root);
         if path.exists() {
             std::fs::remove_file(&path)
                 .with_context(|| format!("Failed to remove '{}'", path.display()))?;
@@ -98,5 +142,12 @@ mod tests {
     fn allowed_events_non_empty() {
         assert!(!crate::nu::hooks::ALLOWED_HOOK_EVENTS.is_empty());
         assert!(crate::nu::hooks::ALLOWED_HOOK_EVENTS.contains(&"pre_prompt"));
+    }
+
+    #[test]
+    fn deserialization_rejects_unsupported_hook_events() {
+        let json = r#"{"bindings":[{"id":"x","event":"display_output","handler":"h.nu","package_id":"owner/pkg","activated_at":"now"}]}"#;
+        let error = serde_json::from_str::<HookProfile>(json).unwrap_err();
+        assert!(error.to_string().contains("unsupported Nushell hook event"));
     }
 }

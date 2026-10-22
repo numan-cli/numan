@@ -624,6 +624,7 @@ mod tests {
             "o/plug".into(),
             LockfileEntry {
                 hook_activation: None,
+                hook_bindings: None,
                 version: "1.0.0".to_string(),
                 package_type: "plugin".to_string(),
                 source: "binary".to_string(),

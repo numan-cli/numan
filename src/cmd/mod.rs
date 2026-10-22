@@ -4,6 +4,7 @@ pub mod completions;
 pub mod deactivate;
 pub mod doctor;
 pub mod gc;
+pub mod hook;
 pub mod info;
 pub mod init;
 pub mod install;

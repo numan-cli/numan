@@ -698,6 +698,7 @@ fn list_shows_bundled_with_nu_tag() {
         "nushell/polars".to_string(),
         numan_cli::state::lockfile::LockfileEntry {
             hook_activation: None,
+            hook_bindings: None,
             version: "0.114.0".to_string(),
             package_type: "plugin".to_string(),
             source: "binary".to_string(),

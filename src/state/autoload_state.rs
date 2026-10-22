@@ -212,6 +212,7 @@ mod tests {
                 id.to_string(),
                 LockfileEntry {
                     hook_activation: None,
+                    hook_bindings: None,
                     version: "1.0.0".to_string(),
                     package_type: "module".to_string(),
                     source: "archive".to_string(),

@@ -207,6 +207,13 @@ impl NuPaths {
 
         Ok(())
     }
+
+    /// Probe the cached Nu executable and reject vendor-autoload directory
+    /// changes before writing persistent integration files.
+    pub fn validate_vendor_drift_live(&self) -> Result<()> {
+        let probe = probe_nu(&self.nu_executable)?;
+        self.validate_vendor_drift(&probe.vendor_autoload_dirs)
+    }
 }
 
 fn nu_binary_file_name() -> &'static str {

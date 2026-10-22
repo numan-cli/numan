@@ -235,7 +235,7 @@ impl fmt::Display for ModuleImportMode {
 /// - `"nu-overlay"`: session/project overlay activation (Phase 5, issue #17).
 /// - `"nu-hook"`: hook profile activation (Phase P1, issue #16).
 ///
-/// All other kinds are rejected at activation time.
+/// Each activation kind is handled only by its explicit capability command.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RegistryActivationSpec {
     /// Activation kind. `"nu-module"`, `"nu-overlay"`, or `"nu-hook"`.

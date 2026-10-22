@@ -4,6 +4,7 @@ use clap::Parser;
 use std::io::IsTerminal;
 use std::path::Path;
 
+use crate::state::hook_profile::HookProfile;
 use crate::state::lifecycle_journal::{LifecycleOp, LifecycleStage, PendingLifecycle};
 use crate::state::lockfile::{Lockfile, LockfileEntry, BUNDLED_NU_ORIGIN};
 use crate::state::nupm_import::NupmImportsFile;
@@ -67,6 +68,7 @@ pub fn execute_reviewed(
 
     ensure_plugin_not_active(&entry, &args.package)?;
     ensure_not_bundled_plugin(&entry, &args.package)?;
+    ensure_hooks_disabled(root, &args.package)?;
     if !args.force && entry.module_activation.is_some() {
         bail!(
             "Package '{}' is currently active as a module. \
@@ -103,6 +105,7 @@ pub fn execute_reviewed(
     };
     ensure_plugin_not_active(&entry, &args.package)?;
     ensure_not_bundled_plugin(&entry, &args.package)?;
+    ensure_hooks_disabled(root, &args.package)?;
     if !args.force && entry.module_activation.is_some() {
         bail!(
             "Package '{}' is currently active as a module. \
@@ -192,6 +195,22 @@ pub fn execute_reviewed(
     Ok(())
 }
 
+fn ensure_hooks_disabled(root: &Path, package_id: &str) -> Result<()> {
+    let profile = HookProfile::load(root)?;
+    if profile
+        .bindings
+        .iter()
+        .any(|binding| binding.package_id == package_id)
+    {
+        bail!(
+            "Package '{}' has active Nushell hooks. Run `numan hook disable {}` before removal.",
+            package_id,
+            package_id
+        );
+    }
+    Ok(())
+}
+
 /// Refuse remove when a plugin activation record is present (Issue #22 gate).
 /// `--force` does not bypass this check.
 fn ensure_plugin_not_active(entry: &LockfileEntry, pkg_id: &str) -> Result<()> {
@@ -222,6 +241,7 @@ mod tests {
     fn base_entry() -> LockfileEntry {
         LockfileEntry {
             hook_activation: None,
+            hook_bindings: None,
             version: "1.0.0".to_string(),
             package_type: "plugin".to_string(),
             source: "binary".to_string(),
@@ -322,6 +342,23 @@ mod tests {
             ..base_entry()
         };
         ensure_not_bundled_plugin(&entry, "owner/pkg").unwrap();
+    }
+
+    #[test]
+    fn stale_lockfile_hook_record_does_not_block_remove() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut lockfile = Lockfile::empty();
+        let mut entry = base_entry();
+        entry.hook_activation = Some(crate::state::lockfile::HookActivation {
+            binding_ids: vec!["owner/pkg/prompt".into()],
+            nu_executable_sha256: "old-hash".into(),
+            nu_version: "0.116.1".into(),
+            activated_at: "now".into(),
+        });
+        lockfile.packages.insert("owner/pkg".into(), entry);
+        lockfile.save(dir.path()).unwrap();
+
+        ensure_hooks_disabled(dir.path(), "owner/pkg").unwrap();
     }
 
     #[test]

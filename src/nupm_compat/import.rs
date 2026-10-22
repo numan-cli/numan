@@ -559,6 +559,7 @@ fn commit_imports(
         let resolved = &item.resolved;
         let entry = LockfileEntry {
             hook_activation: None,
+            hook_bindings: None,
             version: resolved.parsed_version.clone(),
             package_type: "module".to_string(),
             source: "nupm".to_string(),
@@ -941,6 +942,7 @@ mod tests {
     fn default_entry() -> LockfileEntry {
         LockfileEntry {
             hook_activation: None,
+            hook_bindings: None,
             version: String::new(),
             package_type: String::new(),
             source: String::new(),

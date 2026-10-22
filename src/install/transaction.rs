@@ -6,7 +6,9 @@ use std::time::UNIX_EPOCH;
 
 use crate::core::integrity;
 use crate::core::nu_version::NuVersion;
-use crate::core::package::{ModuleImportMode, PackageType, RegistryActivationSpec, ScopedId};
+use crate::core::package::{
+    HookBinding, ModuleImportMode, PackageType, RegistryActivationSpec, ScopedId,
+};
 use crate::core::platform::Platform;
 use crate::core::registry::RegistryManager;
 use crate::core::resolve::Resolver;
@@ -389,6 +391,10 @@ pub fn install_package(
         }
     }
 
+    // Validate hook activation metadata before promoting the staged payload.
+    // A malformed declaration must not leave an orphaned immutable install.
+    let hook_bindings = persist_hook_bindings(resolved.activation.as_ref(), &id.to_string())?;
+
     // 9. Snapshot lockfile before mutation (after download/extraction preflight succeeds).
     // Skip when the lockfile is empty — there is no prior state worth restoring.
     if !Lockfile::load(options.root)?.packages.is_empty() {
@@ -440,7 +446,6 @@ pub fn install_package(
         .map(|spec| spec.import.clone());
 
     let overlay = overlay_package_spec(resolved.activation.as_ref(), &pkg.package_type, &id)?;
-
     let locked_dependencies: BTreeMap<String, String> = resolved
         .dependencies
         .iter()
@@ -455,6 +460,7 @@ pub fn install_package(
 
     let entry = LockfileEntry {
         hook_activation: None,
+        hook_bindings,
         version: version_str.clone(),
         package_type: pkg.package_type.to_string(),
         source: resolved.artifact.kind.clone(),
@@ -530,6 +536,26 @@ fn format_timestamp() -> String {
     format!("{secs:016}")
 }
 
+fn persist_hook_bindings(
+    activation: Option<&RegistryActivationSpec>,
+    package_id: &str,
+) -> Result<Option<Vec<HookBinding>>> {
+    let Some(spec) = activation else {
+        return Ok(None);
+    };
+    if spec.kind != "nu-hook" {
+        return Ok(None);
+    }
+    let bindings = spec
+        .bindings
+        .as_ref()
+        .filter(|bindings| !bindings.is_empty())
+        .with_context(|| {
+            format!("Hook package '{package_id}' has missing or empty activation.bindings")
+        })?;
+    Ok(Some(bindings.clone()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,5 +565,53 @@ mod tests {
         let ts = format_timestamp();
         assert_eq!(ts.len(), 16);
         assert!(ts.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn install_persists_hook_bindings_but_not_other_activation_kinds() {
+        let hooks = vec![HookBinding {
+            id: "prompt".into(),
+            event: "pre_prompt".into(),
+            handler: "hooks/prompt.nu".into(),
+            filter: None,
+        }];
+        let hook_spec = RegistryActivationSpec {
+            kind: "nu-hook".into(),
+            import: ModuleImportMode::Module,
+            bindings: Some(hooks.clone()),
+            ..Default::default()
+        };
+        let persisted = persist_hook_bindings(Some(&hook_spec), "owner/tool")
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].id, "prompt");
+
+        let module_spec = RegistryActivationSpec {
+            kind: "nu-module".into(),
+            import: ModuleImportMode::Module,
+            bindings: None,
+            ..Default::default()
+        };
+        assert!(persist_hook_bindings(Some(&module_spec), "owner/tool")
+            .unwrap()
+            .is_none());
+        assert!(persist_hook_bindings(None, "owner/tool").unwrap().is_none());
+    }
+
+    #[test]
+    fn install_rejects_hook_activation_without_bindings() {
+        let spec = RegistryActivationSpec {
+            kind: "nu-hook".into(),
+            import: ModuleImportMode::Module,
+            bindings: Some(Vec::new()),
+            ..Default::default()
+        };
+        assert!(persist_hook_bindings(Some(&spec), "owner/tool").is_err());
+        let null_bindings = RegistryActivationSpec {
+            bindings: None,
+            ..spec
+        };
+        assert!(persist_hook_bindings(Some(&null_bindings), "owner/tool").is_err());
     }
 }

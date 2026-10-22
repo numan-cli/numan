@@ -412,6 +412,7 @@ fn discover_bundled_plugins(root: &Path, version_dir: &Path, nu_version: &str) -
 
         let lockfile_entry = LockfileEntry {
             hook_activation: None,
+            hook_bindings: None,
             version: nu_version.to_string(),
             package_type: "plugin".to_string(),
             source: "binary".to_string(),
@@ -1723,6 +1724,7 @@ mod tests {
             "nushell/polars".to_string(),
             LockfileEntry {
                 hook_activation: None,
+                hook_bindings: None,
                 version: "0.114.0".to_string(),
                 package_type: "plugin".to_string(),
                 source: "binary".to_string(),
@@ -1815,6 +1817,7 @@ mod tests {
             "nushell/polars".to_string(),
             LockfileEntry {
                 hook_activation: None,
+                hook_bindings: None,
                 version: "0.113.0".to_string(),
                 package_type: "plugin".to_string(),
                 source: "binary".to_string(),
