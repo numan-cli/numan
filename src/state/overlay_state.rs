@@ -1,10 +1,10 @@
-//! Overlay activation state (issue #17, Phase 5).
+//! Overlay activation state (issue #17, Phase 5 — data model only).
 //!
 //! Tracks which overlays are currently active and their scope. Ephemeral:
 //! session-scoped overlays are recorded for status/drift but cannot be
 //! auto-restored in a new shell.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -39,6 +39,18 @@ pub struct OverlayRecord {
 }
 
 impl OverlayState {
+    fn validate(&self) -> Result<()> {
+        for overlay in &self.overlays {
+            if overlay.scope == OverlayScope::Project && overlay.project_root.is_none() {
+                bail!(
+                    "Project-scoped overlay '{}' requires project_root",
+                    overlay.overlay_name
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub fn load(root: &Path) -> Result<Self> {
         let path = root.join("nu_state").join("overlays.json");
         if !path.exists() {
@@ -46,11 +58,16 @@ impl OverlayState {
         }
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
-        serde_json::from_str(&content)
-            .with_context(|| format!("Failed to parse {}", path.display()))
+        let state: Self = serde_json::from_str(&content)
+            .with_context(|| format!("Failed to parse {}", path.display()))?;
+        state
+            .validate()
+            .with_context(|| format!("Invalid overlay state in {}", path.display()))?;
+        Ok(state)
     }
 
     pub fn save(&self, root: &Path) -> Result<()> {
+        self.validate()?;
         let path = root.join("nu_state").join("overlays.json");
         write_json_atomic(&path, self)
     }
@@ -76,18 +93,70 @@ mod tests {
         let root = dir.path();
         std::fs::create_dir_all(root.join("nu_state")).unwrap();
         let mut state = OverlayState::default();
+        for (scope, project_root) in [
+            (OverlayScope::Session, None),
+            (OverlayScope::Project, Some("/tmp/project")),
+        ] {
+            state.overlays.push(OverlayRecord {
+                package_id: "owner/name".to_string(),
+                overlay_name: "name".to_string(),
+                entry_path: "/tmp/entry.nu".to_string(),
+                scope,
+                project_root: project_root.map(String::from),
+                activated_at: "2026-01-01T00:00:00Z".to_string(),
+            });
+        }
+        state.save(root).unwrap();
+        let loaded = OverlayState::load(root).unwrap();
+        assert_eq!(loaded.overlays.len(), state.overlays.len());
+        for (actual, expected) in loaded.overlays.iter().zip(&state.overlays) {
+            assert_eq!(actual.package_id, expected.package_id);
+            assert_eq!(actual.scope, expected.scope);
+            assert_eq!(actual.project_root, expected.project_root);
+        }
+    }
+
+    #[test]
+    fn load_rejects_project_without_root() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nu_state/overlays.json");
+        for project_root in [None, Some(serde_json::Value::Null)] {
+            let mut record = serde_json::json!({
+                "package_id": "owner/name",
+                "overlay_name": "name",
+                "entry_path": "/tmp/entry.nu",
+                "scope": "project",
+                "activated_at": "2026-01-01T00:00:00Z"
+            });
+            if let Some(project_root) = project_root {
+                record["project_root"] = project_root;
+            }
+            write_json_atomic(&path, &serde_json::json!({ "overlays": [record] })).unwrap();
+
+            let err = OverlayState::load(dir.path()).unwrap_err();
+            assert!(format!("{err:#}").contains("requires project_root"));
+        }
+    }
+
+    #[test]
+    fn save_rejects_project_without_root_and_preserves_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nu_state/overlays.json");
+        let mut state = OverlayState::default();
+        state.save(dir.path()).unwrap();
+        let original = std::fs::read(&path).unwrap();
         state.overlays.push(OverlayRecord {
             package_id: "owner/name".to_string(),
             overlay_name: "name".to_string(),
             entry_path: "/tmp/entry.nu".to_string(),
-            scope: OverlayScope::Session,
+            scope: OverlayScope::Project,
             project_root: None,
             activated_at: "2026-01-01T00:00:00Z".to_string(),
         });
-        state.save(root).unwrap();
-        let loaded = OverlayState::load(root).unwrap();
-        assert_eq!(loaded.overlays.len(), 1);
-        assert_eq!(loaded.overlays[0].package_id, "owner/name");
+
+        let err = state.save(dir.path()).unwrap_err();
+        assert!(err.to_string().contains("requires project_root"));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
     }
 
     #[test]

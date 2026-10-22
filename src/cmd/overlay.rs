@@ -58,14 +58,14 @@ fn use_overlay(args: &OverlayUseArgs, root: &Path) -> Result<()> {
         .overlay
         .as_ref()
         .with_context(|| format!("Package '{}' is not an overlay package", args.package))?;
+    if package.package_type != "module" {
+        bail!("Overlay package '{}' must have type 'module'", args.package);
+    }
     if spec.name.trim().is_empty() {
         bail!(
             "Overlay package '{}' has an empty overlay name",
             args.package
         );
-    }
-    if package.package_type != "module" {
-        bail!("Overlay package '{}' must have type 'module'", args.package);
     }
     if package.module_activation.is_some() {
         bail!(
@@ -107,23 +107,50 @@ fn use_overlay(args: &OverlayUseArgs, root: &Path) -> Result<()> {
         None => (OverlayScope::Session, None),
     };
 
+    let entry_path = resolved.absolute_path.to_string_lossy().into_owned();
     let mut state = OverlayState::load(root)?;
-    if state
+    if let Some(existing) = state
         .overlays
         .iter()
-        .any(|record| record.package_id == args.package)
+        .find(|record| record.package_id == args.package)
     {
+        if existing.entry_path != entry_path
+            || existing.overlay_name != spec.name
+            || existing.scope != scope
+            || existing.project_root != project_root
+        {
+            bail!(
+                "Overlay package '{}' is already recorded as '{}' at {}; run `numan overlay hide {}` before using it again",
+                args.package,
+                existing.overlay_name,
+                existing.entry_path,
+                args.package
+            );
+        }
         eprintln!("Overlay '{}' is already recorded as active.", spec.name);
         println!("{}", nu_use_command(&resolved.absolute_path, &spec.name));
         return Ok(());
     }
-    let active_exports: Vec<String> = state
-        .overlays
-        .iter()
-        .filter_map(|record| lockfile.packages.get(&record.package_id))
-        .filter_map(|entry| entry.overlay.as_ref())
-        .flat_map(|active| active.exports.iter().cloned())
-        .collect();
+    let requested_root = project_root.as_deref();
+    let mut active_exports: Vec<String> = Vec::new();
+    for record in state.overlays.iter().filter(|record| match record.scope {
+        OverlayScope::Session => true,
+        OverlayScope::Project => {
+            requested_root.is_none_or(|root| record.project_root.as_deref() == Some(root))
+        }
+    }) {
+        let active = lockfile
+            .packages
+            .get(&record.package_id)
+            .and_then(|entry| entry.overlay.as_ref())
+            .with_context(|| {
+                format!(
+                    "Recorded overlay '{}' ({}) cannot be checked for export conflicts; run `numan overlay hide {}` first",
+                    record.overlay_name, record.package_id, record.package_id
+                )
+            })?;
+        active_exports.extend(active.exports.iter().cloned());
+    }
     if let Some(conflict) = spec
         .exports
         .iter()
@@ -153,7 +180,7 @@ fn use_overlay(args: &OverlayUseArgs, root: &Path) -> Result<()> {
     state.overlays.push(OverlayRecord {
         package_id: args.package.clone(),
         overlay_name: spec.name.clone(),
-        entry_path: resolved.absolute_path.to_string_lossy().into_owned(),
+        entry_path,
         scope,
         project_root,
         activated_at: format_timestamp(),
@@ -193,7 +220,6 @@ fn hide_overlay(args: &OverlayHideArgs, root: &Path) -> Result<()> {
         );
     }
 
-    let record = state.overlays.remove(matches[0]);
     create_snapshot(
         root,
         SnapshotReason::PreMutation,
@@ -201,6 +227,7 @@ fn hide_overlay(args: &OverlayHideArgs, root: &Path) -> Result<()> {
         None,
         None,
     )?;
+    let record = state.overlays.remove(matches[0]);
     state.save(root)?;
     eprintln!(
         "Removed Numan's activation record for '{}'. Run the emitted statement in the current Nushell shell.",
@@ -400,6 +427,38 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("mutation is already in progress"));
         assert!(OverlayState::load(&root).unwrap().overlays.is_empty());
+    }
+
+    #[test]
+    fn use_refuses_stale_record_for_same_package() {
+        let (_dir, root) = overlay_fixture();
+        use_overlay(
+            &OverlayUseArgs {
+                package: "owner/tool".to_string(),
+                project_root: None,
+            },
+            &root,
+        )
+        .unwrap();
+        let mut state = OverlayState::load(&root).unwrap();
+        state.overlays[0].overlay_name = "stale".to_string();
+        state.save(&root).unwrap();
+
+        let err = use_overlay(
+            &OverlayUseArgs {
+                package: "owner/tool".to_string(),
+                project_root: None,
+            },
+            &root,
+        )
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("run `numan overlay hide owner/tool` before using it again"));
+        assert_eq!(
+            OverlayState::load(&root).unwrap().overlays[0].overlay_name,
+            "stale"
+        );
     }
 
     #[test]

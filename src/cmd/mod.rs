@@ -21,10 +21,12 @@ pub mod setup;
 pub mod setup_tools;
 pub mod snapshot;
 pub mod try_cmd;
+pub mod tui;
 pub mod update;
 pub mod use_cmd;
 
 use crate::state::autoload_recovery::AutoloadRecoveryOutcome;
+use crate::util::output::eprintln;
 
 fn print_autoload_recovery(outcome: AutoloadRecoveryOutcome) {
     match outcome {

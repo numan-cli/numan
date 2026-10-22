@@ -1,3 +1,4 @@
+use crate::util::output::println;
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -5,13 +6,13 @@ use std::time::UNIX_EPOCH;
 
 use crate::core::integrity;
 use crate::core::nu_version::NuVersion;
-use crate::core::package::{ModuleImportMode, PackageType, ScopedId};
+use crate::core::package::{ModuleImportMode, PackageType, RegistryActivationSpec, ScopedId};
 use crate::core::platform::Platform;
 use crate::core::registry::RegistryManager;
 use crate::core::resolve::Resolver;
 use crate::install::download;
 use crate::install::extract::{self, ArchiveFormat, ExtractConfig};
-use crate::state::lockfile::{Lockfile, LockfileEntry};
+use crate::state::lockfile::{Lockfile, LockfileEntry, OverlayPackageSpec};
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::hints::{self, CMD_REGISTRY_SYNC};
 use std::collections::BTreeMap;
@@ -43,6 +44,25 @@ pub struct VerifiedIndex {
     pub registry_name: String,
     pub index_sha256: String,
     pub signing_key_fingerprint: Option<String>,
+}
+
+/// Overlay metadata for `nu-overlay` activations. Only module packages can be
+/// overlay-activated, so metadata on any other package type is rejected.
+fn overlay_package_spec(
+    activation: Option<&RegistryActivationSpec>,
+    package_type: &PackageType,
+    id: &ScopedId,
+) -> Result<Option<OverlayPackageSpec>> {
+    let Some(spec) = activation.filter(|spec| spec.kind == "nu-overlay") else {
+        return Ok(None);
+    };
+    if *package_type != PackageType::Module {
+        bail!("Overlay package '{}' must have type 'module'", id);
+    }
+    Ok(Some(OverlayPackageSpec {
+        name: spec.overlay_name.clone().unwrap_or_else(|| id.name.clone()),
+        exports: spec.exports.clone().unwrap_or_default(),
+    }))
 }
 
 pub fn install_package(
@@ -154,11 +174,21 @@ pub fn install_package(
     let lock_key = id.to_string();
 
     if !options.force {
-        if let Some(entry) = lockfile.packages.get(&lock_key) {
+        if let Some(entry) = lockfile.packages.get_mut(&lock_key) {
             if entry.version == version_str {
                 // Use the path stored in the lockfile entry — not a recomputed path
                 let pkg_dir = options.root.join(entry.payload_path());
                 if pkg_dir.exists() {
+                    if entry.overlay.is_none() {
+                        if let Some(overlay) = overlay_package_spec(
+                            resolved.activation.as_ref(),
+                            &pkg.package_type,
+                            &id,
+                        )? {
+                            entry.overlay = Some(overlay);
+                            lockfile.save(options.root)?;
+                        }
+                    }
                     if options.verbose {
                         println!(
                             "{} {}@{} is already installed",
@@ -274,6 +304,8 @@ pub fn install_package(
     std::fs::create_dir_all(parent_dir)?;
     let tmp_dir = tempfile::tempdir_in(parent_dir).context("Failed to create staging directory")?;
 
+    // Rejects overlay metadata on non-module packages before anything is extracted.
+    overlay_package_spec(resolved.activation.as_ref(), &pkg.package_type, &id)?;
     let activation_entry = resolved
         .activation
         .as_ref()
@@ -399,17 +431,7 @@ pub fn install_package(
         .filter(|spec| spec.kind == "nu-module")
         .map(|spec| spec.import.clone());
 
-    let overlay = resolved
-        .activation
-        .as_ref()
-        .filter(|spec| spec.kind == "nu-overlay")
-        .map(|spec| {
-            let name = spec.overlay_name.clone().unwrap_or_else(|| id.name.clone());
-            crate::state::lockfile::OverlayPackageSpec {
-                name,
-                exports: spec.exports.clone().unwrap_or_default(),
-            }
-        });
+    let overlay = overlay_package_spec(resolved.activation.as_ref(), &pkg.package_type, &id)?;
 
     let locked_dependencies: BTreeMap<String, String> = resolved
         .dependencies

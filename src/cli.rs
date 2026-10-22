@@ -16,11 +16,13 @@ pub struct Cli {
     pub root: Option<PathBuf>,
 
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Open the optional interactive package workbench
+    Tui,
     /// Search registry by name/description/tags
     Search(cmd::search::SearchArgs),
     /// Show package details, versions, platforms

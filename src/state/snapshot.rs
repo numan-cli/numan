@@ -1168,6 +1168,33 @@ mod tests {
     }
 
     #[test]
+    fn load_snapshot_rejects_missing_overlays_sidecar_when_digest_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        OverlayState::default().save(root).unwrap();
+
+        let manifest = create_snapshot(
+            root,
+            SnapshotReason::PreMutation,
+            SnapshotTrigger::Activate,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(manifest.sidecar_digests.overlays_sha256.is_some());
+
+        let snap_dir = root.join(format!("state/snapshots/{}", manifest.id));
+        std::fs::remove_file(snap_dir.join("overlays.json")).unwrap();
+
+        let err = load_snapshot(root, &manifest.id).unwrap_err();
+        assert!(
+            err.to_string().contains("overlays.json is missing"),
+            "expected missing overlays sidecar rejection, got: {err}"
+        );
+    }
+
+    #[test]
     fn create_snapshot_fails_when_existing_paths_json_is_corrupt() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();

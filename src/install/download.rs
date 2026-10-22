@@ -50,7 +50,11 @@ pub fn download_file(url: &str, dest: &Path) -> Result<()> {
 
     let total_size = response.content_length().unwrap_or(0);
 
-    let pb = ProgressBar::new(total_size);
+    let pb = if crate::util::output::is_captured() {
+        ProgressBar::hidden()
+    } else {
+        ProgressBar::new(total_size)
+    };
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
@@ -73,6 +77,7 @@ pub fn download_file(url: &str, dest: &Path) -> Result<()> {
         file.write_all(&buffer[..bytes_read])?;
         downloaded += bytes_read as u64;
         pb.set_position(downloaded);
+        crate::util::output::download(downloaded, (total_size > 0).then_some(total_size));
     }
 
     pb.finish_with_message("downloaded");

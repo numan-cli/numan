@@ -1,3 +1,4 @@
+use crate::util::output::{eprintln, println};
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use std::path::{Component, Path, PathBuf};
@@ -1025,7 +1026,7 @@ fn execute_check(
 // ── Target resolution ──────────────────────────────────────────────────────────
 
 /// Resolve the managed file path from NuPaths.
-fn resolve_managed_file_path(nu_paths: &NuPaths) -> Result<String> {
+pub(crate) fn resolve_managed_file_path(nu_paths: &NuPaths) -> Result<String> {
     let vendor_dir = nu_paths.vendor_autoload_dir.as_deref().ok_or_else(|| {
         anyhow::anyhow!(
             "No Numan-safe vendor-autoload directory is available.\n\

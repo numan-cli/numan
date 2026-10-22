@@ -58,3 +58,15 @@ cargo test --test plugin_active_update_real_nu -- --ignored --nocapture --test-t
 - **Commits**: Imperative mood, <72 characters.
 - **Branches**: `feature/description`, `fix/description`.
 - **Review Guidelines**: Refer to [`REVIEW.md`](../REVIEW.md) for PR review checklists and severity guidelines.
+
+## Optional terminal workbench
+
+Build with `cargo build --features tui`, then run the resulting `numan` binary without a subcommand (or use `numan tui`). During development, `cargo run --features tui --` opens it. Default Cargo builds exclude terminal UI dependencies.
+
+`NUMAN_NO_TUI=1` disables interactive entry. Redirected bare invocations show help; explicit `numan tui` requires interactive stdin/stdout. Existing CLI subcommands keep their behavior.
+
+The workbench provides cached package discovery, installed state, updates, a command launcher, separately reviewed install/activate/update/remove operations, and an explicit local doctor scan. Other workflows are labeled CLI only and can print a command after exit. View entry never syncs registries or downloads data. Cancellation is unavailable after mutation submission.
+
+Run `cargo test --features tui` for feature coverage. The ignored `real_nu_module_install_activate_spike` test accepts `NUMAN_TEST_REAL_NU` pointing to a real Nu binary and uses an isolated root with signed local artifacts. Cross-platform interactive terminal acceptance remains separate from buffer and lifecycle tests.
+
+Workbench navigation: Left/Right moves pane focus; Up/Down selects within the focused pane. Shift+R opens an explicit network registry-refresh review; lowercase r only reloads local state. Refresh results must be read with the transcript because a failed remote fetch can retain verified cached data.

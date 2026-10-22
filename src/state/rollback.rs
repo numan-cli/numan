@@ -290,6 +290,11 @@ pub fn rollback_to_snapshot(
     }
     journal.stage = LifecycleStage::OverlayStateCommitted;
     journal.save(root)?;
+    if snapshot.overlays.is_some() {
+        eprintln!(
+            "Warning: overlay records were restored from the snapshot. The current Nushell shell may still have overlays active; reconcile it with `numan overlay list`."
+        );
+    }
 
     journal.stage = LifecycleStage::Completed;
     journal.save(root)?;

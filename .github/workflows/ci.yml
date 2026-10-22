@@ -30,6 +30,7 @@ jobs:
         with:
           save-if: ${{ github.event_name == 'push' }}
       - run: cargo test --verbose
+      - run: cargo test --locked --features tui --verbose
       - run: cargo build --verbose
 
   clippy:
@@ -44,7 +45,15 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           save-if: ${{ github.event_name == 'push' }}
+      - name: Assert default build excludes TUI dependencies
+        run: |
+          cargo tree --locked --edges normal,build --prefix none --format '{p}' > "$RUNNER_TEMP/numan-default-dependencies.txt"
+          if grep -E '^(ratatui(-[^ ]+)?|crossterm) v' "$RUNNER_TEMP/numan-default-dependencies.txt"; then
+            echo "::error::Default build must exclude Ratatui and Crossterm; enable them with --features tui."
+            exit 1
+          fi
       - run: cargo clippy -- -D warnings
+      - run: cargo clippy --locked --features tui -- -D warnings
 
   fmt:
     name: Format
@@ -187,6 +196,7 @@ jobs:
         with:
           save-if: ${{ github.event_name == 'push' }}
       - run: cargo +1.88 check --locked --all-targets
+      - run: cargo +1.88 check --locked --all-targets --features tui
 
   package:
     name: Package

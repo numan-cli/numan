@@ -21,6 +21,8 @@ against a registry or guessing at a substitute version.
   vendor-autoload target was configured at snapshot time.
 - The autoload-state projection (`nu_state/autoload-state.json`), if present.
 - The nupm-import provenance sidecar (`state/nupm-imports.json`), if present.
+- The overlay activation records (`nu_state/overlays.json`), if present. Legacy
+  snapshots without this sidecar leave the live records untouched on rollback.
 - The Nu path cache (`nu_state/paths.json`): executable path, hash, version,
   vendor-autoload dirs, and plugin registry path. New snapshots always record
   either a full cache or an explicit `Absent` marker when the root was
@@ -139,10 +141,15 @@ journaled through dedicated `PendingLifecycle` rollback stages so a crash
 mid-rollback is recoverable by re-running `numan snapshot rollback <id>`.
 
 Restore order (each step is a journaled commit): lockfile → managed autoload
-file → autoload-state projection → nupm-imports sidecar → Nu path cache.
-Paths restore runs even when the lockfile is empty and there are no
-activations; that is the `init --refresh` then rollback gap this design
-closes. Legacy snapshots without a paths sidecar skip the final step.
+file → autoload-state projection → nupm-imports sidecar → Nu path cache →
+activation profile → overlay activation records. Paths restore runs even when
+the lockfile is empty and there are no activations; that is the
+`init --refresh` then rollback gap this design closes. Legacy snapshots without
+a paths sidecar skip that step.
+
+Overlay records only describe what Numan recorded. Rolling them back does not
+replay `overlay use` or `overlay hide` in the caller's Nushell shell, so
+rollback warns when it restores overlay state; reconcile the shell by hand.
 
 ## Limitations
 
