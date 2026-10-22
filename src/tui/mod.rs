@@ -4,6 +4,7 @@ pub mod catalog;
 pub mod operations;
 #[cfg(test)]
 mod tests;
+pub mod theme;
 mod ui;
 
 use crate::util::output::{self, OutputEvent};
