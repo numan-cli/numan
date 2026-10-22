@@ -265,12 +265,28 @@ pub struct HookBinding {
     /// Stable binding ID (unique within the package and across active hooks).
     pub id: String,
     /// Hook event name (must be in the allow-list).
+    #[serde(deserialize_with = "deserialize_allowed_hook_event")]
     pub event: String,
     /// Package-relative handler `.nu` path.
     pub handler: String,
     /// Optional filter expression.
     #[serde(default)]
     pub filter: Option<String>,
+}
+
+fn deserialize_allowed_hook_event<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let event = String::deserialize(deserializer)?;
+    if crate::nu::hooks::is_allowed_event(&event) {
+        Ok(event)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "unsupported Nushell hook event '{event}'"
+        )))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -309,6 +325,20 @@ impl RegistryIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hook_binding_event_must_be_allow_list_member() {
+        assert!(serde_json::from_str::<HookBinding>(
+            r#"{"id":"x","event":"pre_prompt","handler":"hooks/x.nu"}"#
+        )
+        .is_ok());
+        assert!(serde_json::from_str::<HookBinding>(
+            r#"{"id":"x","event":"custom_event","handler":"hooks/x.nu"}"#
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("unsupported Nushell hook event"));
+    }
 
     #[test]
     fn parse_scoped_id() {

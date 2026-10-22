@@ -95,6 +95,7 @@ impl TestEnv {
     ) -> LockfileEntry {
         let payload_path = format!("packages/plugins/{owner}/{name}/{version}-abc12345");
         LockfileEntry {
+            hook_activation: None,
             version: version.to_string(),
             package_type: "plugin".to_string(),
             source: "binary".to_string(),
@@ -307,6 +308,7 @@ fn test_activate_path_with_spaces() {
     lockfile.packages.insert(
         "owner/my plugin".to_string(),
         LockfileEntry {
+            hook_activation: None,
             version: "1.0.0".to_string(),
             package_type: "plugin".to_string(),
             source: "binary".to_string(),

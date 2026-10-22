@@ -902,6 +902,7 @@ mod tests {
         entry: Option<&str>,
     ) -> crate::state::lockfile::LockfileEntry {
         crate::state::lockfile::LockfileEntry {
+            hook_activation: None,
             version: "0.1.0".to_string(),
             package_type: "script".to_string(),
             source: "registry".to_string(),

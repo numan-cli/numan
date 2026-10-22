@@ -34,7 +34,8 @@ impl HookProfile {
         }
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
-        Ok(serde_json::from_str(&content).unwrap_or_default())
+        serde_json::from_str(&content)
+            .with_context(|| format!("Failed to parse {}", path.display()))
     }
 
     pub fn save(&self, root: &Path) -> Result<()> {
@@ -82,6 +83,15 @@ mod tests {
         let dir = tempdir().unwrap();
         let p = HookProfile::load(dir.path()).unwrap();
         assert!(p.bindings.is_empty());
+    }
+
+    #[test]
+    fn load_invalid_profile_returns_error() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("nu_state")).unwrap();
+        std::fs::write(dir.path().join("nu_state/hook_profile.json"), "{").unwrap();
+        let error = HookProfile::load(dir.path()).unwrap_err();
+        assert!(error.to_string().contains("Failed to parse"));
     }
 
     #[test]

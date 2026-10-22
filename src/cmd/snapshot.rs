@@ -334,6 +334,7 @@ mod tests {
 
     fn payload_lockfile_entry() -> LockfileEntry {
         LockfileEntry {
+            hook_activation: None,
             version: "1.0.0".to_string(),
             package_type: "module".to_string(),
             source: "archive".to_string(),

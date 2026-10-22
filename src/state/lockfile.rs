@@ -70,7 +70,6 @@ pub struct HookActivation {
     /// Timestamp when this record was written.
     pub activated_at: String,
 }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lockfile {
@@ -173,6 +172,10 @@ pub struct LockfileEntry {
     /// reinterpret or merge them.
     #[serde(default)]
     pub module_activation: Option<ModuleActivation>,
+
+    /// Activation record for this package's Nushell hooks.
+    #[serde(default)]
+    pub hook_activation: Option<HookActivation>,
 
     /// Import mode persisted from the registry at install time.
     /// `None` for packages that have no `activation` spec (plugins, scripts,
@@ -362,6 +365,7 @@ mod tests {
         lock.packages.insert(
             "a/b".to_string(),
             LockfileEntry {
+                hook_activation: None,
                 version: "1".to_string(),
                 package_type: "module".to_string(),
                 source: "nupm".to_string(),
@@ -374,6 +378,7 @@ mod tests {
         lock.packages.insert(
             "c/d".to_string(),
             LockfileEntry {
+                hook_activation: None,
                 version: "1".to_string(),
                 package_type: "module".to_string(),
                 source: "registry".to_string(),
@@ -388,6 +393,7 @@ mod tests {
 
     fn minimal_lockfile_entry_defaults() -> LockfileEntry {
         LockfileEntry {
+            hook_activation: None,
             version: String::new(),
             package_type: String::new(),
             source: String::new(),
@@ -444,6 +450,7 @@ mod tests {
         lock.packages.insert(
             "test/pkg".to_string(),
             LockfileEntry {
+                hook_activation: None,
                 version: "1.0.0".to_string(),
                 package_type: "plugin".to_string(),
                 source: "binary".to_string(),
@@ -520,6 +527,7 @@ mod tests {
 
     fn make_base_entry() -> LockfileEntry {
         LockfileEntry {
+            hook_activation: None,
             version: "1.0.0".to_string(),
             package_type: "plugin".to_string(),
             source: "binary".to_string(),
@@ -558,6 +566,7 @@ mod tests {
     #[test]
     fn is_active_for_matches_correctly() {
         let entry = LockfileEntry {
+            hook_activation: None,
             activation: Some(PluginActivation {
                 plugin_registry_path: "/path/to/plugins.msgpackz".to_string(),
                 nu_executable_sha256: "abc123".to_string(),
@@ -578,6 +587,7 @@ mod tests {
         use crate::core::package::ModuleImportMode;
 
         let entry = LockfileEntry {
+            hook_activation: None,
             package_type: "module".to_string(),
             module_activation: Some(ModuleActivation {
                 entry_path: "/root/packages/modules/owner/foo/1.0.0-abc/mod.nu".to_string(),
@@ -630,6 +640,7 @@ mod tests {
 
         // All three conditions met
         let ready = LockfileEntry {
+            hook_activation: None,
             package_type: "module".to_string(),
             entry: Some("mod.nu".to_string()),
             module_import_mode: Some(ModuleImportMode::Module),
@@ -641,6 +652,7 @@ mod tests {
 
         // Missing entry
         let no_entry = LockfileEntry {
+            hook_activation: None,
             package_type: "module".to_string(),
             entry: None,
             module_import_mode: Some(ModuleImportMode::Module),
@@ -650,6 +662,7 @@ mod tests {
 
         // Missing import mode
         let no_mode = LockfileEntry {
+            hook_activation: None,
             package_type: "module".to_string(),
             entry: Some("mod.nu".to_string()),
             module_import_mode: None,
@@ -659,6 +672,7 @@ mod tests {
 
         // Has dependencies
         let with_deps = LockfileEntry {
+            hook_activation: None,
             package_type: "module".to_string(),
             entry: Some("mod.nu".to_string()),
             module_import_mode: Some(ModuleImportMode::All),
@@ -691,6 +705,7 @@ mod tests {
         lock.packages.insert(
             "owner/mymod".to_string(),
             LockfileEntry {
+                hook_activation: None,
                 package_type: "module".to_string(),
                 source: "archive".to_string(),
                 entry: Some("mod.nu".to_string()),
@@ -885,6 +900,7 @@ mod tests {
         lock.packages.insert(
             "owner/pkg".to_string(),
             LockfileEntry {
+                hook_activation: None,
                 revision_id: Some("deadbeef".repeat(8)),
                 payload_sha256: Some("payload-hash".to_string()),
                 executable_sha256: Some("exe-hash".to_string()),

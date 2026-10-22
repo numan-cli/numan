@@ -1579,6 +1579,7 @@ mod tests {
         packages.insert(
             "owner/myscript".to_string(),
             LockfileEntry {
+                hook_activation: None,
                 version: "1.0.0".to_string(),
                 package_type: "script".to_string(),
                 source: "archive".to_string(),
@@ -1660,6 +1661,7 @@ mod tests {
         packages.insert(
             "owner/mycomp".to_string(),
             LockfileEntry {
+                hook_activation: None,
                 version: "1.0.0".to_string(),
                 package_type: "completion".to_string(),
                 source: "archive".to_string(),
@@ -1739,6 +1741,7 @@ mod tests {
         packages.insert(
             "owner/mymod".to_string(),
             LockfileEntry {
+                hook_activation: None,
                 version: "1.0.0".to_string(),
                 package_type: "module".to_string(),
                 source: "archive".to_string(),
@@ -1830,6 +1833,7 @@ mod tests {
         packages.insert(
             "owner/depmod".to_string(),
             LockfileEntry {
+                hook_activation: None,
                 version: "1.0.0".to_string(),
                 package_type: "module".to_string(),
                 source: "archive".to_string(),

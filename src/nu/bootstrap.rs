@@ -411,6 +411,7 @@ fn discover_bundled_plugins(root: &Path, version_dir: &Path, nu_version: &str) -
         let sha = integrity::compute_sha256(&bytes);
 
         let lockfile_entry = LockfileEntry {
+            hook_activation: None,
             version: nu_version.to_string(),
             package_type: "plugin".to_string(),
             source: "binary".to_string(),
@@ -1721,6 +1722,7 @@ mod tests {
         lockfile.packages.insert(
             "nushell/polars".to_string(),
             LockfileEntry {
+                hook_activation: None,
                 version: "0.114.0".to_string(),
                 package_type: "plugin".to_string(),
                 source: "binary".to_string(),
@@ -1812,6 +1814,7 @@ mod tests {
         lockfile.packages.insert(
             "nushell/polars".to_string(),
             LockfileEntry {
+                hook_activation: None,
                 version: "0.113.0".to_string(),
                 package_type: "plugin".to_string(),
                 source: "binary".to_string(),
