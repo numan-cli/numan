@@ -327,13 +327,13 @@ fn commit_autoload_file(
             let (candidate, managed_path) =
                 staged_candidate.expect("candidate staged for Present projection");
             crate::nu::autoload::replace_managed_file(&managed_path, &candidate)?;
-            Ok(format!("restored {}", managed_path.display()))
+            Ok("restored managed autoload file".to_string())
         }
         ManagedAutoloadProjection::Absent { managed_file_path } => {
             let managed_path = Path::new(managed_file_path);
             if managed_path.exists() {
                 crate::nu::autoload::delete_managed_file(managed_path)?;
-                Ok(format!("removed {}", managed_path.display()))
+                Ok("removed managed autoload file".to_string())
             } else {
                 Ok("no managed autoload file (already absent)".to_string())
             }

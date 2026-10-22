@@ -434,11 +434,9 @@ pub fn validate_candidate(
     if let Err(e) = result {
         // Remove the candidate on validation failure.
         if let Err(rm_err) = std::fs::remove_file(candidate) {
-            // Non-fatal: log but do not shadow the original validation error.
-            eprintln!(
-                "Warning: failed to remove candidate '{}': {rm_err}",
-                candidate.display()
-            );
+            // Non-fatal: report cleanup failure without exposing the generated
+            // candidate filename, which contains a random UUID.
+            eprintln!("Warning: failed to remove generated candidate file: {rm_err}");
         }
         let ids = scoped_ids.join(", ");
         bail!("Module candidate validation failed for package(s): {ids}\n{e}");
