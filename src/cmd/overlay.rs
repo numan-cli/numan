@@ -222,14 +222,52 @@ fn prune_dead(state: &mut OverlayState) {
     );
     state.overlays.retain(|r| {
         // Legacy records have no confirmed shell and must never be promoted.
-        r.pid
-            .and_then(|pid| system.process(Pid::from_u32(pid)))
-            .is_some_and(|process| {
-                process.start_time() == 0
-                    || r.process_started
-                        .is_none_or(|started| started == process.start_time())
-            })
+        r.pid.is_some_and(|pid| {
+            system.process(Pid::from_u32(pid)).map_or_else(
+                || !process_definitely_absent(pid),
+                |process| {
+                    process.start_time() == 0
+                        || r.process_started
+                            .is_none_or(|started| started == process.start_time())
+                },
+            )
+        })
     });
+}
+
+// Missing inventory entries can mean restricted visibility. Release a payload
+// only when the OS confirms that its owner process does not exist.
+#[cfg(unix)]
+fn process_definitely_absent(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return true;
+    };
+    if pid <= 0 {
+        return true;
+    }
+    // Signal zero checks existence without delivering a signal. EPERM means
+    // the process exists but cannot be inspected, so retain its reservation.
+    (unsafe { libc::kill(pid, 0) }) == -1
+        && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+#[cfg(windows)]
+fn process_definitely_absent(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // Access denied and all other uncertain errors retain the reservation.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        std::io::Error::last_os_error().raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32)
+    } else {
+        unsafe { CloseHandle(handle) };
+        false
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn process_definitely_absent(_pid: u32) -> bool {
+    false
 }
 
 fn apply_observation(state: &mut OverlayState, obs: &Observation) -> Result<()> {
@@ -517,6 +555,17 @@ pub(crate) fn nu_literal(value: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_existence_probe_retains_the_running_process() {
+        assert!(!process_definitely_absent(std::process::id()));
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn process_existence_probe_confirms_an_invalid_pid_is_absent() {
+        assert!(process_definitely_absent(u32::MAX));
+    }
 
     #[test]
     fn list_output_is_captured_without_mutating_state() {
