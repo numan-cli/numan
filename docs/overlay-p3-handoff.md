@@ -54,8 +54,9 @@ origin only; automatic project discovery is not implemented.
 - Current code revision `c9d1ca5` CI passed Clippy, MSRV, formatting, packaging,
   dependency/license checks, workflow validation, and Linux/macOS real-Nu
   acceptance on Nu 0.115.0 at the time this handoff was refreshed.
-- Final local TUI library tests and Windows Nu 0.115.0 PTY tests were launched;
-  final results and remaining CI status belong in the PR description.
+- Final local TUI library suite: 848 passed, 3 ignored. Windows Nu 0.115.0
+  PTY acceptance: 4 passed. External hide package-ID regression plus the scoped
+  overlay suite: 11 passed. Final CI status belongs in the PR description.
 - The first CI revision failed an existing bootstrap PATH assertion in its TUI
   suite. Matrix fail-fast canceled the other standard platform jobs; these were
   not independent overlay failures. Follow the current-head rerun evidence.

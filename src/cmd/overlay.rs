@@ -121,10 +121,7 @@ pub fn execute(command: OverlayCommands, root: &Path) -> Result<()> {
         }
         OverlayCommands::Hide(args) => {
             eprintln!("Use the Nu-side `numan overlay hide` command to confirm this shell's state. No activation record was changed.");
-            println!(
-                "overlay hide {} --keep-env [PWD]",
-                nu_literal(&args.target)?
-            );
+            println!("{}", external_hide_code(root, &args.target)?);
         }
         OverlayCommands::Prepare(args) => print_json(&prepare(root, &args)?)?,
         OverlayCommands::PrepareHide(args) => print_json(&prepare_hide(root, &args)?)?,
@@ -144,6 +141,19 @@ pub fn execute(command: OverlayCommands, root: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn external_hide_code(root: &Path, target: &str) -> Result<String> {
+    let lockfile = Lockfile::load(root)?;
+    let name = lockfile
+        .packages
+        .get(target)
+        .and_then(|package| package.overlay.as_ref())
+        .map_or(target, |overlay| overlay.name.as_str());
+    Ok(format!(
+        "overlay hide {} --keep-env [PWD]",
+        nu_literal(name)?
+    ))
 }
 
 pub(crate) fn list_overlays_to(root: &Path, out: &mut dyn std::io::Write) -> Result<()> {
@@ -597,6 +607,22 @@ mod tests {
             }
         })).unwrap()).unwrap();
         dir
+    }
+
+    #[test]
+    fn external_hide_resolves_package_id_without_recording_activation() {
+        let root = fixture();
+        let expected = "overlay hide r#'tooling'# --keep-env [PWD]";
+        assert_eq!(
+            external_hide_code(root.path(), "owner/tool").unwrap(),
+            expected
+        );
+        assert_eq!(
+            external_hide_code(root.path(), "tooling").unwrap(),
+            expected
+        );
+        assert!(OverlayState::load(root.path()).unwrap().overlays.is_empty());
+        assert!(!root.path().join("nu_state").exists());
     }
 
     fn session() -> SessionArgs {
