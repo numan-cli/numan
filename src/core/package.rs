@@ -236,7 +236,7 @@ impl fmt::Display for ModuleImportMode {
 ///   (Phase 5, issue #17); overlay activation is not yet supported.
 ///
 /// Only `"nu-module"` is currently supported at activation time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RegistryActivationSpec {
     /// Activation kind. `"nu-module"` or the reserved `"nu-overlay"`.
     pub kind: String,
