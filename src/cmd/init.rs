@@ -15,6 +15,7 @@ use crate::util::fs_safety::assert_managed_file_owned;
 use crate::util::hints::{
     self, CMD_ACTIVATE, CMD_INIT_REFRESH, CMD_REGISTRY_ADD, CMD_REGISTRY_SYNC, CMD_TRY,
 };
+use crate::util::output::{eprintln, println};
 
 #[derive(Debug, Args)]
 pub struct InitArgs {

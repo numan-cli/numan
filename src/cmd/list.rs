@@ -13,7 +13,7 @@ pub fn execute(root: &Path) -> Result<()> {
     execute_to(root, &mut stdout)
 }
 
-fn execute_to(root: &Path, out: &mut dyn Write) -> Result<()> {
+pub(crate) fn execute_to(root: &Path, out: &mut dyn Write) -> Result<()> {
     let lockfile = Lockfile::load(root)?;
     let nu_paths = NuPaths::load(root).ok();
     let active_hook_packages = nu_paths.as_ref().and_then(|paths| {

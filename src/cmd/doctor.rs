@@ -141,13 +141,24 @@ pub fn execute(args: &DoctorArgs, root: &Path) -> Result<i32> {
 }
 
 pub fn execute_with_options(args: &DoctorArgs, root: &Path, options: DoctorOptions) -> Result<i32> {
+    let mut out = std::io::stdout();
+    execute_to_with_options(args, root, options, &mut out)
+}
+
+/// Captured-output variant of [`execute_with_options`] for TUI execution.
+pub(crate) fn execute_to_with_options(
+    args: &DoctorArgs,
+    root: &Path,
+    options: DoctorOptions,
+    out: &mut dyn Write,
+) -> Result<i32> {
     let mut report = run_checks_with_options(args, root, &options)?;
     if !args.scan {
         let repairs = apply_repairs(args, root, &report.findings, &options)?;
         report = run_checks_with_options(args, root, &options)?;
         report.repairs = Some(repairs);
     }
-    print_report(args, root, &report)?;
+    print_report_to(args, root, &report, out)?;
     Ok(report.exit_code())
 }
 
@@ -1792,14 +1803,18 @@ fn apply_repairs(
     Ok(records)
 }
 
-fn print_report(args: &DoctorArgs, root: &Path, report: &DoctorReport) -> Result<()> {
+fn print_report_to(
+    args: &DoctorArgs,
+    root: &Path,
+    report: &DoctorReport,
+    mut out: &mut dyn Write,
+) -> Result<()> {
     if args.json {
         let json = serde_json::to_string_pretty(report)?;
-        println!("{json}");
+        writeln!(out, "{json}")?;
         return Ok(());
     }
 
-    let mut out = std::io::stdout();
     writeln!(out, "Numan doctor — {}", root.display())?;
     writeln!(out)?;
 

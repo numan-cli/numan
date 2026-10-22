@@ -15,6 +15,7 @@ use crate::state::lockfile::{HookActivation, Lockfile};
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::format_timestamp;
 use crate::util::fs_safety::{acquire_mutation_lock, assert_managed_file_owned};
+use crate::util::output::println;
 
 const HOOK_AUTOLOAD_FILE: &str = "numan-hooks.nu";
 
@@ -337,16 +338,22 @@ fn disable(
 }
 
 fn list(root: &Path) -> Result<()> {
+    let mut out = std::io::stdout();
+    list_to(root, &mut out)
+}
+
+pub(crate) fn list_to(root: &Path, out: &mut dyn std::io::Write) -> Result<()> {
     let profile = HookProfile::load(root)?;
     if profile.bindings.is_empty() {
-        println!("No active hooks.");
+        writeln!(out, "No active hooks.")?;
         return Ok(());
     }
     for binding in profile.bindings {
-        println!(
+        writeln!(
+            out,
             "{}\t{}\t{}\t{}",
             binding.package_id, binding.id, binding.event, binding.handler
-        );
+        )?;
     }
     Ok(())
 }

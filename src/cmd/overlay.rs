@@ -139,17 +139,27 @@ pub fn execute(command: OverlayCommands, root: &Path) -> Result<()> {
             if args.session.is_some() {
                 print_json(&reconcile(root, &args, None, false)?)?;
             } else {
-                for r in OverlayState::load(root)?.overlays {
-                    println!(
-                        "{} ({}) [{:?}; session {}; last observed]",
-                        r.overlay_name,
-                        r.package_id,
-                        r.status,
-                        r.session_id.as_deref().unwrap_or("legacy/unconfirmed")
-                    );
-                }
+                list_overlays_to(root, &mut std::io::stdout())?;
             }
         }
+    }
+    Ok(())
+}
+
+pub(crate) fn list_overlays_to(root: &Path, out: &mut dyn std::io::Write) -> Result<()> {
+    let state = OverlayState::load(root)?;
+    if state.overlays.is_empty() {
+        writeln!(out, "No overlays recorded.")?;
+    }
+    for r in state.overlays {
+        writeln!(
+            out,
+            "{} ({}) [{:?}; session {}; last observed]",
+            r.overlay_name,
+            r.package_id,
+            r.status,
+            r.session_id.as_deref().unwrap_or("legacy/unconfirmed")
+        )?;
     }
     Ok(())
 }

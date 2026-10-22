@@ -23,7 +23,11 @@ pub fn execute(args: &SearchArgs, root: &Path) -> Result<()> {
     execute_to(args, root, &mut stdout)
 }
 
-fn execute_to(args: &SearchArgs, root: &Path, out: &mut dyn std::io::Write) -> Result<()> {
+pub(crate) fn execute_to(
+    args: &SearchArgs,
+    root: &Path,
+    out: &mut dyn std::io::Write,
+) -> Result<()> {
     let mgr = RegistryManager::new(root)?;
     let results = mgr.search(&args.query)?;
 

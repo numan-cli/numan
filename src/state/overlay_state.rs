@@ -1,6 +1,6 @@
-//! Overlay activation state (issue #17, Phase 5 — data model only).
+//! Caller-shell overlay transactions and payload reservations.
 //!
-//! Tracks which overlays are currently active and their scope. Ephemeral:
+//! Tracks pending, active, and degraded overlays and their scope. Ephemeral:
 //! session-scoped overlays are recorded for status/drift but cannot be
 //! auto-restored in a new shell.
 
@@ -12,7 +12,7 @@ use crate::util::atomic::write_json_atomic;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct OverlayState {
-    /// Active overlays.
+    /// Overlay transactions, including unconfirmed payload reservations.
     #[serde(default)]
     pub overlays: Vec<OverlayRecord>,
 }

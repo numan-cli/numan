@@ -8,6 +8,7 @@ use crate::state::lockfile::Lockfile;
 use crate::state::overlay_state::OverlayState;
 use crate::state::snapshot::{legacy_snapshot_payload_paths, list_snapshots, load_snapshot};
 use crate::util::fs_safety::acquire_mutation_lock;
+use crate::util::output::{eprintln, println};
 
 /// Garbage-collect orphaned package directories
 #[derive(Parser)]

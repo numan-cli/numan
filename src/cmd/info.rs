@@ -7,13 +7,18 @@ use anyhow::Result;
 use std::path::Path;
 
 pub fn execute(id: &str, root: &Path) -> Result<()> {
+    let mut out = std::io::stdout();
+    execute_to(id, root, &mut out)
+}
+
+pub(crate) fn execute_to(id: &str, root: &Path, out: &mut dyn std::io::Write) -> Result<()> {
     let pkg = RegistryManager::new(root)?
         .find_package(id)?
         .ok_or_else(|| anyhow::anyhow!("Package '{id}' not found."))?;
 
     let platform = Platform::detect();
     let nu = current_nu(root);
-    print!("{}", format_info(&pkg, &platform, nu.as_ref()));
+    write!(out, "{}", format_info(&pkg, &platform, nu.as_ref()))?;
     Ok(())
 }
 

@@ -8,6 +8,7 @@ use crate::install::transaction::{self, InstallResult};
 use crate::state::lockfile::Lockfile;
 use crate::util::fs_safety::{acquire_mutation_lock, MutationLock};
 use crate::util::hints::{self, CMD_REGISTRY_SYNC};
+use crate::util::output::{eprintln, println};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use std::collections::HashSet;
@@ -412,7 +413,7 @@ fn print_install_only_hint(root: &Path, package_id: &str) -> Result<()> {
     match installed.entry.as_deref() {
         Some(entry_name) => {
             let full: PathBuf = root.join(&installed.payload_path).join(entry_name);
-            println!("In Nu:  {}", format_overlay_use_hint(&full)?);
+            std::println!("In Nu:  {}", format_overlay_use_hint(&full)?);
         }
         None => {
             let full: PathBuf = root.join(&installed.payload_path);

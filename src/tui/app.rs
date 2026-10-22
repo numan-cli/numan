@@ -1,6 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::{Path, PathBuf};
 
+use super::catalog::{self, FieldKind, FieldState};
 use super::operations::{self, Action, Data, Review};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -8,6 +9,7 @@ pub enum View {
     Installed,
     Discover,
     Updates,
+    Commands,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -50,6 +52,11 @@ impl Shell {
 
 pub enum Command {
     Sync,
+    /// Run a catalog command through `operations::execute_cli`. The name is
+    /// deliberately not "read-only": reviewed mutating commands use it too.
+    /// Constructed by the Commands UI in an upper stack layer.
+    #[allow(dead_code)]
+    ExecuteCli(Vec<String>),
     Reload,
     Prepare(Action, String, String, Option<String>),
     Execute(Review),
@@ -101,6 +108,30 @@ pub enum Overlay {
         args: Vec<String>,
         shell: Shell,
     },
+    CommandForm(Box<CommandForm>),
+    GenericReview {
+        argv: Vec<String>,
+        display: String,
+        effects: Vec<String>,
+        confirm: bool,
+        scroll: u16,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditTarget {
+    Field(usize),
+    Preview,
+}
+
+pub struct CommandForm {
+    pub display: String,
+    pub fields: Vec<FieldState>,
+    pub selected: usize,
+    pub editing: Option<EditTarget>,
+    pub edit_buffer: String,
+    pub error: Option<String>,
+    pub notice: Option<String>,
 }
 
 pub struct App {
@@ -120,6 +151,8 @@ pub struct App {
     pub exit: bool,
     pub exit_command: Option<String>,
     pub small: bool,
+    pub command_selected: usize,
+    pub last_package_id: Option<String>,
 }
 
 pub fn clean(text: &str) -> String {
@@ -153,6 +186,8 @@ impl App {
             exit: false,
             exit_command: None,
             small: false,
+            command_selected: 0,
+            last_package_id: None,
         }
     }
 
@@ -246,11 +281,74 @@ impl App {
     }
 
     pub fn navigate(&mut self, view: View) {
+        if let Some(row) = self.selected_row() {
+            self.last_package_id = Some(row.id);
+        }
+        self.command_selected = 0;
         self.view = view;
         self.selected = 0;
         self.filter.clear();
         self.pinned = None;
         self.detail_scroll = 0;
+    }
+
+    pub fn command_specs(&self) -> Vec<&'static catalog::CommandSpec> {
+        let query = self.filter.to_lowercase();
+        catalog::catalog()
+            .iter()
+            .filter(|spec| {
+                query.is_empty()
+                    || format!("{} {}", spec.display, spec.summary)
+                        .to_lowercase()
+                        .contains(&query)
+            })
+            .collect()
+    }
+
+    pub fn selected_command(&self) -> Option<&'static catalog::CommandSpec> {
+        self.command_specs().into_iter().nth(self.command_selected)
+    }
+
+    pub fn command_preview(&self, form: &CommandForm) -> String {
+        let Some(found) = catalog::spec(&form.display) else {
+            return String::new();
+        };
+        self.handoff(&catalog::build_argv(found, &form.fields), Shell::Nushell)
+    }
+
+    pub fn open_command_form(&mut self, display: &str) {
+        let Some(found) = catalog::spec(display) else {
+            return;
+        };
+        let mut fields: Vec<FieldState> = found
+            .fields
+            .iter()
+            .filter(|field| !field.hidden)
+            .map(FieldState::from_spec)
+            .collect();
+        if let Some(id) = self.last_package_id.clone().or_else(|| {
+            self.data
+                .as_ref()
+                .and_then(|data| data.installed.packages.keys().next().cloned())
+        }) {
+            for field in &mut fields {
+                if field.spec.kind == FieldKind::PackageId && field.value.is_empty() {
+                    field.value = id.clone();
+                }
+            }
+        }
+        self.overlay = Some(Overlay::CommandForm(Box::new(CommandForm {
+            display: found.display.clone(),
+            fields,
+            selected: 0,
+            editing: None,
+            edit_buffer: String::new(),
+            error: None,
+            notice: Some(format!(
+                "{} | {} | Execute row is at the bottom of this form.",
+                found.tier, found.phase
+            )),
+        })));
     }
 
     pub fn record(&mut self, text: String) {
@@ -282,6 +380,10 @@ impl App {
             LauncherItem {
                 label: "Native: Updates (cached)".into(),
                 action: LauncherAction::Navigate(View::Updates),
+            },
+            LauncherItem {
+                label: "Native: Commands (all CLI commands)".into(),
+                action: LauncherAction::Navigate(View::Commands),
             },
             LauncherItem {
                 label: "Native: Local doctor scan (no network, no repairs)".into(),
@@ -428,6 +530,52 @@ impl App {
         }).collect()
     }
 
+    pub fn generic_effects(&self, display: &str, argv: &[String]) -> Vec<String> {
+        let mut effects = vec![
+            format!("Root: {}", self.root.display()),
+            format!("Command: {}", self.handoff(argv, Shell::Nushell)),
+        ];
+        if let Some(found) = catalog::spec(display) {
+            effects.push(format!("Tier: {} | {}", found.tier, found.phase));
+            if found.tier.contains("Destructive") {
+                effects.push(
+                    "Destructive: this permanently deletes state or payloads. Snapshots do not guarantee restoration."
+                        .into(),
+                );
+            }
+            if found.tier.contains("External") {
+                effects.push(
+                    "External: this writes outside the Numan root (shell config, PATH, managed Nu, tool binaries)."
+                        .into(),
+                );
+            }
+            if found.tier.contains("Network") {
+                effects.push("Network: this contacts remote registries or release hosts.".into());
+            }
+            if found.tier.contains("Shell") {
+                effects.push(
+                    "Shell: the Nushell statement this emits must still be run in your current shell; the TUI cannot apply it for you."
+                        .into(),
+                );
+            }
+        }
+        if argv.iter().any(|arg| arg == "--self") && !argv.iter().any(|arg| arg == "--check") {
+            effects.push(
+                "Self-update replaces the running numan binary. The TUI will advise a restart on success."
+                    .into(),
+            );
+        }
+        effects.push(
+            "This review is the confirmation. Where the CLI requires --yes, it is added at execution time only and never stored."
+                .into(),
+        );
+        effects.push(
+            "Existing lock, snapshot, journal, and trust rules apply. Cancellation is unavailable after submission."
+                .into(),
+        );
+        effects
+    }
+
     pub fn handoff(&self, args: &[String], shell: Shell) -> String {
         let mut words = vec![
             "numan".to_string(),
@@ -491,6 +639,7 @@ impl App {
                         KeyCode::Enter => {
                             self.filter = query;
                             self.selected = 0;
+                            self.command_selected = 0;
                             return None;
                         }
                         KeyCode::Backspace => {
@@ -599,6 +748,222 @@ impl App {
                         scroll,
                     });
                 }
+                Overlay::CommandForm(mut form) => {
+                    if let Some(target) = form.editing {
+                        match key.code {
+                            KeyCode::Esc => {
+                                form.editing = None;
+                                form.error = None;
+                            }
+                            KeyCode::Backspace => {
+                                form.edit_buffer.pop();
+                            }
+                            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                form.edit_buffer.push(c);
+                            }
+                            KeyCode::Enter => match target {
+                                EditTarget::Field(index) => {
+                                    if let Some(field) = form.fields.get_mut(index) {
+                                        field.value = form.edit_buffer.clone();
+                                    }
+                                    form.editing = None;
+                                    form.error = None;
+                                }
+                                EditTarget::Preview => {
+                                    match catalog::validate_preview(
+                                        &self.root.clone(),
+                                        &form.edit_buffer.clone(),
+                                    ) {
+                                        Ok((found, rest)) => {
+                                            let display = found.display.clone();
+                                            let fields = catalog::fields_from_argv(&found, &rest)
+                                                .into_iter()
+                                                .filter(|field| !field.spec.hidden)
+                                                .collect();
+                                            form = Box::new(CommandForm {
+                                                display,
+                                                fields,
+                                                selected: 0,
+                                                editing: None,
+                                                edit_buffer: String::new(),
+                                                error: None,
+                                                notice: Some(
+                                                    "Preview valid. Rebuilt form from the edited command; review invalidated."
+                                                        .into(),
+                                                ),
+                                            });
+                                        }
+                                        Err(error) => {
+                                            form.error = Some(error);
+                                        }
+                                    }
+                                }
+                            },
+                            _ => {}
+                        }
+                        self.overlay = Some(Overlay::CommandForm(form));
+                        return None;
+                    }
+                    match key.code {
+                        KeyCode::Esc => return None,
+                        KeyCode::Down => {
+                            let max = form.fields.len() + 1;
+                            form.selected = (form.selected + 1).min(max);
+                        }
+                        KeyCode::Up => form.selected = form.selected.saturating_sub(1),
+                        KeyCode::Left | KeyCode::Right => {
+                            if let Some(field) = form.fields.get_mut(form.selected) {
+                                match field.spec.kind {
+                                    FieldKind::Bool => field.enabled = !field.enabled,
+                                    FieldKind::Enum if !field.spec.possible.is_empty() => {
+                                        let current = field
+                                            .spec
+                                            .possible
+                                            .iter()
+                                            .position(|value| value == &field.value)
+                                            .unwrap_or(usize::MAX);
+                                        let next = if key.code == KeyCode::Right {
+                                            if current == usize::MAX {
+                                                0
+                                            } else {
+                                                (current + 1) % field.spec.possible.len()
+                                            }
+                                        } else if current == usize::MAX {
+                                            field.spec.possible.len() - 1
+                                        } else {
+                                            (current + field.spec.possible.len() - 1)
+                                                % field.spec.possible.len()
+                                        };
+                                        field.value = field.spec.possible[next].clone();
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        KeyCode::Enter | KeyCode::Char(' ') => {
+                            if form.selected == form.fields.len() + 1 {
+                                match catalog::execution_mode(&form.display, &form.fields) {
+                                    catalog::ExecutionMode::Blocked(reason) => {
+                                        form.error = Some(reason.to_string());
+                                    }
+                                    mode => {
+                                        if self.busy {
+                                            form.error = Some(
+                                                "Wait for the current operation to finish.".into(),
+                                            );
+                                        } else if let Some(missing) =
+                                            form.fields.iter().find(|field| {
+                                                field.spec.required
+                                                    && field.spec.kind != FieldKind::Bool
+                                                    && field.value.trim().is_empty()
+                                            })
+                                        {
+                                            form.error = Some(format!(
+                                                "Required field '{}' is empty.",
+                                                missing.spec.id
+                                            ));
+                                        } else {
+                                            let Some(found) = catalog::spec(&form.display) else {
+                                                form.error = Some(format!(
+                                                    "No catalog entry for {}.",
+                                                    form.display
+                                                ));
+                                                self.overlay = Some(Overlay::CommandForm(form));
+                                                return None;
+                                            };
+                                            // `activate --list/--check` conflicts with a
+                                            // positional; a context-prefilled package must
+                                            // not leak into those read-only forms.
+                                            let mut effective = form.fields.clone();
+                                            if form.display == "activate"
+                                                && effective.iter().any(|field| {
+                                                    (field.spec.id == "list"
+                                                        || field.spec.id == "check")
+                                                        && field.enabled
+                                                })
+                                            {
+                                                for field in &mut effective {
+                                                    if field.spec.id == "packages" {
+                                                        field.value.clear();
+                                                    }
+                                                }
+                                            }
+                                            let argv = catalog::build_argv(found, &effective);
+                                            if mode == catalog::ExecutionMode::ReadOnly {
+                                                return Some(Command::ExecuteCli(argv));
+                                            }
+                                            let display = form.display.clone();
+                                            let effects = self.generic_effects(&display, &argv);
+                                            self.overlay = Some(Overlay::GenericReview {
+                                                argv,
+                                                display,
+                                                effects,
+                                                confirm: false,
+                                                scroll: 0,
+                                            });
+                                            return None;
+                                        }
+                                    }
+                                }
+                            } else if form.selected == form.fields.len() {
+                                form.edit_buffer = self.command_preview(&form);
+                                form.editing = Some(EditTarget::Preview);
+                            } else if let Some(field) = form.fields.get_mut(form.selected) {
+                                match field.spec.kind {
+                                    FieldKind::Bool => field.enabled = !field.enabled,
+                                    FieldKind::Enum if !field.spec.possible.is_empty() => {
+                                        let current = field
+                                            .spec
+                                            .possible
+                                            .iter()
+                                            .position(|value| value == &field.value)
+                                            .unwrap_or(usize::MAX);
+                                        let next = if current == usize::MAX {
+                                            0
+                                        } else {
+                                            (current + 1) % field.spec.possible.len()
+                                        };
+                                        field.value = field.spec.possible[next].clone();
+                                    }
+                                    _ => {
+                                        form.edit_buffer = field.value.clone();
+                                        form.editing = Some(EditTarget::Field(form.selected));
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    self.overlay = Some(Overlay::CommandForm(form));
+                }
+                Overlay::GenericReview {
+                    argv,
+                    display,
+                    effects,
+                    mut confirm,
+                    mut scroll,
+                } => {
+                    match key.code {
+                        KeyCode::Esc => return None,
+                        KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right => {
+                            confirm = !confirm
+                        }
+                        KeyCode::Down | KeyCode::PageDown => scroll = scroll.saturating_add(1),
+                        KeyCode::Up | KeyCode::PageUp => scroll = scroll.saturating_sub(1),
+                        KeyCode::Enter if confirm && !self.busy => {
+                            return Some(Command::ExecuteCli(argv));
+                        }
+                        KeyCode::Enter if !confirm => return None,
+                        _ => {}
+                    }
+                    self.overlay = Some(Overlay::GenericReview {
+                        argv,
+                        display,
+                        effects,
+                        confirm,
+                        scroll,
+                    });
+                }
                 Overlay::Handoff { args, mut shell } => {
                     match key.code {
                         KeyCode::Esc => return None,
@@ -633,7 +998,7 @@ impl App {
                     _ => Focus::Navigation,
                 };
             }
-            KeyCode::Char('?') => self.text("Help", "Left/Right or Tab/Shift+Tab: focus panes\nArrows/j/k: select or scroll\nEnter: details (never executes from a package row)\n/: filter list    Ctrl+P: launcher\ni/a/x: review install/activate/remove in Packages\nu: review selected update in Updates\nr: reload local files (no network)    Shift+R: review registry refresh\nv: cycle selected Discover version    c: include incompatible\nl: operation transcript    n: Nu/root context\nEsc: close overlay/back    q: quit when idle\n\nCLI-only actions print a command on exit; they never execute.\nInstall and activation require separate reviews.\nCancellation is unavailable after submission.".into()),
+            KeyCode::Char('?') => self.text("Help", "Left/Right or Tab/Shift+Tab: focus panes\nArrows/j/k: select or scroll\nEnter: details (never executes from a package row)\n/: filter list    Ctrl+P: launcher\nCommands section: every CLI command with a guided form, editable preview, and in-TUI execution\ni/a/x: review install/activate/remove in Packages\nu: review selected update in Updates\nr: reload local files (no network)    Shift+R: review registry refresh\nv: cycle selected Discover version    c: include incompatible\nl: operation transcript    n: Nu/root context\nEsc: close overlay/back    q: quit when idle\n\nLauncher CLI-only actions print a command on exit; Commands-section actions execute in the TUI after review.\nInstall and activation require separate reviews.\nCancellation is unavailable after submission.".into()),
             KeyCode::Char('l') => self.text("Operation transcript", self.logs.join("\n")),
             KeyCode::Char('n') => {
                 let context = self.data.as_ref().and_then(|data| data.nu.as_ref()).map(|nu| format!("Nu: {}\nExecutable: {}\nSHA256: {}\nPlugin registry: {}\nAutoload: {:?}", nu.nu_version, nu.nu_executable, nu.nu_executable_hash, nu.plugin_registry_path, nu.vendor_autoload_dir)).unwrap_or_else(|| "Nu context missing; initialize outside TUI.".into());
@@ -641,7 +1006,7 @@ impl App {
             }
             KeyCode::Char('r') if self.focus != Focus::Navigation && !self.busy => return Some(Command::Reload),
             KeyCode::Char('/') if self.focus == Focus::List => self.overlay = Some(Overlay::Filter(self.filter.clone())),
-            KeyCode::Char('i') | KeyCode::Char('a') | KeyCode::Char('x') if self.focus != Focus::Navigation && self.view != View::Updates => {
+            KeyCode::Char('i') | KeyCode::Char('a') | KeyCode::Char('x') if self.focus != Focus::Navigation && self.view != View::Updates && self.view != View::Commands => {
                 let action = match key.code { KeyCode::Char('i') => Action::Install, KeyCode::Char('a') => Action::Activate, _ => Action::Remove };
                 return self.request(action);
             }
@@ -662,12 +1027,17 @@ impl App {
                 let down = matches!(key.code, KeyCode::Down | KeyCode::Char('j'));
                 match self.focus {
                     Focus::Navigation => {
-                        let views = [View::Installed, View::Discover, View::Updates];
+                        let views = [View::Installed, View::Discover, View::Updates, View::Commands];
                         let index = views.iter().position(|view| *view == self.view).unwrap_or(0);
-                        self.navigate(views[if down { (index + 1) % 3 } else { (index + 2) % 3 }]);
+                        self.navigate(views[if down { (index + 1) % 4 } else { (index + 3) % 4 }]);
                     }
                     Focus::List => {
-                        self.selected = if down { (self.selected + 1).min(self.rows().len().saturating_sub(1)) } else { self.selected.saturating_sub(1) };
+                        if self.view == View::Commands {
+                            let count = self.command_specs().len();
+                            self.command_selected = if down { (self.command_selected + 1).min(count.saturating_sub(1)) } else { self.command_selected.saturating_sub(1) };
+                        } else {
+                            self.selected = if down { (self.selected + 1).min(self.rows().len().saturating_sub(1)) } else { self.selected.saturating_sub(1) };
+                        }
                         self.detail_scroll = 0;
                     }
                     Focus::Details => { self.detail_scroll = if down { self.detail_scroll.saturating_add(1) } else { self.detail_scroll.saturating_sub(1) }; }
@@ -676,7 +1046,7 @@ impl App {
             KeyCode::Left => self.focus = match self.focus { Focus::Details => Focus::List, _ => Focus::Navigation },
             KeyCode::Right => self.focus = match self.focus { Focus::Navigation => Focus::List, _ => Focus::Details },
             KeyCode::Char('R') if !self.busy => self.overlay = Some(Overlay::Sync),
-            KeyCode::Enter => { if self.focus == Focus::Navigation { self.focus = Focus::List; } else { self.overlay = Some(Overlay::Actions { selected: 0 }); } }
+            KeyCode::Enter => { if self.focus == Focus::Navigation { self.focus = Focus::List; } else if self.view == View::Commands && self.focus == Focus::List { if let Some(found) = self.selected_command() { let display = found.display.clone(); self.open_command_form(&display); } } else { self.overlay = Some(Overlay::Actions { selected: 0 }); } }
             KeyCode::Esc => self.focus = Focus::List,
             _ => {}
         }
