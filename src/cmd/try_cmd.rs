@@ -413,7 +413,7 @@ fn print_install_only_hint(root: &Path, package_id: &str) -> Result<()> {
     match installed.entry.as_deref() {
         Some(entry_name) => {
             let full: PathBuf = root.join(&installed.payload_path).join(entry_name);
-            println!("In Nu:  {}", format_overlay_use_hint(&full)?);
+            std::println!("In Nu:  {}", format_overlay_use_hint(&full)?);
         }
         None => {
             let full: PathBuf = root.join(&installed.payload_path);
