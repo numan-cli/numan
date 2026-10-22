@@ -230,14 +230,15 @@ impl fmt::Display for ModuleImportMode {
 
 /// Registry metadata describing how a module or overlay package should be activated.
 ///
-/// Stored under `activation` in a `VersionEntry`. Recognized kinds:
+/// Stored under `activation` in a `VersionEntry`. Activation kinds:
 /// - `"nu-module"`: persistent module activation (Phase 4).
-/// - `"nu-overlay"`: session/project overlay activation (Phase 5, issue #17).
+/// - `"nu-overlay"`: reserved for planned session/project overlay activation
+///   (Phase 5, issue #17); overlay activation is not yet supported.
 ///
-/// All other kinds are rejected at activation time.
+/// Only `"nu-module"` is currently supported at activation time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryActivationSpec {
-    /// Activation kind. `"nu-module"` or `"nu-overlay"`.
+    /// Activation kind. `"nu-module"` or the reserved `"nu-overlay"`.
     pub kind: String,
     /// Import mode for the module. Defaults to `ModuleImportMode::Module`.
     /// Ignored for `nu-overlay`.
