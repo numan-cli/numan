@@ -171,7 +171,7 @@ Intake covers first onboarding. Already-indexed packages also rot: upstreams tag
 - **Output is a report, not a publish.** The watcher writes a Markdown report and opens/updates a tracking issue. Promotion still requires candidate generation, validation, and `lifecycle-prove` in `numan-registry`, plus reviewer approval before production signing.
 - **`verified_with` rule:** append the new Nu only when lifecycle proof passed on that Nu. Credential-gated packages keep `evidence_tier: provisional` with a deferral reason.
 
-Implementation in this repo: `scripts/watch_upstreams.py` (stdlib-only, mirrors `scripts/watch_nu_releases.py`) and `.github/workflows/watch-upstreams.yml` (daily, report-only). Registry adoption: copy the script to `numan-registry/scripts/`, point `--index` at the local `registry/index.json`, and replace the issue step with the existing intake-PR script (`open_intake_pr.py`) so each queued package becomes a draft PR with evidence attached.
+Implementation in this repo: `scripts/watch_upstreams.py` (stdlib-only, mirrors `scripts/watch_nu_releases.py`) and `.github/workflows/watch-upstreams.yml` (daily, report-only). Registry adoption: copy the script to `numan-registry/scripts/`, point `--index` at the local `registry/index.json`, use each report finding to run candidate generation, validation, and `lifecycle-prove`, then invoke the existing intake-PR script (`open_intake_pr.py`) with the resulting evidence.
 
 ## Trust boundary
 

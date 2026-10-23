@@ -1,5 +1,9 @@
 name: Watch Registry Upstreams
 
+concurrency:
+  group: watch-upstreams
+  cancel-in-progress: false
+
 on:
   schedule:
     - cron: '0 5 * * *'
@@ -40,10 +44,10 @@ jobs:
           INPUT_NU: ${{ inputs.nu_version }}
           INPUT_PKGS: ${{ inputs.packages }}
         run: |
-          ARGS="--write"
-          if [ -n "${INPUT_NU}" ]; then ARGS="${ARGS} --nu-version ${INPUT_NU}"; fi
-          if [ -n "${INPUT_PKGS}" ]; then ARGS="${ARGS} --packages ${INPUT_PKGS}"; fi
-          python scripts/watch_upstreams.py ${ARGS}
+          ARGS=(--write)
+          if [ -n "${INPUT_NU}" ]; then ARGS+=(--nu-version "${INPUT_NU}"); fi
+          if [ -n "${INPUT_PKGS}" ]; then ARGS+=(--packages "${INPUT_PKGS}"); fi
+          python scripts/watch_upstreams.py "${ARGS[@]}"
 
       - name: Upload watch report
         if: ${{ always() }}
@@ -61,7 +65,7 @@ jobs:
           TARGET_NU: ${{ steps.watcher.outputs.target_nu }}
         run: |
           TITLE="[watch] registry updates for Nu ${TARGET_NU}"
-          EXISTING=$(gh issue list --state open --limit 100 --json number,title \
+          EXISTING=$(gh issue list --search "in:title \"${TITLE}\"" --state open --json number,title \
             --jq "[.[] | select(.title == \"${TITLE}\")][0].number // empty")
           if [ -n "${EXISTING}" ]; then
             gh issue comment "${EXISTING}" --body-file docs/upstream-watch.md

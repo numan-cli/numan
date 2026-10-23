@@ -20,9 +20,11 @@ import json
 import os
 import re
 import sys
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Self
 from urllib.parse import urlencode, urlparse
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -38,7 +40,7 @@ RELEASES_PER_PAGE = 30
 def ensure_http_url(url: str) -> None:
     """Raise ValueError unless *url* is an http(s) URL with a host."""
     if not isinstance(url, str):
-        raise ValueError(f"URL must use http(s), got {url!r}")
+        raise TypeError(f"URL must be a string, got {type(url).__name__}")
     parsed = urlparse(url)
     try:
         has_host = bool(parsed.hostname)
@@ -70,28 +72,91 @@ def parse_github_repo(repo_url: str) -> tuple[str, str] | None:
     parts = [p for p in parsed.path.split("/") if p]
     if len(parts) < 2:
         return None
-    owner, repo = parts[0], parts[1]
-    if repo.endswith(".git"):
-        repo = repo[: -len(".git")]
+    owner, repo = parts[0], parts[1].removesuffix(".git")
     if not owner or not repo:
         return None
     return owner, repo
 
 
-def parse_semver_tuple(v_str: str) -> tuple[int, int, int]:
-    """Parse version string into (major, minor, patch). Prerelease/build dropped."""
+class SemverTuple(tuple):
+    """SemVer 2.0.0-aware 3-tuple that preserves prerelease precedence."""
+
+    def __new__(
+        cls,
+        major: int,
+        minor: int,
+        patch: int,
+        prerelease: str | None = None,
+    ) -> Self:
+        inst = super().__new__(cls, (major, minor, patch))
+        inst.major = major
+        inst.minor = minor
+        inst.patch = patch
+        inst.prerelease = prerelease
+        return inst
+
+    def _key(self) -> tuple[tuple[int, int, int], tuple[int, tuple]]:
+        core = (self.major, self.minor, self.patch)
+        if self.prerelease is None:
+            return (core, (1, ()))
+        parts: list[tuple[int, int | str]] = []
+        for p in self.prerelease.split("."):
+            parts.append((0, int(p)) if p.isdigit() else (1, p))
+        return (core, (0, tuple(parts)))
+
+    def __lt__(self, other: object) -> bool:
+        if isinstance(other, SemverTuple):
+            return self._key() < other._key()
+        if isinstance(other, tuple) and len(other) == 3:
+            return self._key() < (other, (1, ()))
+        return NotImplemented
+
+    def __gt__(self, other: object) -> bool:
+        if isinstance(other, SemverTuple):
+            return self._key() > other._key()
+        if isinstance(other, tuple) and len(other) == 3:
+            return self._key() > (other, (1, ()))
+        return NotImplemented
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, SemverTuple):
+            return self._key() == other._key()
+        if isinstance(other, tuple) and len(other) == 3:
+            return self._key() == (other, (1, ()))
+        return NotImplemented
+
+    def __ge__(self, other: object) -> bool:
+        lt = self.__lt__(other)
+        if lt is NotImplemented:
+            return NotImplemented
+        return not lt
+
+    def __le__(self, other: object) -> bool:
+        gt = self.__gt__(other)
+        if gt is NotImplemented:
+            return NotImplemented
+        return not gt
+
+
+def parse_semver_tuple(v_str: str) -> SemverTuple:
+    """Parse version string into a SemVer-aware tuple (major, minor, patch)."""
     tokens = str(v_str).lstrip("vV").split()
     if not tokens:
-        return (0, 0, 0)
-    clean = tokens[0].split("-")[0].split("+")[0]
+        return SemverTuple(0, 0, 0)
+    token = tokens[0].split("+")[0]
+    if "-" in token:
+        clean, prerelease = token.split("-", 1)
+    else:
+        clean = token
+        prerelease = None
     parts = clean.split(".")
     try:
         nums = [int(p) for p in parts[:3]]
     except ValueError:
-        return (0, 0, 0)
+        return SemverTuple(0, 0, 0, prerelease=prerelease)
     while len(nums) < 3:
         nums.append(0)
-    return (nums[0], nums[1], nums[2])
+    return SemverTuple(nums[0], nums[1], nums[2], prerelease=prerelease)
 
 
 def is_newer(upstream_tag: str, indexed_version: str) -> bool:
@@ -115,6 +180,12 @@ def nu_satisfies(constraint: str, nu_version: str) -> bool:
         return True
     target = parse_semver_tuple(nu_version)
     for token in c.replace(",", " ").split():
+        m_wildcard = re.fullmatch(r"=?(\d+)\.(\d+)\.[xX*]", token)
+        if m_wildcard:
+            major, minor = int(m_wildcard.group(1)), int(m_wildcard.group(2))
+            if (target[0], target[1]) != (major, minor):
+                return False
+            continue
         m = re.fullmatch(r"(>=|<=|>|<|==|=)?(.+)", token)
         if not m:
             return False
@@ -133,23 +204,41 @@ def _github_headers() -> dict[str, str]:
 
 
 def fetch_latest_release(owner: str, repo: str) -> dict | None:
-    """Fetch the newest stable (non-draft, non-prerelease) release, or None."""
-    url = f"{GITHUB_API}/repos/{owner}/{repo}/releases?{urlencode({'per_page': RELEASES_PER_PAGE})}"
-    ensure_http_url(url)
-    req = urllib.request.Request(url, headers=_github_headers())
-    with http_opener().open(req, timeout=30) as resp:
-        releases = json.loads(resp.read().decode("utf-8"))
-    if not isinstance(releases, list):
+    """Fetch the highest stable (non-draft, non-prerelease) release, or None."""
+    base = f"{GITHUB_API}/repos/{owner}/{repo}/releases"
+    opener = http_opener()
+    stable: list[dict] = []
+    page = 1
+    while True:
+        url = f"{base}?{urlencode({'per_page': RELEASES_PER_PAGE, 'page': page})}"
+        ensure_http_url(url)
+        req = urllib.request.Request(url, headers=_github_headers())
+        with opener.open(req, timeout=30) as resp:
+            releases = json.loads(resp.read().decode("utf-8"))
+        if not isinstance(releases, list):
+            return None
+        stable.extend(
+            rel
+            for rel in releases
+            if isinstance(rel, dict) and not rel.get("draft") and not rel.get("prerelease")
+        )
+        if len(releases) < RELEASES_PER_PAGE:
+            break
+        page += 1
+    if not stable:
         return None
-    for rel in releases:
-        if isinstance(rel, dict) and not rel.get("draft") and not rel.get("prerelease"):
-            return rel
-    return None
+    return max(stable, key=lambda r: parse_semver_tuple(str(r.get("tag_name", "0.0.0"))))
 
 
 def fetch_json_url(url: str) -> dict:
     ensure_http_url(url)
-    req = urllib.request.Request(url, headers=_github_headers())
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/vnd.github.v3+json"}
+    parsed = urlparse(url)
+    if (parsed.hostname or "").lower() == "api.github.com":
+        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
     with http_opener().open(req, timeout=30) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -167,12 +256,17 @@ def resolve_target_nu(explicit: str | None) -> str:
         return explicit.lstrip("vV")
     try:
         state = json.loads(NU_STATE_FILE.read_text(encoding="utf-8"))
-        ver = str(state.get("latest_version", "")).strip().lstrip("vV")
-        if ver:
-            return ver
-    except Exception:
-        pass
-    return "0.0.0"
+        if not isinstance(state, dict):
+            raise TypeError("expected a JSON object")
+        raw = state.get("latest_version")
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValueError("missing latest_version")
+        return raw.strip().lstrip("vV")
+    except (OSError, ValueError, TypeError) as exc:
+        raise RuntimeError(
+            f"Cannot determine target Nu version: {NU_STATE_FILE} is missing or invalid: {exc}. "
+            "Pass --nu-version explicitly."
+        ) from exc
 
 
 def latest_indexed_version(package: dict) -> dict | None:
@@ -230,8 +324,10 @@ def format_report_markdown(gaps: dict, target_nu: str) -> str:
     lines = [
         "# Upstream & Nu Watch Report",
         "",
-        f"Checked at {checked} against Nushell {target_nu}. "
-        "Detection only: nothing here is published automatically.",
+        (
+            f"Checked at {checked} against Nushell {target_nu}. "
+            "Detection only: nothing here is published automatically."
+        ),
         "",
         "## New upstream releases (Type A)",
         "",
@@ -253,6 +349,11 @@ def format_report_markdown(gaps: dict, target_nu: str) -> str:
             f"- `{g['package']}` [{g['type']}] v{g['indexed']} "
             f"needs Nu {g['constraint']} (target {g['target_nu']})"
         )
+    errors = gaps.get("lookup_errors", [])
+    if errors:
+        lines += ["", "## Lookup errors", ""]
+        for e in errors:
+            lines.append(f"- `{e['package']}`: release lookup failed: {e.get('error', 'unknown error')}")
     lines += [
         "",
         "## Promotion checklist (per package, in numan-registry)",
@@ -270,17 +371,19 @@ def format_report_markdown(gaps: dict, target_nu: str) -> str:
 
 def write_outputs(gaps: dict, target_nu: str) -> None:
     has = bool(gaps.get("upstream_updates") or gaps.get("nu_gaps"))
+    sanitized_target = target_nu.replace("\r", "").replace("\n", "")
     gh_output = os.environ.get("GITHUB_OUTPUT")
     if gh_output:
         with open(gh_output, "a", encoding="utf-8") as f:
             f.write(f"has_updates={'true' if has else 'false'}\n")
             f.write(f"upstream_count={len(gaps.get('upstream_updates', []))}\n")
             f.write(f"nu_gap_count={len(gaps.get('nu_gaps', []))}\n")
-            f.write(f"target_nu={target_nu}\n")
+            f.write(f"error_count={len(gaps.get('lookup_errors', []))}\n")
+            f.write(f"target_nu={sanitized_target}\n")
     gh_summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if gh_summary:
         with open(gh_summary, "a", encoding="utf-8") as f:
-            f.write(format_report_markdown(gaps, target_nu))
+            f.write(format_report_markdown(gaps, sanitized_target))
             f.write("\n")
 
 
@@ -302,6 +405,7 @@ def process(
             in wanted
         ]
     upstream: dict[str, dict] = {}
+    lookup_errors: list[dict] = []
     for pkg in packages:
         if WATCH_OFF_TAG in (pkg.get("tags") or []):
             continue
@@ -312,12 +416,15 @@ def process(
         scoped = f"{pid.get('owner', '?')}/{pid.get('name', '?')}"
         try:
             rel = fetch_latest_release(gh[0], gh[1])
-        except Exception as exc:  # one bad repo must not sink the whole run
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError, ValueError, RuntimeError) as exc:
             print(f"warning: {scoped}: release lookup failed: {exc}", file=sys.stderr)
+            lookup_errors.append({"package": scoped, "repo": str(pkg.get("repo", "")), "error": str(exc)})
             continue
         if rel is not None:
             upstream[scoped] = rel
     gaps = detect_gaps(packages, upstream, target_nu)
+    if lookup_errors:
+        gaps["lookup_errors"] = lookup_errors
     report = format_report_markdown(gaps, target_nu)
     print(report)
     if not write:
@@ -345,9 +452,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    target_nu = resolve_target_nu(args.nu_version)
-    filt = [s.strip() for s in args.packages.split(",")] if args.packages else None
     try:
+        target_nu = resolve_target_nu(args.nu_version)
+        filt = [s.strip() for s in args.packages.split(",")] if args.packages else None
         return process(
             index_path=args.index,
             target_nu=target_nu,
@@ -355,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
             report_path=args.report,
             package_filter=filt,
         )
-    except Exception as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
         print(f"Error watching upstreams: {exc}", file=sys.stderr)
         return 1
 
