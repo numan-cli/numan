@@ -95,6 +95,9 @@ class WatchUpstreamsTests(unittest.TestCase):
         self.assertFalse(self.mod.nu_satisfies("=0.113.x", "0.114.0"))
         self.assertTrue(self.mod.nu_satisfies("0.113.x", "0.113.2"))
         self.assertFalse(self.mod.nu_satisfies("0.113.x", "0.114.1"))
+        # Wildcard with comparison operators fails closed
+        self.assertFalse(self.mod.nu_satisfies(">=0.113.x", "0.114.1"))
+        self.assertFalse(self.mod.nu_satisfies("<0.113.x", "0.112.0"))
 
     def test_detect_gaps_upstream_and_nu(self):
         packages = [

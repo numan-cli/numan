@@ -190,6 +190,8 @@ def nu_satisfies(constraint: str, nu_version: str) -> bool:
         if not m:
             return False
         op, ver = m.group(1) or "==", m.group(2)
+        if re.search(r"[xX*]", ver):
+            return False
         if not _CMP[op](target, parse_semver_tuple(ver)):
             return False
     return True
