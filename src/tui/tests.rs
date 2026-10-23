@@ -1,3 +1,28 @@
+#[test]
+fn session_overlay_list_requires_review_and_reconcile_has_neutral_guidance() {
+    use super::catalog::{self, ExecutionMode};
+    let spec = catalog::spec("overlay list").unwrap();
+    let argv = vec![
+        "--session".into(),
+        uuid::Uuid::new_v4().to_string(),
+        "--pid".into(),
+        std::process::id().to_string(),
+    ];
+    let fields = catalog::fields_from_argv(spec, &argv);
+    assert_eq!(
+        catalog::execution_mode("overlay list", &fields),
+        ExecutionMode::Reviewed
+    );
+    let root = tempfile::tempdir().unwrap();
+    let mut command = vec!["overlay".into(), "list".into()];
+    command.extend(argv);
+    let note = super::operations::execute_cli(root.path(), &command).unwrap();
+    assert!(!note.contains("start an interactive"));
+    let note = super::operations::execute_cli(root.path(), &["overlay".into(), "reconcile".into()])
+        .unwrap();
+    assert!(!note.contains("start an interactive"));
+}
+
 use super::{
     app::{App, Command, Focus, Overlay, Shell, View},
     catalog::FieldState,

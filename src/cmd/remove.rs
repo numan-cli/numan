@@ -8,6 +8,7 @@ use crate::state::hook_profile::HookProfile;
 use crate::state::lifecycle_journal::{LifecycleOp, LifecycleStage, PendingLifecycle};
 use crate::state::lockfile::{Lockfile, LockfileEntry, BUNDLED_NU_ORIGIN};
 use crate::state::nupm_import::NupmImportsFile;
+use crate::state::overlay_state::OverlayState;
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::fs_safety::acquire_mutation_lock;
 use crate::util::hints;
@@ -92,6 +93,7 @@ pub fn execute_reviewed(
 
     let _lock = acquire_mutation_lock(root)?;
     validate()?;
+    OverlayState::ensure_package_mutable(root, &args.package)?;
 
     // Reload under the lock so the confirm-time view cannot race a concurrent
     // install/activate that landed while the user was at the prompt.
@@ -275,6 +277,50 @@ mod tests {
             overlay: None,
             locked_dependencies: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn remove_force_cannot_bypass_an_overlay_reservation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let payload = root.join("packages/modules/owner/pkg/1.0.0-abc12345");
+        std::fs::create_dir_all(&payload).unwrap();
+        let entry_path = payload.join("mod.nu");
+        std::fs::write(&entry_path, "# overlay").unwrap();
+        let mut lockfile = Lockfile::empty();
+        let mut entry = base_entry();
+        entry.package_type = "module".into();
+        entry.payload_path = "packages/modules/owner/pkg/1.0.0-abc12345".into();
+        lockfile.packages.insert("owner/pkg".into(), entry);
+        lockfile.save(root).unwrap();
+        crate::util::atomic::write_json_atomic(
+            &root.join("nu_state/overlays.json"),
+            &serde_json::json!({"overlays": [{
+                "package_id": "owner/pkg", "overlay_name": "pkg",
+                "entry_path": entry_path, "scope": "session",
+                "activated_at": "2026-10-22T00:00:00Z",
+                "session_id": "other-session", "pid": 42,
+                "txn": "pending-transaction", "status": "pending"
+            }]}),
+        )
+        .unwrap();
+
+        assert!(execute_with_tty(
+            &RemoveArgs {
+                package: "owner/pkg".into(),
+                yes: true,
+                force: true
+            },
+            root,
+            false,
+        )
+        .is_err());
+        assert!(entry_path.is_file());
+        assert!(Lockfile::load(root)
+            .unwrap()
+            .packages
+            .contains_key("owner/pkg"));
+        assert!(PendingLifecycle::load(root).unwrap().is_none());
     }
 
     fn plugin_activation() -> PluginActivation {

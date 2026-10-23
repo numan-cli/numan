@@ -15,6 +15,7 @@ use crate::core::resolve::Resolver;
 use crate::install::download;
 use crate::install::extract::{self, ArchiveFormat, ExtractConfig};
 use crate::state::lockfile::{Lockfile, LockfileEntry, OverlayPackageSpec};
+use crate::state::overlay_state::OverlayState;
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::hints::{self, CMD_REGISTRY_SYNC};
 use std::collections::BTreeMap;
@@ -74,6 +75,9 @@ pub fn install_package(
 ) -> Result<InstallResult> {
     // 1. Parse package ID
     let id = ScopedId::parse(package_id)?;
+    // Callers hold the mutation lock. A reservation spans the interval between
+    // preparing an overlay and observing its activation in the owning shell.
+    OverlayState::ensure_package_mutable(options.root, &id.to_string())?;
 
     // 2. Load registry with signature verification
     let registry = RegistryManager::new(options.root)?;
@@ -559,6 +563,44 @@ fn persist_hook_bindings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn install_force_refuses_overlay_reservation_before_registry_access() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        crate::util::atomic::write_json_atomic(
+            &root.join("nu_state/overlays.json"),
+            &serde_json::json!({"overlays": [{
+                "package_id": "owner/pkg", "overlay_name": "pkg",
+                "entry_path": root.join("packages/modules/owner/pkg/1.0.0-abc12345/mod.nu"),
+                "scope": "session", "activated_at": "2026-10-22T00:00:00Z",
+                "session_id": "other-session", "pid": 42,
+                "txn": "pending-transaction", "status": "pending"
+            }]}),
+        )
+        .unwrap();
+        let platform = Platform::detect();
+        let nu_version = NuVersion::parse("0.116.1").unwrap();
+        let options = InstallOptions {
+            root: &root,
+            platform: &platform,
+            nu_version: &nu_version,
+            force: true,
+            verbose: false,
+            registry_name: None,
+            snapshot_trigger: SnapshotTrigger::Install,
+        };
+        let _lock = crate::util::fs_safety::acquire_mutation_lock(&root).unwrap();
+
+        let error = install_package("owner/pkg", None, &options).unwrap_err();
+
+        assert!(error
+            .downcast_ref::<crate::state::overlay_state::OverlayReservationError>()
+            .is_some());
+        assert!(error.to_string().contains("pinned by an overlay session"));
+        assert!(Lockfile::load(&root).unwrap().packages.is_empty());
+        assert!(!root.join("packages").exists());
+    }
 
     #[test]
     fn format_timestamp_works() {

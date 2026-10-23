@@ -1234,6 +1234,12 @@ mod tests {
             overlays: vec![crate::state::overlay_state::OverlayRecord {
                 package_id: "owner/tool".to_string(),
                 overlay_name: "tool".to_string(),
+                session_id: None,
+                pid: None,
+                process_started: None,
+                txn: None,
+                status: crate::state::overlay_state::OverlayStatus::Pending,
+                payload_path: None,
                 entry_path: "C:/numan/tool/overlay.nu".to_string(),
                 scope: crate::state::overlay_state::OverlayScope::Session,
                 project_root: None,
