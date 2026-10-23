@@ -162,6 +162,17 @@ When candidate generation and validation are stable, add tooling to open a regis
 
 This is the point where onboarding becomes close to one command for well-formed packages.
 
+## Continuous watch (post-intake)
+
+Intake covers first onboarding. Already-indexed packages also rot: upstreams tag new releases and each new Nushell minor can hide a working package behind a stale `nu_version` constraint. A detection-only watcher closes that gap without weakening the trust boundary below.
+
+- **Type A — upstream update:** poll each indexed `repo` for the newest stable GitHub release. If its tag is newer than the indexed version, queue a candidate. Packages tagged `watch-off` are skipped (archived/abandoned upstreams).
+- **Type B — Nu gap:** on each new Nu minor, re-check the indexed latest version against the target Nu. If the constraint excludes it and `verified_with` does not already list it, queue re-validation. Never widen `nu_version` by guesswork.
+- **Output is a report, not a publish.** The watcher writes a Markdown report and opens/updates a tracking issue. Promotion still requires candidate generation, validation, and `lifecycle-prove` in `numan-registry`, plus reviewer approval before production signing.
+- **`verified_with` rule:** append the new Nu only when lifecycle proof passed on that Nu. Credential-gated packages keep `evidence_tier: provisional` with a deferral reason.
+
+Implementation in this repo: `scripts/watch_upstreams.py` (stdlib-only, mirrors `scripts/watch_nu_releases.py`) and `.github/workflows/watch-upstreams.yml` (daily, report-only). Registry adoption: copy the script to `numan-registry/scripts/`, point `--index` at the local `registry/index.json`, and replace the issue step with the existing intake-PR script (`open_intake_pr.py`) so each queued package becomes a draft PR with evidence attached.
+
 ## Trust boundary
 
 Automation must not weaken Numan's trust story.

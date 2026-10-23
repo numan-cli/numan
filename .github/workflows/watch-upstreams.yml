@@ -1,0 +1,72 @@
+name: Watch Registry Upstreams
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+    inputs:
+      nu_version:
+        description: 'Target Nu version (blank = latest tracked)'
+        required: false
+        type: string
+      packages:
+        description: 'Comma-separated owner/name filter (blank = all)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch-upstreams:
+    name: Check upstream releases and Nu gaps
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Run upstream watcher (detection only)
+        id: watcher
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_NU: ${{ inputs.nu_version }}
+          INPUT_PKGS: ${{ inputs.packages }}
+        run: |
+          ARGS="--write"
+          if [ -n "${INPUT_NU}" ]; then ARGS="${ARGS} --nu-version ${INPUT_NU}"; fi
+          if [ -n "${INPUT_PKGS}" ]; then ARGS="${ARGS} --packages ${INPUT_PKGS}"; fi
+          python scripts/watch_upstreams.py ${ARGS}
+
+      - name: Upload watch report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: upstream-watch-report
+          path: docs/upstream-watch.md
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Open or update tracking issue
+        if: steps.watcher.outputs.has_updates == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_NU: ${{ steps.watcher.outputs.target_nu }}
+        run: |
+          TITLE="[watch] registry updates for Nu ${TARGET_NU}"
+          EXISTING=$(gh issue list --state open --limit 100 --json number,title \
+            --jq "[.[] | select(.title == \"${TITLE}\")][0].number // empty")
+          if [ -n "${EXISTING}" ]; then
+            gh issue comment "${EXISTING}" --body-file docs/upstream-watch.md
+            echo "Updated issue #${EXISTING}"
+          else
+            gh issue create --title "${TITLE}" --body-file docs/upstream-watch.md
+          fi
+          echo "Detection only: promote via numan-registry candidate + lifecycle-prove PR. Nothing was published."
