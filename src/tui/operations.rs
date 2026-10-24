@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 use crate::cmd::{activate, doctor, plugin_lifecycle, remove, update};
 use crate::config::Config;
 use crate::core::{
-    nu_version::NuVersion, package::Package, platform::Platform, registry::RegistryManager,
+    nu_version::NuVersion,
+    package::{Package, PackageType},
+    platform::Platform,
+    registry::RegistryManager,
     resolve::Resolver,
 };
 use crate::install::transaction::{self, InstallOptions};
@@ -133,6 +136,22 @@ pub fn activation(entry: &LockfileEntry, nu: Option<&NuPaths>) -> &'static str {
         "other Nu"
     } else {
         "inactive"
+    }
+}
+
+/// Why a package type never gets an Activate step, for display before the
+/// user commits to an install they may expect to activate afterwards.
+pub fn install_only_note(package_type: &PackageType) -> Option<&'static str> {
+    match package_type {
+        PackageType::Script => Some(
+            "Install-only: scripts cannot be activated. Install only downloads the payload; \
+             run or source it from its payload path afterwards.",
+        ),
+        PackageType::Completion => Some(
+            "Install-only: completions cannot be activated. Install only downloads the \
+             payload; source it from your shell configuration afterwards.",
+        ),
+        PackageType::Plugin | PackageType::Module => None,
     }
 }
 
@@ -349,6 +368,9 @@ pub fn prepare(
             effects.push(
                 "Downloads and writes package payload/state. Install does not activate.".into(),
             );
+            if let Some(note) = install_only_note(&item.package.package_type) {
+                effects.push(note.into());
+            }
             version
         }
         Action::Activate => {
@@ -705,17 +727,20 @@ pub fn execute_cli(root: &Path, argv: &[String]) -> Result<String> {
             Ok(note)
         }
         Some(Commands::Update(args)) => {
-            if argv.iter().any(|a| a == "--check") && !argv.iter().any(|a| a == "--self") {
+            // Self-update replaces the running binary (unsafe on Windows and
+            // surprising mid-session); only the read-only --check form runs
+            // here. The real update is a terminal handoff.
+            if argv.iter().any(|a| a == "--self") && !argv.iter().any(|a| a == "--check") {
+                bail!(
+                    "Self-update replaces the running numan binary; run `numan update --self` in a terminal instead."
+                );
+            }
+            if argv.iter().any(|a| a == "--check") {
                 crate::cmd::update::execute(&args, root)?;
                 return Ok(note);
             }
             ensure_no_pending(root)?;
             crate::cmd::update::execute(&args, root)?;
-            if argv.iter().any(|a| a == "--self") && !argv.iter().any(|a| a == "--check") {
-                return Ok(format!(
-                    "{note} Numan binary was replaced; restart numan to run the new version."
-                ));
-            }
             Ok(note)
         }
         Some(Commands::Install(args)) => {
@@ -824,7 +849,12 @@ pub fn execute_cli(root: &Path, argv: &[String]) -> Result<String> {
                 Ok(note)
             }
         }
-        _ => bail!("This command is not executable in the TUI yet; no state was changed."),
+        // Read-only leaves are routed above; reaching here means the argv
+        // classification changed, so delegate rather than strand the command.
+        Some(Commands::Search(_)) | Some(Commands::Info { .. }) | Some(Commands::List) => {
+            execute_read_only(root, &argv)
+        }
+        None => bail!("No command selected."),
     }
 }
 

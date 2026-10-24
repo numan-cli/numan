@@ -917,3 +917,80 @@ fn arrow_focus_is_bounded_and_refresh_requires_explicit_review() {
     assert!(app.key(key('R')).is_none());
     assert!(matches!(app.overlay, Some(Overlay::Filter(_))));
 }
+
+#[test]
+fn discover_labels_install_only_types_before_install() {
+    let fixture = Fixture::new(false);
+    let mut app = app(&fixture);
+    // Clone the fixture catalog item as a script package: same payload shape,
+    // different type. Discover must say up front that no Activate follows.
+    let mut script_item = app.data.as_ref().unwrap().catalog[0].clone();
+    script_item.package.id = ScopedId::parse("test/fixture-script").unwrap();
+    script_item.package.package_type = PackageType::Script;
+    app.data.as_mut().unwrap().catalog.push(script_item);
+    app.navigate(View::Discover);
+    let row = app
+        .rows()
+        .into_iter()
+        .find(|row| row.id == "test/fixture-script")
+        .expect("script package must be listed in Discover");
+    assert!(
+        row.details.contains("Install-only"),
+        "Discover details must label script packages install-only: {}",
+        row.details
+    );
+    assert!(operations::install_only_note(&PackageType::Script).is_some());
+    assert!(operations::install_only_note(&PackageType::Completion).is_some());
+    assert!(operations::install_only_note(&PackageType::Module).is_none());
+    assert!(operations::install_only_note(&PackageType::Plugin).is_none());
+}
+
+#[test]
+fn update_self_update_is_blocked_but_check_is_read_only() {
+    use super::catalog::{self, ExecutionMode};
+    let spec = catalog::spec("update").unwrap();
+    let self_fields = catalog::fields_from_argv(spec, &["--self".to_string()]);
+    assert!(
+        matches!(
+            catalog::execution_mode("update", &self_fields),
+            ExecutionMode::Blocked(reason) if reason.contains("terminal")
+        ),
+        "non-check update --self must be gated to a terminal handoff"
+    );
+    let check_fields =
+        catalog::fields_from_argv(spec, &["--self".to_string(), "--check".to_string()]);
+    assert_eq!(
+        catalog::execution_mode("update", &check_fields),
+        ExecutionMode::ReadOnly,
+        "update --self --check only prints the upgrade command and stays read-only"
+    );
+    // Executor-level backstop: even a hand-built argv cannot self-update.
+    let dir = tempfile::tempdir().unwrap();
+    let error = operations::execute_cli(dir.path(), &["update".to_string(), "--self".to_string()])
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("terminal"),
+        "execute_cli must refuse self-update with a handoff message: {error}"
+    );
+}
+
+#[test]
+fn every_catalog_command_has_an_executor_path() {
+    use super::catalog::{self, ExecutionMode};
+    for spec in catalog::catalog() {
+        let fields: Vec<FieldState> = spec.fields.iter().map(FieldState::from_spec).collect();
+        let mode = catalog::execution_mode(&spec.display, &fields);
+        if spec.display == "tui" {
+            assert!(
+                matches!(mode, ExecutionMode::Blocked(_)),
+                "tui must stay blocked inside itself"
+            );
+            continue;
+        }
+        assert!(
+            !matches!(mode, ExecutionMode::Blocked(_)),
+            "{} must classify to an executor path, got {mode:?}",
+            spec.display
+        );
+    }
+}
