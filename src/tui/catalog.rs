@@ -358,6 +358,21 @@ pub fn execution_mode(display: &str, fields: &[FieldState]) -> ExecutionMode {
     if display == "tui" {
         return ExecutionMode::Blocked("The TUI cannot open inside itself.");
     }
+    if display == "update" {
+        // Replacing the running binary from inside the TUI is unsafe (the
+        // executable is locked on Windows) and surprising mid-session; the
+        // read-only --check form stays executable.
+        let enabled = |long: &str| {
+            fields
+                .iter()
+                .any(|field| field.enabled && field.spec.long.as_deref() == Some(long))
+        };
+        if enabled("self") && !enabled("check") {
+            return ExecutionMode::Blocked(
+                "Self-update replaces the running numan binary; run `numan update --self` in a terminal instead.",
+            );
+        }
+    }
     if spec(display).is_some_and(|found| found.tier == "Unclassified") {
         return ExecutionMode::Blocked("No catalog classification for this command.");
     }

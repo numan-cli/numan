@@ -229,8 +229,11 @@ impl App {
                     .map(|v| v.version.to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
+                let install_only = operations::install_only_note(&item.package.package_type)
+                    .map(|note| format!("\n\n{note}"))
+                    .unwrap_or_default();
                 rows.push(Row { id, version, kind: item.package.package_type.to_string(), state: state.into(), registry: item.registry.clone(),
-                    details: format!("{}\n\nRegistry: {}\nSigning key: {}\nIndex SHA256: {}\n\nVersions: {versions}\n\nCompatibility is metadata-based, not runtime proof.\n[v] Choose version; [c] Include incompatible packages.", item.package.description, item.registry, item.signing_key, item.index_digest) });
+                    details: format!("{}\n\nRegistry: {}\nSigning key: {}\nIndex SHA256: {}\n\nVersions: {versions}{install_only}\n\nCompatibility is metadata-based, not runtime proof.\n[v] Choose version; [c] Include incompatible packages.", item.package.description, item.registry, item.signing_key, item.index_digest) });
             }
         } else {
             for (id, entry) in &data.installed.packages {
@@ -561,7 +564,7 @@ impl App {
         }
         if argv.iter().any(|arg| arg == "--self") && !argv.iter().any(|arg| arg == "--check") {
             effects.push(
-                "Self-update replaces the running numan binary. The TUI will advise a restart on success."
+                "Self-update replaces the running numan binary and is not executed in the TUI; run `numan update --self` in a terminal."
                     .into(),
             );
         }
