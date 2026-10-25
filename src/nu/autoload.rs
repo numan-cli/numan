@@ -251,8 +251,70 @@ pub fn render_use_statement(path: &Path, mode: &ModuleImportMode) -> Result<Stri
 /// The file begins with the exact ownership header required by
 /// [`OWNERSHIP_MARKER`] and is encoded as plain UTF-8 without BOM.
 pub fn generate_autoload_content(entries: &[ResolvedEntry]) -> Result<String> {
+    generate_managed_content(entries, &[])
+}
+
+/// A fully-validated script command ready for managed-file generation
+/// (issue #14). Constructed by the activate lane from a package's declared
+/// entry points after containment checks via [`resolve_entry`].
+#[derive(Debug, Clone)]
+pub struct ResolvedScriptCommand {
+    /// Canonical scoped package ID (e.g. `"owner/name"`), used for ordering.
+    pub scoped_id: String,
+    /// Public command name declared by the package.
+    pub name: String,
+    /// Absolute canonical path to the `.nu` script target.
+    pub script_path: PathBuf,
+    /// Absolute path to the Nu executable that runs the script.
+    pub nu_executable: String,
+}
+
+fn escape_nu_string_literal(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Render the wrapper definition for one script command.
+///
+/// The wrapper is definition-only: sourcing the managed file never runs
+/// package code. When a user invokes the command, the wrapper runs the
+/// script as a bare external call with the activating Nu executable, so
+/// rest arguments, pipeline input, stdout, stderr, and exit status all
+/// forward exactly as if the script were an external program (Nu itself
+/// propagates a non-zero external exit). Capturing the output instead
+/// would break that: Nu aborts the calling script on a failed captured
+/// external before user code can forward anything.
+pub fn render_script_wrapper(command: &ResolvedScriptCommand) -> Result<String> {
+    let script = command.script_path.to_str().with_context(|| {
+        format!(
+            "Script path '{}' is not valid UTF-8",
+            command.script_path.display()
+        )
+    })?;
+    let nu = escape_nu_string_literal(&command.nu_executable);
+    let script = escape_nu_string_literal(script);
+    Ok(format!(
+        "# numan:script {scoped}\n\
+         export def --wrapped {name} [...rest: string] {{\n\
+         \x20   $in | ^\"{nu}\" \"{script}\" ...$rest\n\
+         }}",
+        scoped = command.scoped_id,
+        name = command.name,
+    ))
+}
+
+/// Generate the full content of `numan.nu` from module entries and script
+/// commands. Modules render first (sorted by scoped ID), then script
+/// wrappers (sorted by scoped ID, then command name), under the
+/// ownership header.
+pub fn generate_managed_content(
+    entries: &[ResolvedEntry],
+    script_commands: &[ResolvedScriptCommand],
+) -> Result<String> {
     let mut sorted: Vec<&ResolvedEntry> = entries.iter().collect();
     sorted.sort_by(|a, b| a.scoped_id.cmp(&b.scoped_id));
+
+    let mut sorted_scripts: Vec<&ResolvedScriptCommand> = script_commands.iter().collect();
+    sorted_scripts.sort_by(|a, b| a.scoped_id.cmp(&b.scoped_id).then(a.name.cmp(&b.name)));
 
     let mut out = String::new();
     out.push_str(OWNERSHIP_MARKER);
@@ -261,6 +323,12 @@ pub fn generate_autoload_content(entries: &[ResolvedEntry]) -> Result<String> {
         out.push('\n');
         let stmt = render_use_statement(&entry.absolute_path, &entry.import_mode)?;
         out.push_str(&stmt);
+        out.push('\n');
+    }
+
+    for command in &sorted_scripts {
+        out.push('\n');
+        out.push_str(&render_script_wrapper(command)?);
         out.push('\n');
     }
 

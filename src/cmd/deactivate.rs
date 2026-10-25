@@ -5,8 +5,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::nu::autoload::{
-    delete_managed_file, generate_autoload_content, replace_managed_file, validate_candidate,
-    write_candidate, CandidateRunner, NuCandidateRunner,
+    delete_managed_file, generate_managed_content, replace_managed_file, validate_candidate,
+    write_candidate, CandidateRunner, NuCandidateRunner, ResolvedScriptCommand,
 };
 use crate::nu::paths::NuPaths;
 use crate::state::autoload_journal::{
@@ -340,7 +340,10 @@ fn is_full_module_deactivation(lockfile: &Lockfile, requested: &[ActiveModule]) 
     let active_ids: BTreeSet<&str> = lockfile
         .packages
         .iter()
-        .filter(|(_, pkg)| pkg.package_type == "module" && pkg.module_activation.is_some())
+        .filter(|(_, pkg)| {
+            (pkg.package_type == "module" && pkg.module_activation.is_some())
+                || (pkg.package_type == "script" && pkg.script_activation.is_some())
+        })
         .map(|(id, _)| id.as_str())
         .collect();
     !active_ids.is_empty() && requested_ids == active_ids
@@ -395,7 +398,7 @@ fn run_module_deactivate_lane(
         }
     }
 
-    let currently_active_ids: Vec<String> = AutoloadState::active_module_ids_from_lockfile(
+    let currently_active_ids: Vec<String> = AutoloadState::active_autoload_ids_from_lockfile(
         lockfile,
         &nu_paths.nu_executable_hash,
         &nu_paths.nu_version,
@@ -570,12 +573,7 @@ fn classify_and_validate_packages(
             }
         };
         match entry.package_type.as_str() {
-            "module" | "plugin" => {}
-            "script" => {
-                bail!(
-                    "Package '{pkg_id}' is a script — script deactivation is deferred to a later phase."
-                );
-            }
+            "module" | "plugin" | "script" => {}
             "completion" => {
                 bail!(
                     "Package '{pkg_id}' is a completion — completion deactivation is deferred to a later phase."
@@ -612,6 +610,14 @@ fn classify_and_validate_packages(
                         package_id: pkg_id.clone(),
                         vendor_autoload_dir: ma.vendor_autoload_dir.clone(),
                         managed_file_path: ma.managed_file_path.clone(),
+                    });
+                }
+                "script" if entry.script_activation.is_some() => {
+                    let sa = entry.script_activation.as_ref().unwrap();
+                    modules.push(ActiveModule {
+                        package_id: pkg_id.clone(),
+                        vendor_autoload_dir: sa.vendor_autoload_dir.clone(),
+                        managed_file_path: sa.managed_file_path.clone(),
                     });
                 }
                 _ => {}
@@ -651,6 +657,18 @@ fn classify_and_validate_packages(
                             package_id: pkg_id.clone(),
                             vendor_autoload_dir: ma.vendor_autoload_dir.clone(),
                             managed_file_path: ma.managed_file_path.clone(),
+                        });
+                    }
+                },
+                "script" => match &entry.script_activation {
+                    None => {
+                        continue;
+                    }
+                    Some(sa) => {
+                        modules.push(ActiveModule {
+                            package_id: pkg_id.clone(),
+                            vendor_autoload_dir: sa.vendor_autoload_dir.clone(),
+                            managed_file_path: sa.managed_file_path.clone(),
                         });
                     }
                 },
@@ -1140,12 +1158,23 @@ fn run_partial_deactivation(
     runner: &dyn CandidateRunner,
     pre_mutation_snapshot_id: Option<String>,
 ) -> Result<()> {
-    // Resolve remaining module entries from the lockfile.
+    // Resolve remaining module entries and script commands from the lockfile.
     let mut remaining_entries = Vec::new();
+    let mut remaining_scripts: Vec<ResolvedScriptCommand> = Vec::new();
     for pkg_id in remaining_ids {
         let entry = lockfile.packages.get(pkg_id).with_context(|| {
             format!("Package '{pkg_id}' in remaining set not found in lockfile")
         })?;
+        if let Some(sa) = &entry.script_activation {
+            for cmd in &sa.commands {
+                remaining_scripts.push(ResolvedScriptCommand {
+                    scoped_id: pkg_id.clone(),
+                    name: cmd.name.clone(),
+                    script_path: PathBuf::from(&cmd.script_path),
+                    nu_executable: nu_paths.nu_executable.clone(),
+                });
+            }
+        }
         if let Some(ma) = &entry.module_activation {
             let resolved_entry = crate::nu::autoload::ResolvedEntry {
                 absolute_path: PathBuf::from(&ma.entry_path),
@@ -1153,6 +1182,8 @@ fn run_partial_deactivation(
                 scoped_id: pkg_id.clone(),
             };
             remaining_entries.push(resolved_entry);
+        } else if entry.script_activation.is_some() {
+            // Script contributor: wrappers already collected above.
         } else {
             // Remaining module has no activation record — skip (shouldn't happen).
             eprintln!(
@@ -1169,7 +1200,7 @@ fn run_partial_deactivation(
     // post-deactivation set.
 
     // Step 4: Generate candidate content for remaining modules.
-    let content = generate_autoload_content(&remaining_entries)
+    let content = generate_managed_content(&remaining_entries, &remaining_scripts)
         .context("Failed to generate autoload content for partial deactivation")?;
 
     // Step 5: Write candidate file (same directory as managed file).
@@ -1299,6 +1330,7 @@ fn clear_module_activations(
     for target in targets {
         if let Some(pkg) = lockfile.packages.get_mut(&target.package_id) {
             pkg.module_activation = None;
+            pkg.script_activation = None;
         }
     }
     lockfile.save(root)
@@ -1381,6 +1413,8 @@ mod tests {
                     module_activation,
                     module_import_mode: Some(ModuleImportMode::Module),
                     overlay: None,
+                    script_activation: None,
+                    script_entry_points: None,
                     locked_dependencies: BTreeMap::new(),
                 },
             );
@@ -1600,7 +1634,7 @@ mod tests {
     }
 
     #[test]
-    fn script_type_returns_deferred_error() {
+    fn script_type_inactive_is_skipped() {
         let dir = TempDir::new().unwrap();
         let lockfile = make_lockfile_with_modules(vec![("owner/myscript", "script", false)]);
 
@@ -1610,11 +1644,11 @@ mod tests {
             verbose: false,
         };
 
-        let err = classify_and_validate_packages(&args, &lockfile, dir.path(), &fake_nu_paths())
-            .unwrap_err();
+        let targets =
+            classify_and_validate_packages(&args, &lockfile, dir.path(), &fake_nu_paths()).unwrap();
         assert!(
-            err.to_string().contains("deferred"),
-            "Expected deferred error for script type, got: {err}"
+            targets.modules.is_empty(),
+            "inactive script must be skipped"
         );
     }
 
@@ -2013,6 +2047,8 @@ mod tests {
             module_activation: None,
             module_import_mode: None,
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: BTreeMap::new(),
         };
 

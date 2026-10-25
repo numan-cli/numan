@@ -132,6 +132,8 @@ impl InitRefreshEnv {
                 }),
                 module_import_mode: Some(ModuleImportMode::Module),
                 overlay: None,
+                script_activation: None,
+                script_entry_points: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );

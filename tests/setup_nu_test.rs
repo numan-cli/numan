@@ -730,6 +730,8 @@ fn list_shows_bundled_with_nu_tag() {
             module_activation: None,
             module_import_mode: None,
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: Default::default(),
         },
     );

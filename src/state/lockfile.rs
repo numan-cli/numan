@@ -50,6 +50,37 @@ pub struct ModuleActivation {
     pub activated_at: String,
 }
 
+/// One activated script command: declared name plus resolved target.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScriptActivationCommand {
+    /// Public command name declared by the package.
+    pub name: String,
+    /// Package-relative `.nu` target as declared.
+    pub path: String,
+    /// Absolute canonical path to the target within the installed payload.
+    pub script_path: String,
+}
+
+/// Per-Nu-identity activation record stored on a script lockfile entry
+/// (issue #14). Mirrors [`ModuleActivation`]'s identity fields: the record
+/// is current only when Nu hash, Nu version, vendor-autoload directory,
+/// and managed file path all match the cached `NuPaths`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptActivation {
+    /// Commands this package contributes while active.
+    pub commands: Vec<ScriptActivationCommand>,
+    /// Absolute path to the selected vendor-autoload directory.
+    pub vendor_autoload_dir: String,
+    /// Absolute path to the Numan-managed autoload file (`numan.nu`).
+    pub managed_file_path: String,
+    /// SHA-256 of the Nu executable used when this activation was recorded.
+    pub nu_executable_sha256: String,
+    /// Version string of the Nu executable used when recorded.
+    pub nu_version: String,
+    /// Timestamp when this activation record was written.
+    pub activated_at: String,
+}
+
 /// Registry metadata persisted for a package that can be activated as a Nu overlay.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OverlayPackageSpec {
@@ -193,6 +224,18 @@ pub struct LockfileEntry {
     #[serde(default)]
     pub overlay: Option<OverlayPackageSpec>,
 
+    /// Activation record for this script under a specific Nu identity and
+    /// vendor-autoload target. `None` means not yet activated (issue #14).
+    #[serde(default)]
+    pub script_activation: Option<ScriptActivation>,
+
+    /// Script entry points persisted from the registry at install time
+    /// (`activation.kind = "nu-script"`). `None` for non-script packages
+    /// and for script packages installed without a declaration, which stay
+    /// install-only.
+    #[serde(default)]
+    pub script_entry_points: Option<Vec<crate::core::package::ScriptEntryPoint>>,
+
     /// Registry dependency map captured at install time.
     /// Activation requires this to be empty in Phase 4.
     #[serde(default)]
@@ -248,6 +291,38 @@ impl LockfileEntry {
     pub fn is_module_activatable(&self) -> bool {
         self.module_import_mode.is_some()
             && self.entry.is_some()
+            && self.locked_dependencies.is_empty()
+    }
+
+    /// Returns `true` if this script entry is active for the given Nu
+    /// identity and vendor-autoload target. All four identity fields must
+    /// match, mirroring [`Self::is_module_active_for`].
+    pub fn is_script_active_for(
+        &self,
+        nu_executable_sha256: &str,
+        nu_version: &str,
+        vendor_autoload_dir: &str,
+        managed_file_path: &str,
+    ) -> bool {
+        match &self.script_activation {
+            Some(a) => {
+                a.nu_executable_sha256 == nu_executable_sha256
+                    && a.nu_version == nu_version
+                    && a.vendor_autoload_dir == vendor_autoload_dir
+                    && a.managed_file_path == managed_file_path
+            }
+            None => false,
+        }
+    }
+
+    /// Returns `true` when this script can be activated (issue #14):
+    /// declared entry points were persisted at install time and no locked
+    /// dependencies need resolution.
+    pub fn is_script_activatable(&self) -> bool {
+        self.script_entry_points
+            .as_ref()
+            .map(|eps| !eps.is_empty())
+            .unwrap_or(false)
             && self.locked_dependencies.is_empty()
     }
 }
@@ -433,6 +508,8 @@ mod tests {
             module_activation: None,
             module_import_mode: None,
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: BTreeMap::new(),
         }
     }
@@ -491,6 +568,8 @@ mod tests {
                 module_activation: None,
                 module_import_mode: None,
                 overlay: None,
+                script_activation: None,
+                script_entry_points: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -569,6 +648,8 @@ mod tests {
             module_activation: None,
             module_import_mode: None,
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: BTreeMap::new(),
         }
     }
@@ -658,6 +739,8 @@ mod tests {
             entry: Some("mod.nu".to_string()),
             module_import_mode: Some(ModuleImportMode::Module),
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: BTreeMap::new(),
             ..make_base_entry()
         };
@@ -693,6 +776,8 @@ mod tests {
             entry: Some("mod.nu".to_string()),
             module_import_mode: Some(ModuleImportMode::All),
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: {
                 let mut m = BTreeMap::new();
                 m.insert("owner/dep".to_string(), "^1.0.0".to_string());
@@ -728,6 +813,8 @@ mod tests {
                 entry: Some("mod.nu".to_string()),
                 module_import_mode: Some(ModuleImportMode::All),
                 overlay: None,
+                script_activation: None,
+                script_entry_points: None,
                 locked_dependencies: deps,
                 module_activation: Some(ModuleActivation {
                     entry_path: "/root/packages/modules/owner/mymod/1.0.0-aaa/mod.nu".to_string(),

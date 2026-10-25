@@ -444,6 +444,8 @@ fn discover_bundled_plugins(root: &Path, version_dir: &Path, nu_version: &str) -
             module_activation: None,
             module_import_mode: None,
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: std::collections::BTreeMap::new(),
         };
         discovered.push((package_id, lockfile_entry));
@@ -1756,6 +1758,8 @@ mod tests {
                 module_activation: None,
                 module_import_mode: None,
                 overlay: None,
+                script_activation: None,
+                script_entry_points: None,
                 locked_dependencies: std::collections::BTreeMap::new(),
             },
         );
@@ -1849,6 +1853,8 @@ mod tests {
                 module_activation: None,
                 module_import_mode: None,
                 overlay: None,
+                script_activation: None,
+                script_entry_points: None,
                 locked_dependencies: std::collections::BTreeMap::new(),
             },
         );

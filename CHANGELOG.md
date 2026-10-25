@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **First-class script package activation (#14)**: script packages whose registry entry declares `activation: {kind: "nu-script", entry_points: [{name, path}, ...]}` can now be activated with `numan activate`. Each declared name becomes a command in the Numan-managed autoload file that runs the package-relative `.nu` target under the activating Nu executable, forwarding arguments, pipeline input, stdout/stderr, and exit status. Command names are validated, collisions across active script packages are rejected (never shadowed), and install remains inert — package code runs only when a user invokes a declared command. Scripts without a declaration stay install-only; `numan info` shows declared entry points before activation.
+
 ## [0.3.0] - 2026-10-24
 
 ### Added

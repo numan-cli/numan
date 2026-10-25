@@ -225,9 +225,9 @@ pub fn execute_reviewed(
             None => {
                 // Fail closed: without cached NuPaths we cannot verify activation
                 // identity, so refuse active plugins/modules instead of Plain.
-                if current.module_activation.is_some() {
+                if current.module_activation.is_some() || current.script_activation.is_some() {
                     let e = anyhow::anyhow!(
-                        "Package '{}' is currently active as a module. \
+                        "Package '{}' is currently active. \
                          Run `numan deactivate {}` first, then run update again.",
                         update.package_id,
                         update.package_id
@@ -638,6 +638,14 @@ fn plan_active_update(
             pkg_id
         );
     }
+    if entry.script_activation.is_some() {
+        bail!(
+            "Package '{}' is currently active as a script. \
+             Run `numan deactivate {}` first, then run update again.",
+            pkg_id,
+            pkg_id
+        );
+    }
     if entry.activation.is_some() {
         let matching = entry.is_active_for(
             &nu_paths.nu_executable_hash,
@@ -750,6 +758,8 @@ mod tests {
             module_activation: None,
             module_import_mode: None,
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: BTreeMap::new(),
         }
     }
@@ -964,6 +974,8 @@ mod tests {
                     module_activation: None,
                     module_import_mode: None,
                     overlay: None,
+                    script_activation: None,
+                    script_entry_points: None,
                     locked_dependencies: BTreeMap::new(),
                 },
             );

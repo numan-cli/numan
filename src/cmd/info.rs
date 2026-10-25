@@ -37,8 +37,24 @@ pub fn format_info(pkg: &Package, platform: &Platform, nu: Option<&NuVersion>) -
     }
     out.push_str(&format!("Type:       {}\n", pkg.package_type));
     match pkg.package_type {
-        crate::core::package::PackageType::Script
-        | crate::core::package::PackageType::Completion => {
+        crate::core::package::PackageType::Script => {
+            let declared = pkg.versions.iter().any(|v| {
+                v.activation
+                    .as_ref()
+                    .map(|spec| spec.kind == "nu-script" && !spec.entry_points.is_empty())
+                    .unwrap_or(false)
+            });
+            if declared {
+                out.push_str(
+                    "Activation: explicit `numan activate` required; install does not wire Nu\n",
+                );
+            } else {
+                out.push_str(
+                    "Activation: install-only (activation deferred; install does not wire Nu)\n",
+                );
+            }
+        }
+        crate::core::package::PackageType::Completion => {
             out.push_str(
                 "Activation: install-only (activation deferred; install does not wire Nu)\n",
             );
@@ -85,6 +101,19 @@ pub fn format_info(pkg: &Package, platform: &Platform, nu: Option<&NuVersion>) -
             "  v{}  [nu {}]  ({status})\n",
             ver.version, ver.nu_version
         ));
+
+        if let Some(activation) = ver
+            .activation
+            .as_ref()
+            .filter(|spec| spec.kind == "nu-script")
+        {
+            for ep in &activation.entry_points {
+                out.push_str(&format!(
+                    "    script: {} -> {} (inactive until activated)\n",
+                    ep.name, ep.path
+                ));
+            }
+        }
 
         if let Some(activation) = ver
             .activation
@@ -264,6 +293,7 @@ mod tests {
                 handler: "hooks/prompt.nu".into(),
                 filter: None,
             }]),
+            entry_points: Vec::new(),
         });
         let out = format_info(&pkg, &linux_platform(), None);
         assert!(out.contains("high-risk Nushell hooks"), "{out}");

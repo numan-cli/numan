@@ -111,7 +111,7 @@ pub fn load(root: &Path) -> Result<Data> {
 }
 
 pub fn activation(entry: &LockfileEntry, nu: Option<&NuPaths>) -> &'static str {
-    if !matches!(entry.package_type.as_str(), "plugin" | "module") {
+    if !matches!(entry.package_type.as_str(), "plugin" | "module" | "script") {
         return "unsupported";
     }
     let Some(nu) = nu else {
@@ -127,12 +127,21 @@ pub fn activation(entry: &LockfileEntry, nu: Option<&NuPaths>) -> &'static str {
         nu.vendor_autoload_dir.as_ref().is_some_and(|dir| {
             crate::cmd::activate::resolve_managed_file_path(nu).is_ok_and(|path| {
                 entry.is_module_active_for(&nu.nu_executable_hash, &nu.nu_version, dir, &path)
+                    || entry.is_script_active_for(
+                        &nu.nu_executable_hash,
+                        &nu.nu_version,
+                        dir,
+                        &path,
+                    )
             })
         })
     };
     if active {
         "active"
-    } else if entry.activation.is_some() || entry.module_activation.is_some() {
+    } else if entry.activation.is_some()
+        || entry.module_activation.is_some()
+        || entry.script_activation.is_some()
+    {
         "other Nu"
     } else {
         "inactive"
@@ -144,8 +153,8 @@ pub fn activation(entry: &LockfileEntry, nu: Option<&NuPaths>) -> &'static str {
 pub fn install_only_note(package_type: &PackageType) -> Option<&'static str> {
     match package_type {
         PackageType::Script => Some(
-            "Install-only: scripts cannot be activated. Install only downloads the payload; \
-             run or source it from its payload path afterwards.",
+            "Install-only: this script declares no entry points, so it cannot be activated. \
+             Install only downloads the payload; run or source it from its payload path afterwards.",
         ),
         PackageType::Completion => Some(
             "Install-only: completions cannot be activated. Install only downloads the \
@@ -153,6 +162,26 @@ pub fn install_only_note(package_type: &PackageType) -> Option<&'static str> {
         ),
         PackageType::Plugin | PackageType::Module => None,
     }
+}
+
+/// Install-only note for a concrete catalog package: script packages
+/// that declare `nu-script` entry points can be activated (issue #14),
+/// so the note applies only when no version declares entry points.
+pub fn install_only_note_for_package(
+    package: &crate::core::package::Package,
+) -> Option<&'static str> {
+    if package.package_type == PackageType::Script {
+        let declared = package.versions.iter().any(|v| {
+            v.activation
+                .as_ref()
+                .map(|spec| spec.kind == "nu-script" && !spec.entry_points.is_empty())
+                .unwrap_or(false)
+        });
+        if declared {
+            return None;
+        }
+    }
+    install_only_note(&package.package_type)
 }
 
 pub fn candidate(item: &CatalogItem, nu: Option<&NuPaths>) -> Option<String> {
@@ -368,14 +397,14 @@ pub fn prepare(
             effects.push(
                 "Downloads and writes package payload/state. Install does not activate.".into(),
             );
-            if let Some(note) = install_only_note(&item.package.package_type) {
+            if let Some(note) = install_only_note_for_package(&item.package) {
                 effects.push(note.into());
             }
             version
         }
         Action::Activate => {
             let entry = entry.context("Package is not installed.")?;
-            if !matches!(entry.package_type.as_str(), "plugin" | "module") {
+            if !matches!(entry.package_type.as_str(), "plugin" | "module" | "script") {
                 bail!("Activation is unsupported for this package type.");
             }
             let nu = nu.context("Initialize Nu context before modifying packages.")?;
@@ -404,7 +433,10 @@ pub fn prepare(
         }
         Action::Remove => {
             let entry = entry.context("Package is not installed.")?;
-            if entry.activation.is_some() || entry.module_activation.is_some() {
+            if entry.activation.is_some()
+                || entry.module_activation.is_some()
+                || entry.script_activation.is_some()
+            {
                 bail!("Deactivate this package via CLI before removal. Force is CLI only.");
             }
             if entry.origin.as_deref() == Some(BUNDLED_NU_ORIGIN) {

@@ -161,6 +161,7 @@ impl Fixture {
                     overlay_name: None,
                     exports: None,
                     bindings: None,
+                    entry_points: Vec::new(),
                 }),
                 provenance: None,
                 evidence_tier: None,

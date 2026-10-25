@@ -70,9 +70,9 @@ pub fn execute_reviewed(
     ensure_plugin_not_active(&entry, &args.package)?;
     ensure_not_bundled_plugin(&entry, &args.package)?;
     ensure_hooks_disabled(root, &args.package)?;
-    if !args.force && entry.module_activation.is_some() {
+    if !args.force && (entry.module_activation.is_some() || entry.script_activation.is_some()) {
         bail!(
-            "Package '{}' is currently active as a module. \
+            "Package '{}' is currently active. \
              Run `numan deactivate {}` first or use --force.",
             args.package,
             args.package
@@ -108,9 +108,9 @@ pub fn execute_reviewed(
     ensure_plugin_not_active(&entry, &args.package)?;
     ensure_not_bundled_plugin(&entry, &args.package)?;
     ensure_hooks_disabled(root, &args.package)?;
-    if !args.force && entry.module_activation.is_some() {
+    if !args.force && (entry.module_activation.is_some() || entry.script_activation.is_some()) {
         bail!(
-            "Package '{}' is currently active as a module. \
+            "Package '{}' is currently active. \
              Run `numan deactivate {}` first or use --force.",
             args.package,
             args.package
@@ -275,6 +275,8 @@ mod tests {
             module_activation: None,
             module_import_mode: None,
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: BTreeMap::new(),
         }
     }
@@ -347,9 +349,9 @@ mod tests {
     /// Mirrors the execute() guard order: plugin gate always, module only without --force.
     fn ensure_removable(entry: &LockfileEntry, pkg_id: &str, force: bool) -> Result<()> {
         ensure_plugin_not_active(entry, pkg_id)?;
-        if !force && entry.module_activation.is_some() {
+        if !force && (entry.module_activation.is_some() || entry.script_activation.is_some()) {
             bail!(
-                "Package '{pkg_id}' is currently active as a module. \
+                "Package '{pkg_id}' is currently active. \
                  Run `numan deactivate {pkg_id}` first or use --force."
             );
         }
@@ -484,7 +486,7 @@ mod tests {
             ..base_entry()
         };
         let err = ensure_removable(&entry, "owner/mod", false).unwrap_err();
-        assert!(err.to_string().contains("active as a module"));
+        assert!(err.to_string().contains("currently active"));
     }
 
     #[test]
