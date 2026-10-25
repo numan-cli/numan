@@ -278,8 +278,8 @@ fn escape_nu_string_literal(value: &str) -> String {
 /// The wrapper is definition-only: sourcing the managed file never runs
 /// package code. When a user invokes the command, the wrapper runs the
 /// script as a bare external call with the activating Nu executable, so
-/// rest arguments, pipeline input, stdout, stderr, and exit status all
-/// forward exactly as if the script were an external program (Nu itself
+/// rest arguments, stdout, stderr, and exit status all forward as if
+/// the script were an external program (Nu itself
 /// propagates a non-zero external exit). Capturing the output instead
 /// would break that: Nu aborts the calling script on a failed captured
 /// external before user code can forward anything.

@@ -212,7 +212,7 @@ where
     let has_active_modules = lockfile
         .packages
         .values()
-        .any(|entry| entry.module_activation.is_some());
+        .any(|entry| entry.module_activation.is_some() || entry.script_activation.is_some());
 
     if has_active_modules {
         validate_refresh_for_active_modules(
@@ -300,7 +300,7 @@ fn validate_refresh_for_active_modules(
     let active_ids: Vec<String> = lockfile
         .packages
         .iter()
-        .filter(|(_, entry)| entry.module_activation.is_some())
+        .filter(|(_, entry)| entry.module_activation.is_some() || entry.script_activation.is_some())
         .map(|(id, _)| id.clone())
         .collect();
 
@@ -325,6 +325,10 @@ fn refresh_activation_records(lockfile: &mut Lockfile, new_paths: &NuPaths) -> R
             activation.plugin_registry_path = new_paths.plugin_registry_path.clone();
         }
         if let Some(ref mut activation) = entry.module_activation {
+            activation.nu_executable_sha256 = new_paths.nu_executable_hash.clone();
+            activation.nu_version = new_paths.nu_version.clone();
+        }
+        if let Some(ref mut activation) = entry.script_activation {
             activation.nu_executable_sha256 = new_paths.nu_executable_hash.clone();
             activation.nu_version = new_paths.nu_version.clone();
         }

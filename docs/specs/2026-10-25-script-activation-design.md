@@ -25,12 +25,15 @@
   ```
 
   The wrapper runs the script as a bare external call under the
-  activating Nu executable, so rest arguments, pipeline input, stdout,
-  stderr, and exit status forward exactly as for an external program
-  (Nu propagates a non-zero external exit itself; capturing the output
-  was rejected because Nu aborts the caller on a failed captured
-  external before anything can be forwarded). It never sources the
-  script, so script code runs only when the user invokes the command.
+  activating Nu executable, so rest arguments, stdout, stderr, and
+  exit status forward as for an external program (Nu propagates a
+  non-zero external exit itself; capturing the output was rejected
+  because Nu aborts the caller on a failed captured external before
+  anything can be forwarded). Known limitation, verified against Nu
+  0.116.1: pipeline input is not forwarded — Nushell does not feed a
+  pipeline value into a child script's `$in`, so scripts that read
+  stdin will see it empty. It never sources the script, so script
+  code runs only when the user invokes the command.
 - The managed file goes through the existing candidate-validation,
   journal, drift, and recovery machinery; the lockfile ground truth is a
   per-package `script_activation` record with the same Nu-identity fields

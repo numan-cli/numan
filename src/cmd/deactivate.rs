@@ -499,20 +499,30 @@ pub(crate) fn deactivate_modules_unlocked(
             .packages
             .get(pkg_id)
             .with_context(|| format!("Package '{pkg_id}' is not installed"))?;
-        if entry.package_type != "module" {
+        if entry.package_type == "module" {
+            let Some(ma) = &entry.module_activation else {
+                continue;
+            };
+            targets.push(ActiveModule {
+                package_id: pkg_id.clone(),
+                vendor_autoload_dir: ma.vendor_autoload_dir.clone(),
+                managed_file_path: ma.managed_file_path.clone(),
+            });
+        } else if entry.package_type == "script" {
+            let Some(sa) = &entry.script_activation else {
+                continue;
+            };
+            targets.push(ActiveModule {
+                package_id: pkg_id.clone(),
+                vendor_autoload_dir: sa.vendor_autoload_dir.clone(),
+                managed_file_path: sa.managed_file_path.clone(),
+            });
+        } else {
             bail!(
-                "Package '{pkg_id}' is not a module (type: {})",
+                "Package '{pkg_id}' is not a module or script (type: {})",
                 entry.package_type
             );
         }
-        let Some(ma) = &entry.module_activation else {
-            continue;
-        };
-        targets.push(ActiveModule {
-            package_id: pkg_id.clone(),
-            vendor_autoload_dir: ma.vendor_autoload_dir.clone(),
-            managed_file_path: ma.managed_file_path.clone(),
-        });
     }
 
     if targets.is_empty() {
@@ -1167,10 +1177,19 @@ fn run_partial_deactivation(
         })?;
         if let Some(sa) = &entry.script_activation {
             for cmd in &sa.commands {
+                // Re-resolve instead of trusting the stored absolute path,
+                // mirroring the module branch's resolve step below.
+                let resolved = crate::nu::autoload::resolve_entry(
+                    root,
+                    &entry.payload_path,
+                    &cmd.path,
+                    crate::core::package::ModuleImportMode::Module,
+                    pkg_id,
+                )?;
                 remaining_scripts.push(ResolvedScriptCommand {
                     scoped_id: pkg_id.clone(),
                     name: cmd.name.clone(),
-                    script_path: PathBuf::from(&cmd.script_path),
+                    script_path: resolved.absolute_path,
                     nu_executable: nu_paths.nu_executable.clone(),
                 });
             }

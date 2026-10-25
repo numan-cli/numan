@@ -620,6 +620,13 @@ fn run_module_lane(
         if currently_active_ids.contains(pkg_id) {
             if let Some(sa) = &entry.script_activation {
                 for cmd in &sa.commands {
+                    if !crate::core::package::is_valid_script_command_name(&cmd.name) {
+                        bail!(
+                            "Active script package '{}' has an invalid stored command name '{}'; deactivate and re-activate it",
+                            pkg_id,
+                            cmd.name
+                        );
+                    }
                     if let Some(owner) = claimed.get(&cmd.name) {
                         bail!(
                             "Script command '{}' from active package '{}' collides with '{}'; deactivate one of them first",
@@ -628,11 +635,28 @@ fn run_module_lane(
                             owner
                         );
                     }
+                    // Re-resolve the target from the declaration instead of
+                    // trusting the stored absolute path: a deleted payload
+                    // file or swapped symlink must fail this activation,
+                    // not silently regenerate a dangling wrapper.
+                    let resolved = resolve_entry(
+                        root,
+                        &entry.payload_path,
+                        &cmd.path,
+                        crate::core::package::ModuleImportMode::Module,
+                        pkg_id,
+                    )
+                    .with_context(|| {
+                        format!(
+                            "Active script target '{}' for '{}' no longer resolves; deactivate and re-activate it",
+                            cmd.path, pkg_id
+                        )
+                    })?;
                     claimed.insert(cmd.name.clone(), pkg_id.clone());
                     script_commands.push(ResolvedScriptCommand {
                         scoped_id: pkg_id.clone(),
                         name: cmd.name.clone(),
-                        script_path: PathBuf::from(&cmd.script_path),
+                        script_path: resolved.absolute_path,
                         nu_executable: nu_paths.nu_executable.clone(),
                     });
                 }
@@ -919,7 +943,8 @@ pub(crate) fn activate_modules_unlocked(
         check: false,
     };
     let module_targets = resolve_module_targets(&args, &lockfile, &nu_paths)?;
-    if module_targets.is_empty() {
+    let script_targets = resolve_script_targets(&args, &lockfile, &nu_paths)?;
+    if module_targets.is_empty() && script_targets.is_empty() {
         return Ok(false);
     }
     let managed_file_path = resolve_managed_file_path(&nu_paths)?;
@@ -928,7 +953,7 @@ pub(crate) fn activate_modules_unlocked(
         &nu_paths,
         &mut lockfile,
         &module_targets,
-        &[],
+        &script_targets,
         &managed_file_path,
         runner,
         pre_mutation_snapshot_id,
@@ -1064,7 +1089,7 @@ fn execute_check(
                 lockfile
                     .packages
                     .get(*id)
-                    .map(|e| e.package_type == "module")
+                    .map(|e| e.package_type == "module" || e.package_type == "script")
                     .unwrap_or(false)
             })
             .map(|s| s.as_str())
@@ -1124,6 +1149,29 @@ fn execute_check(
                 continue;
             }
         };
+
+        if entry.package_type == "script" {
+            if entry.is_script_activatable() {
+                println!(
+                    "{} {}: script activatable ({} entry point(s))",
+                    console::style("✓").green(),
+                    pkg_id,
+                    entry
+                        .script_entry_points
+                        .as_ref()
+                        .map(|e| e.len())
+                        .unwrap_or(0)
+                );
+            } else {
+                println!(
+                    "{} {}: script not activatable — no declared entry points or unresolved dependencies",
+                    console::style("✗").red(),
+                    pkg_id
+                );
+                any_issues = true;
+            }
+            continue;
+        }
 
         if entry.package_type != "module" {
             println!(
@@ -1484,6 +1532,17 @@ fn resolve_script_targets(
             continue;
         }
         if !entry.is_script_activatable() {
+            if entry
+                .script_entry_points
+                .as_ref()
+                .map(|e| !e.is_empty())
+                .unwrap_or(false)
+            {
+                bail!(
+                    "Package '{pkg_id}' declares script entry points but has locked dependencies \
+                     that must be resolved before activation."
+                );
+            }
             bail!(
                 "Package '{pkg_id}' is a script without declared entry points — it is install-only. \
                  Script activation requires the registry entry to declare activation entry_points (issue #14)."

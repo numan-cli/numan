@@ -469,7 +469,9 @@ impl App {
                 let Some(entry) = installed else {
                     return Vec::new();
                 };
-                let active = entry.activation.is_some() || entry.module_activation.is_some();
+                let active = entry.activation.is_some()
+                    || entry.module_activation.is_some()
+                    || entry.script_activation.is_some();
                 let allowed = !active
                     || std::env::var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION").as_deref() == Ok("1");
                 if allowed && (!active || entry.package_type == "plugin") {
@@ -479,16 +481,20 @@ impl App {
                 }
             }
             _ => match installed {
-                Some(entry) if entry.activation.is_none() && entry.module_activation.is_none() => {
+                Some(entry)
+                    if entry.activation.is_none()
+                        && entry.module_activation.is_none()
+                        && entry.script_activation.is_none() =>
+                {
                     let mut actions = vec![Action::Remove];
-                    if matches!(row.kind.as_str(), "plugin" | "module") {
+                    if matches!(row.kind.as_str(), "plugin" | "module" | "script") {
                         actions.insert(0, Action::Activate);
                     }
                     actions
                 }
                 Some(_)
                     if row.state != "active"
-                        && matches!(row.kind.as_str(), "plugin" | "module") =>
+                        && matches!(row.kind.as_str(), "plugin" | "module" | "script") =>
                 {
                     vec![Action::Activate]
                 }

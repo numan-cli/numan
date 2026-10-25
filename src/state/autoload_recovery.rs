@@ -102,33 +102,39 @@ fn apply_replaced_transition(
             anyhow!("Cannot recover module '{package_id}': package is missing from lockfile")
         })?;
         if entry.package_type == "script" {
-            // Script activation record (issue #14): rebuild from the
-            // persisted declaration; targets resolve under the payload.
-            if entry.script_activation.is_none() {
-                let declared = entry.script_entry_points.clone().unwrap_or_default();
-                let mut commands = Vec::new();
-                for ep in &declared {
-                    let abs = root.join(&entry.payload_path).join(&ep.path);
-                    let script_path = abs
-                        .canonicalize()
-                        .unwrap_or(abs)
-                        .to_string_lossy()
-                        .into_owned();
-                    commands.push(crate::state::lockfile::ScriptActivationCommand {
-                        name: ep.name.clone(),
-                        path: ep.path.clone(),
-                        script_path,
-                    });
-                }
-                entry.script_activation = Some(crate::state::lockfile::ScriptActivation {
-                    commands,
-                    vendor_autoload_dir: journal.vendor_autoload_dir.clone(),
-                    managed_file_path: journal.managed_file_path.clone(),
-                    nu_executable_sha256: nu_paths.nu_executable_hash.clone(),
-                    nu_version: nu_paths.nu_version.clone(),
-                    activated_at: activated_at.clone(),
+            // Script activation record (issue #14): rebuild unconditionally
+            // from the persisted declaration, with targets re-validated
+            // through the same containment/regular-file rules as normal
+            // activation. A missing declaration cannot be completed.
+            let declared = entry.script_entry_points.clone().unwrap_or_default();
+            if declared.is_empty() {
+                bail!(
+                    "Cannot recover script '{package_id}': lockfile has no persisted entry points"
+                );
+            }
+            let mut commands = Vec::new();
+            for ep in &declared {
+                let resolved = crate::nu::autoload::resolve_entry(
+                    root,
+                    &entry.payload_path,
+                    &ep.path,
+                    ModuleImportMode::Module,
+                    package_id,
+                )?;
+                commands.push(crate::state::lockfile::ScriptActivationCommand {
+                    name: ep.name.clone(),
+                    path: ep.path.clone(),
+                    script_path: resolved.absolute_path.to_string_lossy().into_owned(),
                 });
             }
+            entry.script_activation = Some(crate::state::lockfile::ScriptActivation {
+                commands,
+                vendor_autoload_dir: journal.vendor_autoload_dir.clone(),
+                managed_file_path: journal.managed_file_path.clone(),
+                nu_executable_sha256: nu_paths.nu_executable_hash.clone(),
+                nu_version: nu_paths.nu_version.clone(),
+                activated_at: activated_at.clone(),
+            });
             continue;
         }
         if entry.package_type != "module" {
