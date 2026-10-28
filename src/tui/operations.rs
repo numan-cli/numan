@@ -407,6 +407,9 @@ pub fn prepare(
             if !matches!(entry.package_type.as_str(), "plugin" | "module" | "script") {
                 bail!("Activation is unsupported for this package type.");
             }
+            if entry.package_type == "script" && !entry.is_script_activatable() {
+                bail!("Script package has no declared entry points and cannot be activated.");
+            }
             let nu = nu.context("Initialize Nu context before modifying packages.")?;
             if activation(entry, Some(nu)) == "active" {
                 bail!("Already active for the current Nu.");

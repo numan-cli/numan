@@ -270,6 +270,33 @@ mod tests {
     }
 
     #[test]
+    fn format_info_shows_script_entry_points_before_activation() {
+        let mut pkg = sample_plugin(false);
+        pkg.package_type = PackageType::Script;
+        pkg.versions[0].activation = Some(crate::core::package::RegistryActivationSpec {
+            kind: "nu-script".into(),
+            import: Default::default(),
+            entry: None,
+            overlay_name: None,
+            exports: None,
+            bindings: None,
+            entry_points: vec![crate::core::package::ScriptEntryPoint {
+                name: "wttr".into(),
+                path: "wttr.nu".into(),
+            }],
+        });
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(
+            out.contains("Activation: explicit `numan activate` required"),
+            "{out}"
+        );
+        assert!(
+            out.contains("script: wttr -> wttr.nu (inactive until activated)"),
+            "{out}"
+        );
+    }
+
+    #[test]
     fn format_info_marks_completion_install_only() {
         let mut pkg = sample_plugin(false);
         pkg.package_type = PackageType::Completion;

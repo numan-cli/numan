@@ -112,6 +112,9 @@ fn apply_replaced_transition(
                     "Cannot recover script '{package_id}': lockfile has no persisted entry points"
                 );
             }
+            crate::core::package::validate_script_entry_points(&declared).map_err(|e| {
+                anyhow!("Cannot recover script '{package_id}': invalid persisted entry points: {e}")
+            })?;
             let mut commands = Vec::new();
             for ep in &declared {
                 let resolved = crate::nu::autoload::resolve_entry(
@@ -234,8 +237,17 @@ fn reconstruct_entry_path(root: &Path, package_id: &str, entry: &LockfileEntry) 
     if entry.payload_path.is_empty() {
         bail!("Cannot recover module '{package_id}': payload_path is not set in lockfile");
     }
-    root.join(&entry.payload_path)
-        .join(relative_entry)
+    // Route through the same containment/canonicalization rules as normal
+    // activation; a crafted lockfile entry must not escape the payload.
+    let resolved = crate::nu::autoload::resolve_entry(
+        root,
+        &entry.payload_path,
+        relative_entry,
+        ModuleImportMode::Module,
+        package_id,
+    )?;
+    resolved
+        .absolute_path
         .to_str()
         .map(ToOwned::to_owned)
         .ok_or_else(|| {

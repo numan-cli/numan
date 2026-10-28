@@ -1,10 +1,12 @@
 use anyhow::{bail, Context, Result};
 use clap::Args;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::config::{Config, RegistryConfig};
 use crate::core::official_registry::OFFICIAL_REGISTRY;
-use crate::nu::autoload::{validate_candidate, CandidateRunner, NuCandidateRunner};
+use crate::nu::autoload::{
+    replace_managed_file, validate_candidate, write_candidate, CandidateRunner, NuCandidateRunner,
+};
 use crate::nu::paths::NuPaths;
 use crate::state::autoload_state::AutoloadState;
 use crate::state::lockfile::Lockfile;
@@ -225,6 +227,13 @@ where
     }
 
     refresh_activation_records(&mut lockfile, &new_paths)?;
+    regenerate_managed_autoload_for_refresh(
+        root,
+        &old_paths,
+        &new_paths,
+        &lockfile,
+        runner_factory,
+    )?;
     lockfile.nu_version = new_paths.nu_version.clone();
     lockfile.platform = new_paths.platform.clone();
     lockfile.generated_at = format_timestamp();
@@ -332,6 +341,94 @@ fn refresh_activation_records(lockfile: &mut Lockfile, new_paths: &NuPaths) -> R
             activation.nu_executable_sha256 = new_paths.nu_executable_hash.clone();
             activation.nu_version = new_paths.nu_version.clone();
         }
+    }
+    Ok(())
+}
+
+/// Re-resolve active script targets and, when the Nu executable path changed,
+/// rewrite `numan.nu` so script wrappers invoke the refreshed executable.
+///
+/// Module `use` statements do not embed the Nu path, so only script wrappers
+/// need regeneration. Candidate validation runs before the atomic replace.
+fn regenerate_managed_autoload_for_refresh(
+    root: &Path,
+    old_paths: &NuPaths,
+    new_paths: &NuPaths,
+    lockfile: &Lockfile,
+    runner_factory: fn(&str) -> Box<dyn CandidateRunner>,
+) -> Result<()> {
+    let has_scripts = lockfile
+        .packages
+        .values()
+        .any(|entry| entry.script_activation.is_some());
+    if !has_scripts {
+        return Ok(());
+    }
+
+    let vendor_dir = new_paths
+        .vendor_autoload_dir
+        .as_deref()
+        .context("Active scripts require a Numan-safe vendor-autoload directory")?;
+    let managed_file = Path::new(vendor_dir).join("numan.nu");
+
+    let mut entries = Vec::new();
+    let mut scripts = Vec::new();
+    let mut active_ids = Vec::new();
+    for (pkg_id, entry) in &lockfile.packages {
+        if let Some(ma) = &entry.module_activation {
+            entries.push(crate::nu::autoload::ResolvedEntry {
+                absolute_path: PathBuf::from(&ma.entry_path),
+                import_mode: ma.import_mode.clone(),
+                scoped_id: pkg_id.clone(),
+            });
+            active_ids.push(pkg_id.clone());
+        }
+        if let Some(sa) = &entry.script_activation {
+            for cmd in &sa.commands {
+                let resolved = crate::nu::autoload::resolve_entry(
+                    root,
+                    &entry.payload_path,
+                    &cmd.path,
+                    crate::core::package::ModuleImportMode::Module,
+                    pkg_id,
+                )
+                .with_context(|| {
+                    format!(
+                        "Active script target '{}' for '{}' no longer resolves; \
+                         deactivate and re-activate it",
+                        cmd.path, pkg_id
+                    )
+                })?;
+                scripts.push(crate::nu::autoload::ResolvedScriptCommand {
+                    scoped_id: pkg_id.clone(),
+                    name: cmd.name.clone(),
+                    script_path: resolved.absolute_path,
+                    nu_executable: new_paths.nu_executable.clone(),
+                });
+            }
+            active_ids.push(pkg_id.clone());
+        }
+    }
+
+    if old_paths.nu_executable == new_paths.nu_executable {
+        // Targets were revalidated above; wrappers already embed this Nu path.
+        return Ok(());
+    }
+
+    let content = crate::nu::autoload::generate_managed_content(&entries, &scripts)
+        .context("Failed to regenerate managed autoload content for `numan init --refresh`")?;
+    let candidate = write_candidate(&managed_file, &content)
+        .context("Failed to write managed autoload candidate for `numan init --refresh`")?;
+    let runner = runner_factory(&new_paths.nu_executable);
+    let ids: Vec<&str> = active_ids.iter().map(String::as_str).collect();
+    validate_candidate(&candidate, runner.as_ref(), &ids)?;
+    replace_managed_file(&managed_file, &candidate)?;
+
+    // Keep the projection hash in sync with the regenerated file, otherwise the
+    // next activation would report managed-file drift.
+    if let Some(mut state) = AutoloadState::load(root)? {
+        state.generated_file_sha256 = crate::state::autoload_journal::sha256_file(&managed_file)?;
+        state.save(root)?;
     }
     Ok(())
 }

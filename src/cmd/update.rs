@@ -679,7 +679,9 @@ mod tests {
     use crate::core::package::ModuleImportMode;
     use crate::state::active_plugin_mutation::EnvOverrideGuard;
     use crate::state::lifecycle_journal::PendingLifecycle;
-    use crate::state::lockfile::{Lockfile, LockfileEntry, ModuleActivation, PluginActivation};
+    use crate::state::lockfile::{
+        Lockfile, LockfileEntry, ModuleActivation, PluginActivation, ScriptActivation,
+    };
     use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
@@ -893,6 +895,23 @@ mod tests {
         };
         let err = plan_active_update(&entry, "owner/mod", &matching_nu_paths()).unwrap_err();
         assert!(err.to_string().contains("active as a module"));
+    }
+
+    #[test]
+    fn plan_active_update_rejects_script_activation() {
+        let entry = LockfileEntry {
+            script_activation: Some(ScriptActivation {
+                commands: Vec::new(),
+                vendor_autoload_dir: "/tmp/vendor".to_string(),
+                managed_file_path: "/tmp/vendor/numan.nu".to_string(),
+                nu_executable_sha256: "abc".to_string(),
+                nu_version: "0.95.0".to_string(),
+                activated_at: "0".to_string(),
+            }),
+            ..base_entry()
+        };
+        let err = plan_active_update(&entry, "owner/script", &matching_nu_paths()).unwrap_err();
+        assert!(err.to_string().contains("active as a script"));
     }
 
     struct ActiveUpdateEnv {

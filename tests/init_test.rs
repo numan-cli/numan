@@ -11,7 +11,9 @@ use numan_cli::core::package::ModuleImportMode;
 use numan_cli::nu::autoload::{CandidateRunner, FakeCandidateRunner};
 use numan_cli::nu::paths::NuPaths;
 use numan_cli::state::autoload_state::AutoloadState;
-use numan_cli::state::lockfile::{Lockfile, LockfileEntry, ModuleActivation};
+use numan_cli::state::lockfile::{
+    Lockfile, LockfileEntry, ModuleActivation, ScriptActivation, ScriptActivationCommand,
+};
 use numan_cli::util::fs_safety::OWNERSHIP_MARKER;
 use tempfile::TempDir;
 
@@ -152,6 +154,86 @@ impl InitRefreshEnv {
         );
         state.save(self.root()).unwrap();
     }
+
+    fn write_active_script_lockfile(&self, nu_exe: &Path) {
+        let payload_rel = "packages/scripts/owner/tool/1.0.0-aabbccdd";
+        let payload_abs = self.root().join(payload_rel);
+        std::fs::create_dir_all(&payload_abs).unwrap();
+        std::fs::write(payload_abs.join("tool.nu"), b"def main [] { }\n").unwrap();
+
+        let mut lockfile = Lockfile::empty();
+        lockfile.packages.insert(
+            "owner/tool".to_string(),
+            LockfileEntry {
+                package_type: "script".to_string(),
+                source: "archive".to_string(),
+                version: "1.0.0".to_string(),
+                installed_at: "now".to_string(),
+                payload_path: payload_rel.to_string(),
+                script_entry_points: Some(vec![numan_cli::core::package::ScriptEntryPoint {
+                    name: "tool".to_string(),
+                    path: "tool.nu".to_string(),
+                }]),
+                script_activation: Some(ScriptActivation {
+                    commands: vec![ScriptActivationCommand {
+                        name: "tool".to_string(),
+                        path: "tool.nu".to_string(),
+                        script_path: payload_abs.join("tool.nu").to_string_lossy().into_owned(),
+                    }],
+                    vendor_autoload_dir: self.vendor_dir_str(),
+                    managed_file_path: self.managed_file.to_string_lossy().into_owned(),
+                    nu_executable_sha256: integrity::compute_sha256(
+                        &std::fs::read(nu_exe).unwrap(),
+                    ),
+                    nu_version: "0.113.1".to_string(),
+                    activated_at: "now".to_string(),
+                }),
+                ..empty_lockfile_entry()
+            },
+        );
+        lockfile.save(self.root()).unwrap();
+    }
+}
+
+fn empty_lockfile_entry() -> LockfileEntry {
+    LockfileEntry {
+        hook_activation: None,
+        hook_bindings: None,
+        version: "1.0.0".to_string(),
+        package_type: "script".to_string(),
+        source: "archive".to_string(),
+        target: None,
+        artifact_url: None,
+        artifact_sha256: None,
+        executable_path: None,
+        archive_root: None,
+        include: None,
+        entry: None,
+        installed_at: "now".to_string(),
+        nu_version_at_install: None,
+        activation: None,
+        registry_url: None,
+        registry_revision: None,
+        index_sha256: None,
+        signing_key_fingerprint: None,
+        git_url: None,
+        git_rev: None,
+        cargo_name: None,
+        cargo_lock_sha256: None,
+        built_sha256: None,
+        payload_path: String::new(),
+        revision_id: None,
+        payload_sha256: None,
+        executable_sha256: None,
+        selection_reason: None,
+        origin: None,
+        module_activation: None,
+        module_import_mode: None,
+        overlay: None,
+        script_activation: None,
+        script_entry_points: None,
+        locked_dependencies: BTreeMap::new(),
+    }
 }
 
 fn fake_runner_factory(_exe: &str) -> Box<dyn CandidateRunner> {
@@ -198,6 +280,74 @@ fn refresh_with_active_module_revalidates_and_updates_identity() {
 
     let state = AutoloadState::load(env.root()).unwrap().unwrap();
     assert_eq!(state.nu_executable_sha256, env.hash_v2);
+}
+
+#[test]
+fn refresh_regenerates_script_wrappers_for_new_nu_executable() {
+    let env = InitRefreshEnv::new();
+    let vendor = env.vendor_dir_str();
+    let paths_v1 = env.paths(&env.nu_v1, &vendor);
+    paths_v1.save(env.root()).unwrap();
+    env.write_active_script_lockfile(&env.nu_v1);
+
+    let script_path = env
+        .root()
+        .join("packages/scripts/owner/tool/1.0.0-aabbccdd/tool.nu");
+    let managed = format!(
+        "{OWNERSHIP_MARKER}\n# numan:script owner/tool\n\
+         export def --wrapped tool [...rest: string] {{\n\
+         \x20   ^\"{}\" \"{}\" ...$rest\n\
+         }}\n",
+        env.nu_v1.to_string_lossy(),
+        script_path.to_string_lossy()
+    );
+    std::fs::write(&env.managed_file, &managed).unwrap();
+    let state = AutoloadState::new(
+        env.vendor_dir_str(),
+        env.managed_file.to_string_lossy().into_owned(),
+        env.hash_v1.clone(),
+        "0.113.1".to_string(),
+        integrity::compute_sha256(managed.as_bytes()),
+        vec!["owner/tool".to_string()],
+        "now".to_string(),
+    );
+    state.save(env.root()).unwrap();
+
+    let paths_v2 = env.paths(&env.nu_v2, &vendor);
+    let detect = {
+        let paths = paths_v2.clone();
+        move || Ok(paths.clone())
+    };
+    execute_with_runner(
+        &InitArgs { refresh: true },
+        env.root(),
+        detect,
+        fake_runner_factory,
+    )
+    .unwrap();
+
+    let content = std::fs::read_to_string(&env.managed_file).unwrap();
+    assert!(
+        content.contains(env.nu_v2.to_string_lossy().as_ref()),
+        "{content}"
+    );
+    assert!(
+        !content.contains(env.nu_v1.to_string_lossy().as_ref()),
+        "{content}"
+    );
+
+    let lockfile = Lockfile::load(env.root()).unwrap();
+    let activation = lockfile.packages["owner/tool"]
+        .script_activation
+        .as_ref()
+        .unwrap();
+    assert_eq!(activation.nu_executable_sha256, env.hash_v2);
+
+    let state = AutoloadState::load(env.root()).unwrap().unwrap();
+    assert_eq!(
+        state.generated_file_sha256,
+        integrity::compute_sha256(content.as_bytes())
+    );
 }
 
 #[test]

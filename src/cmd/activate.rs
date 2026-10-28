@@ -382,7 +382,7 @@ fn snapshot_before_activate_profile_sync(
             let entry = lockfile.packages.get(id)?;
             let kind = match entry.package_type.as_str() {
                 "plugin" => crate::state::activation_profile::ProfileKind::Plugin,
-                "module" => crate::state::activation_profile::ProfileKind::Module,
+                "module" | "script" => crate::state::activation_profile::ProfileKind::Module,
                 _ => return None,
             };
             Some((kind, id.as_str()))
@@ -1089,7 +1089,10 @@ fn execute_check(
                 lockfile
                     .packages
                     .get(*id)
-                    .map(|e| e.package_type == "module" || e.package_type == "script")
+                    .map(|e| {
+                        e.package_type == "module"
+                            || (e.package_type == "script" && e.is_script_activatable())
+                    })
                     .unwrap_or(false)
             })
             .map(|s| s.as_str())
@@ -1151,23 +1154,76 @@ fn execute_check(
         };
 
         if entry.package_type == "script" {
-            if entry.is_script_activatable() {
-                println!(
-                    "{} {}: script activatable ({} entry point(s))",
-                    console::style("✓").green(),
-                    pkg_id,
-                    entry
-                        .script_entry_points
-                        .as_ref()
-                        .map(|e| e.len())
-                        .unwrap_or(0)
-                );
-            } else {
+            if !entry.is_script_activatable() {
                 println!(
                     "{} {}: script not activatable — no declared entry points or unresolved dependencies",
                     console::style("✗").red(),
                     pkg_id
                 );
+                any_issues = true;
+                continue;
+            }
+
+            let declared = entry.script_entry_points.as_deref().unwrap_or_default();
+            let mut script_ok = true;
+            if let Err(e) = crate::core::package::validate_script_entry_points(declared) {
+                println!(
+                    "{} {}: invalid script declaration: {}",
+                    console::style("✗").red(),
+                    pkg_id,
+                    e
+                );
+                script_ok = false;
+            }
+            for ep in declared {
+                if let Err(e) = resolve_entry(
+                    root,
+                    &entry.payload_path,
+                    &ep.path,
+                    crate::core::package::ModuleImportMode::Module,
+                    pkg_id,
+                ) {
+                    println!(
+                        "{} {}: script target '{}' does not resolve: {}",
+                        console::style("✗").red(),
+                        pkg_id,
+                        ep.path,
+                        e
+                    );
+                    script_ok = false;
+                }
+            }
+            if let Some(sa) = &entry.script_activation {
+                if !entry.is_script_active_for(
+                    &nu_paths.nu_executable_hash,
+                    &nu_paths.nu_version,
+                    vendor_dir,
+                    &managed_path_str,
+                ) {
+                    println!(
+                        "{} {}: script activation record is stale for the current Nu identity",
+                        console::style("✗").red(),
+                        pkg_id
+                    );
+                    script_ok = false;
+                } else if sa.commands.is_empty() {
+                    println!(
+                        "{} {}: script activation record has no commands",
+                        console::style("✗").red(),
+                        pkg_id
+                    );
+                    script_ok = false;
+                }
+            }
+
+            if script_ok {
+                println!(
+                    "{} {}: script check passed ({} entry point(s))",
+                    console::style("✓").green(),
+                    pkg_id,
+                    declared.len()
+                );
+            } else {
                 any_issues = true;
             }
             continue;

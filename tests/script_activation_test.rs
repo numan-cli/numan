@@ -181,6 +181,9 @@ fn entry_point_validation_rejects_bad_names_and_duplicates() {
     assert!(validate_script_entry_points(&[ep("a", "x.nu"), ep("a", "y.nu")]).is_err());
     assert!(validate_script_entry_points(&[ep("a", "../escape.nu")]).is_err());
     assert!(validate_script_entry_points(&[ep("a", "x.txt")]).is_err());
+    assert!(validate_script_entry_points(&[ep("if", "x.nu")]).is_err());
+    assert!(validate_script_entry_points(&[ep("def", "x.nu")]).is_err());
+    assert!(validate_script_entry_points(&[ep("a", "x.nu"), ep("b", "./x.nu")]).is_err());
 }
 
 #[test]
@@ -332,7 +335,8 @@ fn real_nu_script_command_runs_and_forwards_exit_status() {
         script_path: script.clone(),
         nu_executable: nu.clone(),
     };
-    let rendered = numan_cli::nu::autoload::render_script_wrapper(&cmd).unwrap();
+    let rendered =
+        numan_cli::nu::autoload::generate_managed_content(&[], std::slice::from_ref(&cmd)).unwrap();
     std::fs::write(&wrapper, format!("{rendered}\nhello world\n")).unwrap();
     let out = std::process::Command::new(&nu)
         .arg("--no-config-file")

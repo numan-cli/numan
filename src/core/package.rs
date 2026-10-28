@@ -238,7 +238,8 @@ impl fmt::Display for ModuleImportMode {
 /// Each activation kind is handled only by its explicit capability command.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RegistryActivationSpec {
-    /// Activation kind. `"nu-module"`, `"nu-overlay"`, or `"nu-hook"`.
+    /// Activation kind. `"nu-module"`, `"nu-overlay"`, `"nu-hook"`, or
+    /// `"nu-script"`.
     pub kind: String,
     /// Import mode for the module. Defaults to `ModuleImportMode::Module`.
     /// Ignored for `nu-overlay` and `nu-hook`.
@@ -287,6 +288,51 @@ pub fn is_valid_script_command_name(name: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// Nushell parser keywords that cannot be used as `def` command names.
+///
+/// Emitting `export def --wrapped <keyword>` makes Nu reject the whole
+/// managed file, so these are refused at install time rather than failing
+/// activation (or every future session).
+fn is_nu_reserved_keyword(name: &str) -> bool {
+    matches!(
+        name,
+        "alias"
+            | "and"
+            | "break"
+            | "catch"
+            | "const"
+            | "continue"
+            | "def"
+            | "def-env"
+            | "else"
+            | "export"
+            | "export-env"
+            | "extern"
+            | "false"
+            | "for"
+            | "hide"
+            | "if"
+            | "in"
+            | "let"
+            | "loop"
+            | "match"
+            | "module"
+            | "mut"
+            | "not"
+            | "null"
+            | "or"
+            | "overlay"
+            | "return"
+            | "source"
+            | "source-env"
+            | "true"
+            | "try"
+            | "use"
+            | "while"
+            | "xor"
+    )
+}
+
 /// Validate a package's declared script entry points.
 ///
 /// Rejects an empty declaration, invalid or duplicate command names,
@@ -304,6 +350,12 @@ pub fn validate_script_entry_points(entry_points: &[ScriptEntryPoint]) -> Result
             bail!(
                 "Invalid script command name '{}': must start with a letter or '_' \
                  and contain only letters, digits, '_' or '-'",
+                ep.name
+            );
+        }
+        if is_nu_reserved_keyword(&ep.name) {
+            bail!(
+                "Invalid script command name '{}': reserved Nushell keyword",
                 ep.name
             );
         }
@@ -326,7 +378,11 @@ pub fn validate_script_entry_points(entry_points: &[ScriptEntryPoint]) -> Result
                 ep.path
             ),
         }
-        if !paths.insert(&ep.path) {
+        let normalized: std::path::PathBuf = rel
+            .components()
+            .filter(|c| !matches!(c, std::path::Component::CurDir))
+            .collect();
+        if !paths.insert(normalized) {
             bail!("Duplicate script entry point target '{}'", ep.path);
         }
     }

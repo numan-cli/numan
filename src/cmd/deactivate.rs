@@ -244,6 +244,7 @@ pub fn execute_with_candidate_runner_and_unregistrar(
             None => true,
             Some(e) if e.package_type == "plugin" => e.activation.is_none(),
             Some(e) if e.package_type == "module" => e.module_activation.is_none(),
+            Some(e) if e.package_type == "script" => e.script_activation.is_none(),
             _ => false,
         };
         if clear {
@@ -300,7 +301,9 @@ fn snapshot_before_deactivate_profile_sync(
             Some(entry) => {
                 let kind = match entry.package_type.as_str() {
                     "plugin" => Some(crate::state::activation_profile::ProfileKind::Plugin),
-                    "module" => Some(crate::state::activation_profile::ProfileKind::Module),
+                    "module" | "script" => {
+                        Some(crate::state::activation_profile::ProfileKind::Module)
+                    }
                     _ => None,
                 };
                 kind.map(|k| vec![(k, id.as_str())]).unwrap_or_default()

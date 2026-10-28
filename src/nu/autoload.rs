@@ -284,6 +284,18 @@ fn escape_nu_string_literal(value: &str) -> String {
 /// would break that: Nu aborts the calling script on a failed captured
 /// external before user code can forward anything.
 pub fn render_script_wrapper(command: &ResolvedScriptCommand) -> Result<String> {
+    if command.scoped_id.chars().any(|c| c.is_control()) {
+        bail!(
+            "Script package ID '{}' contains control characters",
+            command.scoped_id.escape_debug()
+        );
+    }
+    if !crate::core::package::is_valid_script_command_name(&command.name) {
+        bail!(
+            "Invalid script command name '{}'",
+            command.name.escape_debug()
+        );
+    }
     let script = command.script_path.to_str().with_context(|| {
         format!(
             "Script path '{}' is not valid UTF-8",
@@ -295,7 +307,7 @@ pub fn render_script_wrapper(command: &ResolvedScriptCommand) -> Result<String> 
     Ok(format!(
         "# numan:script {scoped}\n\
          export def --wrapped {name} [...rest: string] {{\n\
-         \x20   $in | ^\"{nu}\" \"{script}\" ...$rest\n\
+         \x20   ^\"{nu}\" \"{script}\" ...$rest\n\
          }}",
         scoped = command.scoped_id,
         name = command.name,
@@ -465,22 +477,25 @@ pub fn write_candidate(managed_file: &Path, content: &str) -> Result<PathBuf> {
     Ok(candidate_path)
 }
 
-/// Generate a compact random identifier for a candidate file name.
+/// Generate a compact identifier for a candidate file name.
 ///
-/// Uses 8 random hex characters (32 bits of entropy), which is sufficient
-/// for temporary file name collision avoidance within a single directory.
+/// Combines a nanosecond timestamp, the process ID, and a per-process
+/// counter so concurrent Numan invocations and repeated calls within one
+/// process cannot select the same candidate path.
 fn generate_candidate_id() -> String {
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
-    // Mix timestamp with a thread-id-derived salt for uniqueness.
-    // We don't need cryptographic randomness here — just something unique
-    // enough to avoid collisions between concurrent Numan invocations.
+    // Mix the nanosecond timestamp with the process ID and a per-process
+    // counter. Concurrent Numan processes share the timestamp resolution but
+    // not their PIDs, and same-process calls are separated by the counter.
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .subsec_nanos();
-    let tid = std::thread::current().id();
-    // Combine into a short hex string.
-    format!("{ts:08x}{:04x}", format!("{tid:?}").len())
+    let pid = std::process::id();
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{ts:08x}{pid:08x}{seq:04x}")
 }
 
 // ── Candidate validation ──────────────────────────────────────────────────────

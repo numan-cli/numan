@@ -487,14 +487,18 @@ impl App {
                         && entry.script_activation.is_none() =>
                 {
                     let mut actions = vec![Action::Remove];
-                    if matches!(row.kind.as_str(), "plugin" | "module" | "script") {
+                    if matches!(row.kind.as_str(), "plugin" | "module")
+                        || (row.kind.as_str() == "script" && entry.is_script_activatable())
+                    {
                         actions.insert(0, Action::Activate);
                     }
                     actions
                 }
-                Some(_)
+                Some(entry)
                     if row.state != "active"
-                        && matches!(row.kind.as_str(), "plugin" | "module" | "script") =>
+                        && (matches!(row.kind.as_str(), "plugin" | "module")
+                            || (row.kind.as_str() == "script"
+                                && entry.is_script_activatable())) =>
                 {
                     vec![Action::Activate]
                 }

@@ -20,7 +20,7 @@
   ```nu
   # numan:script <owner/name>
   export def --wrapped <name> [...rest: string] {
-      $in | ^"<nu>" "<script>" ...$rest
+      ^"<nu>" "<script>" ...$rest
   }
   ```
 
@@ -30,10 +30,10 @@
   non-zero external exit itself; capturing the output was rejected
   because Nu aborts the caller on a failed captured external before
   anything can be forwarded). Known limitation, verified against Nu
-  0.116.1: pipeline input is not forwarded — Nushell does not feed a
-  pipeline value into a child script's `$in`, so scripts that read
-  stdin will see it empty. It never sources the script, so script
-  code runs only when the user invokes the command.
+  0.116.1: pipeline input is not forwarded — the wrapper does not pipe
+  `$in` into the child, so a script that reads stdin inherits the
+  caller's stdin rather than the pipeline value. It never sources the
+  script, so script code runs only when the user invokes the command.
 - The managed file goes through the existing candidate-validation,
   journal, drift, and recovery machinery; the lockfile ground truth is a
   per-package `script_activation` record with the same Nu-identity fields
@@ -41,9 +41,16 @@
 - Deactivation removes exactly the package's wrappers and clears its
   record. Update/remove follow the existing autoload reconciliation.
 - `numan info` displays declared script entry points before activation.
+- `numan init --refresh` re-resolves active script targets and regenerates
+  the managed file when the Nu executable path changes, so wrappers do not
+  keep invoking a stale binary.
 
 ## Non-goals
 
 - Arbitrary (non-Nushell) scripts or binaries.
 - Auto-executing scripts on install or activate.
 - Completion packages (issue #15) — same generated-file discipline, later.
+- Rejecting declared names that shadow Nushell built-ins or exports of
+  modules imported with `import: all`. Public names are registry-curated,
+  and cross-package collision checks cover script packages only; built-in
+  shadowing is a package-curation concern rather than an activation check.

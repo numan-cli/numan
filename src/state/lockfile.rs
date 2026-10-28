@@ -728,6 +728,98 @@ mod tests {
     }
 
     #[test]
+    fn is_script_active_for_matches_correctly() {
+        let entry = LockfileEntry {
+            package_type: "script".to_string(),
+            script_activation: Some(ScriptActivation {
+                commands: Vec::new(),
+                vendor_autoload_dir: "/nu/vendor/autoload".to_string(),
+                managed_file_path: "/nu/vendor/autoload/numan.nu".to_string(),
+                nu_executable_sha256: "exe-hash".to_string(),
+                nu_version: "0.113.1".to_string(),
+                activated_at: "0".to_string(),
+            }),
+            ..make_base_entry()
+        };
+
+        assert!(entry.is_script_active_for(
+            "exe-hash",
+            "0.113.1",
+            "/nu/vendor/autoload",
+            "/nu/vendor/autoload/numan.nu"
+        ));
+        assert!(!entry.is_script_active_for(
+            "wrong-hash",
+            "0.113.1",
+            "/nu/vendor/autoload",
+            "/nu/vendor/autoload/numan.nu"
+        ));
+        assert!(!entry.is_script_active_for(
+            "exe-hash",
+            "0.114.0",
+            "/nu/vendor/autoload",
+            "/nu/vendor/autoload/numan.nu"
+        ));
+        assert!(!entry.is_script_active_for(
+            "exe-hash",
+            "0.113.1",
+            "/other/vendor/autoload",
+            "/nu/vendor/autoload/numan.nu"
+        ));
+        assert!(!entry.is_script_active_for(
+            "exe-hash",
+            "0.113.1",
+            "/nu/vendor/autoload",
+            "/other/path/numan.nu"
+        ));
+    }
+
+    #[test]
+    fn is_script_activatable_requires_entry_points_and_no_deps() {
+        use crate::core::package::ScriptEntryPoint;
+
+        let ready = LockfileEntry {
+            package_type: "script".to_string(),
+            script_entry_points: Some(vec![ScriptEntryPoint {
+                name: "run".to_string(),
+                path: "run.nu".to_string(),
+            }]),
+            locked_dependencies: BTreeMap::new(),
+            ..make_base_entry()
+        };
+        assert!(ready.is_script_activatable());
+
+        let no_points = LockfileEntry {
+            package_type: "script".to_string(),
+            script_entry_points: None,
+            ..make_base_entry()
+        };
+        assert!(!no_points.is_script_activatable());
+
+        let empty_points = LockfileEntry {
+            package_type: "script".to_string(),
+            script_entry_points: Some(Vec::new()),
+            ..make_base_entry()
+        };
+        assert!(!empty_points.is_script_activatable());
+
+        let with_deps = LockfileEntry {
+            package_type: "script".to_string(),
+            script_entry_points: Some(vec![ScriptEntryPoint {
+                name: "run".to_string(),
+                path: "run.nu".to_string(),
+            }]),
+            locked_dependencies: {
+                let mut m = BTreeMap::new();
+                m.insert("owner/dep".to_string(), "^1.0.0".to_string());
+                m
+            },
+            ..make_base_entry()
+        };
+        assert!(!with_deps.is_script_activatable());
+    }
+
+    #[test]
     fn is_module_activatable_requires_mode_entry_and_no_deps() {
         use crate::core::package::ModuleImportMode;
 
