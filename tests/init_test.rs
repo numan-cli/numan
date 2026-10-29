@@ -236,6 +236,10 @@ fn empty_lockfile_entry() -> LockfileEntry {
     }
 }
 
+fn nu_string_literal(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 fn fake_runner_factory(_exe: &str) -> Box<dyn CandidateRunner> {
     Box::new(FakeCandidateRunner::success())
 }
@@ -298,8 +302,8 @@ fn refresh_regenerates_script_wrappers_for_new_nu_executable() {
          export def --wrapped tool [...rest: string] {{\n\
          \x20   ^\"{}\" \"{}\" ...$rest\n\
          }}\n",
-        env.nu_v1.to_string_lossy(),
-        script_path.to_string_lossy()
+        nu_string_literal(env.nu_v1.to_string_lossy().as_ref()),
+        nu_string_literal(script_path.to_string_lossy().as_ref())
     );
     std::fs::write(&env.managed_file, &managed).unwrap();
     let state = AutoloadState::new(
@@ -327,14 +331,10 @@ fn refresh_regenerates_script_wrappers_for_new_nu_executable() {
     .unwrap();
 
     let content = std::fs::read_to_string(&env.managed_file).unwrap();
-    assert!(
-        content.contains(env.nu_v2.to_string_lossy().as_ref()),
-        "{content}"
-    );
-    assert!(
-        !content.contains(env.nu_v1.to_string_lossy().as_ref()),
-        "{content}"
-    );
+    let nu_v2_literal = nu_string_literal(env.nu_v2.to_string_lossy().as_ref());
+    let nu_v1_literal = nu_string_literal(env.nu_v1.to_string_lossy().as_ref());
+    assert!(content.contains(&nu_v2_literal), "{content}");
+    assert!(!content.contains(&nu_v1_literal), "{content}");
 
     let lockfile = Lockfile::load(env.root()).unwrap();
     let activation = lockfile.packages["owner/tool"]
