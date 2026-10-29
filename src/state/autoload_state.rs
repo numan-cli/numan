@@ -107,6 +107,40 @@ impl AutoloadState {
         ids
     }
 
+    /// Sorted IDs of every package contributing to the managed autoload
+    /// file for this Nu identity: active modules plus active scripts
+    /// (issue #14). The state file's `active_module_ids` field stores this
+    /// combined projection; the name predates script activation and is
+    /// kept for schema compatibility.
+    pub fn active_autoload_ids_from_lockfile(
+        lockfile: &Lockfile,
+        nu_executable_sha256: &str,
+        nu_version: &str,
+        vendor_autoload_dir: &str,
+        managed_file_path: &str,
+    ) -> Vec<String> {
+        let mut ids = Self::active_module_ids_from_lockfile(
+            lockfile,
+            nu_executable_sha256,
+            nu_version,
+            vendor_autoload_dir,
+            managed_file_path,
+        );
+        for (id, entry) in &lockfile.packages {
+            if entry.is_script_active_for(
+                nu_executable_sha256,
+                nu_version,
+                vendor_autoload_dir,
+                managed_file_path,
+            ) && !ids.contains(id)
+            {
+                ids.push(id.clone());
+            }
+        }
+        ids.sort();
+        ids
+    }
+
     /// Validate that this projection agrees with the current lockfile state.
     ///
     /// Returns an error describing the disagreement if any of the following hold:
@@ -125,7 +159,7 @@ impl AutoloadState {
             );
         }
 
-        let expected = Self::active_module_ids_from_lockfile(
+        let expected = Self::active_autoload_ids_from_lockfile(
             lockfile,
             &self.nu_executable_sha256,
             &self.nu_version,
@@ -252,6 +286,8 @@ mod tests {
                     }),
                     module_import_mode: Some(ModuleImportMode::Module),
                     overlay: None,
+                    script_activation: None,
+                    script_entry_points: None,
                     locked_dependencies: BTreeMap::new(),
                 },
             );

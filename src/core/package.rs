@@ -238,7 +238,8 @@ impl fmt::Display for ModuleImportMode {
 /// Each activation kind is handled only by its explicit capability command.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RegistryActivationSpec {
-    /// Activation kind. `"nu-module"`, `"nu-overlay"`, or `"nu-hook"`.
+    /// Activation kind. `"nu-module"`, `"nu-overlay"`, `"nu-hook"`, or
+    /// `"nu-script"`.
     pub kind: String,
     /// Import mode for the module. Defaults to `ModuleImportMode::Module`.
     /// Ignored for `nu-overlay` and `nu-hook`.
@@ -257,6 +258,135 @@ pub struct RegistryActivationSpec {
     /// Hook bindings. Used when `kind = "nu-hook"`.
     #[serde(default)]
     pub bindings: Option<Vec<HookBinding>>,
+    /// Declared script entry points. Only meaningful for `"nu-script"`.
+    #[serde(default)]
+    pub entry_points: Vec<ScriptEntryPoint>,
+}
+
+/// One public command contributed by a script package (issue #14).
+///
+/// `name` is the stable public command name users type in a fresh Nu
+/// session after activation; `path` is the package-relative `.nu` target
+/// that runs when the command is invoked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScriptEntryPoint {
+    pub name: String,
+    pub path: String,
+}
+
+/// Whether `name` is a valid public script command name.
+///
+/// Names are emitted unquoted into the generated autoload file, so the
+/// grammar is deliberately small: an ASCII letter or `_`, followed by
+/// letters, digits, `_`, or `-`.
+pub fn is_valid_script_command_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Nushell parser keywords that cannot be used as `def` command names.
+///
+/// Emitting `export def --wrapped <keyword>` makes Nu reject the whole
+/// managed file, so these are refused at install time rather than failing
+/// activation (or every future session).
+fn is_nu_reserved_keyword(name: &str) -> bool {
+    matches!(
+        name,
+        "alias"
+            | "and"
+            | "break"
+            | "catch"
+            | "const"
+            | "continue"
+            | "def"
+            | "def-env"
+            | "else"
+            | "export"
+            | "export-env"
+            | "extern"
+            | "false"
+            | "for"
+            | "hide"
+            | "if"
+            | "in"
+            | "let"
+            | "loop"
+            | "match"
+            | "module"
+            | "mut"
+            | "not"
+            | "null"
+            | "or"
+            | "overlay"
+            | "return"
+            | "source"
+            | "source-env"
+            | "true"
+            | "try"
+            | "use"
+            | "while"
+            | "xor"
+    )
+}
+
+/// Validate a package's declared script entry points.
+///
+/// Rejects an empty declaration, invalid or duplicate command names,
+/// duplicate targets, and targets that are not safe package-relative
+/// `.nu` paths. File existence is checked later, at activation time,
+/// against the installed payload.
+pub fn validate_script_entry_points(entry_points: &[ScriptEntryPoint]) -> Result<()> {
+    if entry_points.is_empty() {
+        bail!("Script activation requires at least one entry point");
+    }
+    let mut names = std::collections::BTreeSet::new();
+    let mut paths = std::collections::BTreeSet::new();
+    for ep in entry_points {
+        if !is_valid_script_command_name(&ep.name) {
+            bail!(
+                "Invalid script command name '{}': must start with a letter or '_' \
+                 and contain only letters, digits, '_' or '-'",
+                ep.name
+            );
+        }
+        if is_nu_reserved_keyword(&ep.name) {
+            bail!(
+                "Invalid script command name '{}': reserved Nushell keyword",
+                ep.name
+            );
+        }
+        if !names.insert(&ep.name) {
+            bail!("Duplicate script command name '{}'", ep.name);
+        }
+        let rel = std::path::Path::new(&ep.path);
+        if !crate::util::fs_safety::is_safe_relative_path(rel) {
+            bail!(
+                "Script entry point '{}': target '{}' is not a safe package-relative path",
+                ep.name,
+                ep.path
+            );
+        }
+        match rel.extension() {
+            Some(ext) if ext == "nu" => {}
+            _ => bail!(
+                "Script entry point '{}': target '{}' does not have a '.nu' extension",
+                ep.name,
+                ep.path
+            ),
+        }
+        let normalized: std::path::PathBuf = rel
+            .components()
+            .filter(|c| !matches!(c, std::path::Component::CurDir))
+            .collect();
+        if !paths.insert(normalized) {
+            bail!("Duplicate script entry point target '{}'", ep.path);
+        }
+    }
+    Ok(())
 }
 
 /// A single hook binding declared by a package (issue #16).

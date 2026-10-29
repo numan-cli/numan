@@ -225,9 +225,9 @@ pub fn execute_reviewed(
             None => {
                 // Fail closed: without cached NuPaths we cannot verify activation
                 // identity, so refuse active plugins/modules instead of Plain.
-                if current.module_activation.is_some() {
+                if current.module_activation.is_some() || current.script_activation.is_some() {
                     let e = anyhow::anyhow!(
-                        "Package '{}' is currently active as a module. \
+                        "Package '{}' is currently active. \
                          Run `numan deactivate {}` first, then run update again.",
                         update.package_id,
                         update.package_id
@@ -638,6 +638,14 @@ fn plan_active_update(
             pkg_id
         );
     }
+    if entry.script_activation.is_some() {
+        bail!(
+            "Package '{}' is currently active as a script. \
+             Run `numan deactivate {}` first, then run update again.",
+            pkg_id,
+            pkg_id
+        );
+    }
     if entry.activation.is_some() {
         let matching = entry.is_active_for(
             &nu_paths.nu_executable_hash,
@@ -671,7 +679,9 @@ mod tests {
     use crate::core::package::ModuleImportMode;
     use crate::state::active_plugin_mutation::EnvOverrideGuard;
     use crate::state::lifecycle_journal::PendingLifecycle;
-    use crate::state::lockfile::{Lockfile, LockfileEntry, ModuleActivation, PluginActivation};
+    use crate::state::lockfile::{
+        Lockfile, LockfileEntry, ModuleActivation, PluginActivation, ScriptActivation,
+    };
     use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
@@ -750,6 +760,8 @@ mod tests {
             module_activation: None,
             module_import_mode: None,
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: BTreeMap::new(),
         }
     }
@@ -885,6 +897,23 @@ mod tests {
         assert!(err.to_string().contains("active as a module"));
     }
 
+    #[test]
+    fn plan_active_update_rejects_script_activation() {
+        let entry = LockfileEntry {
+            script_activation: Some(ScriptActivation {
+                commands: Vec::new(),
+                vendor_autoload_dir: "/tmp/vendor".to_string(),
+                managed_file_path: "/tmp/vendor/numan.nu".to_string(),
+                nu_executable_sha256: "abc".to_string(),
+                nu_version: "0.95.0".to_string(),
+                activated_at: "0".to_string(),
+            }),
+            ..base_entry()
+        };
+        let err = plan_active_update(&entry, "owner/script", &matching_nu_paths()).unwrap_err();
+        assert!(err.to_string().contains("active as a script"));
+    }
+
     struct ActiveUpdateEnv {
         _dir: TempDir,
         root: PathBuf,
@@ -964,6 +993,8 @@ mod tests {
                     module_activation: None,
                     module_import_mode: None,
                     overlay: None,
+                    script_activation: None,
+                    script_entry_points: None,
                     locked_dependencies: BTreeMap::new(),
                 },
             );

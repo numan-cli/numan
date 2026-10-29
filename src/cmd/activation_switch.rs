@@ -120,6 +120,18 @@ pub fn collect_currently_active(lockfile: &Lockfile, nu_paths: &NuPaths) -> Mino
             {
                 set.modules.push(id.clone());
             }
+            // Scripts share the managed autoload file with modules, so
+            // they travel in the same profile list (issue #14).
+            "script"
+                if entry.is_script_active_for(
+                    &nu_paths.nu_executable_hash,
+                    &nu_paths.nu_version,
+                    vendor_dir,
+                    &managed_path,
+                ) =>
+            {
+                set.modules.push(id.clone());
+            }
             _ => {}
         }
     }
@@ -182,10 +194,9 @@ pub fn leave_current_nu(
         // Without NuPaths we cannot match is_active_for. Fail closed when any
         // activation record exists at all (plugins with activation or modules
         // with module_activation).
-        let any_activation = lockfile
-            .packages
-            .values()
-            .any(|e| e.activation.is_some() || e.module_activation.is_some());
+        let any_activation = lockfile.packages.values().any(|e| {
+            e.activation.is_some() || e.module_activation.is_some() || e.script_activation.is_some()
+        });
         if any_activation {
             bail!(
                 "Cannot switch Nu version: packages have activation records but \
@@ -323,7 +334,12 @@ fn restore_desired(
         .modules
         .iter()
         .filter_map(|id| {
-            match classify_restore_target(&lockfile, registry.as_ref(), &resolver, id, "module") {
+            // Autoload profile list holds modules and scripts (issue #14).
+            let expected = match lockfile.packages.get(id) {
+                Some(e) if e.package_type == "script" => "script",
+                _ => "module",
+            };
+            match classify_restore_target(&lockfile, registry.as_ref(), &resolver, id, expected) {
                 RestoreClass::Missing => {
                     report.skipped_missing.push(id.clone());
                     None
@@ -584,7 +600,8 @@ pub fn sync_profile_after_user_activate(
         };
         let kind = match entry.package_type.as_str() {
             "plugin" => ProfileKind::Plugin,
-            "module" => ProfileKind::Module,
+            // Scripts share the module (autoload) profile list.
+            "module" | "script" => ProfileKind::Module,
             _ => continue,
         };
         activation_profile::ensure_contains_for_paths(root, nu_version, kind, id)?;
@@ -608,7 +625,7 @@ pub fn sync_profile_after_user_deactivate(
         };
         let kind = match entry.package_type.as_str() {
             "plugin" => ProfileKind::Plugin,
-            "module" => ProfileKind::Module,
+            "module" | "script" => ProfileKind::Module,
             _ => continue,
         };
         activation_profile::ensure_absent_for_paths(root, nu_version, kind, id)?;
@@ -750,6 +767,8 @@ mod tests {
             module_activation: None,
             module_import_mode: None,
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: BTreeMap::new(),
         }
     }
@@ -799,6 +818,8 @@ mod tests {
             }),
             module_import_mode: Some(crate::core::package::ModuleImportMode::Module),
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: BTreeMap::new(),
         }
     }
@@ -1016,6 +1037,8 @@ mod tests {
                 module_activation: None,
                 module_import_mode: None,
                 overlay: None,
+                script_activation: None,
+                script_entry_points: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );

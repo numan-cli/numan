@@ -70,9 +70,17 @@ pub fn execute_reviewed(
     ensure_plugin_not_active(&entry, &args.package)?;
     ensure_not_bundled_plugin(&entry, &args.package)?;
     ensure_hooks_disabled(root, &args.package)?;
+    if entry.script_activation.is_some() {
+        bail!(
+            "Package '{}' is currently active as a script. \
+             Run `numan deactivate {}` first.",
+            args.package,
+            args.package
+        );
+    }
     if !args.force && entry.module_activation.is_some() {
         bail!(
-            "Package '{}' is currently active as a module. \
+            "Package '{}' is currently active. \
              Run `numan deactivate {}` first or use --force.",
             args.package,
             args.package
@@ -108,9 +116,17 @@ pub fn execute_reviewed(
     ensure_plugin_not_active(&entry, &args.package)?;
     ensure_not_bundled_plugin(&entry, &args.package)?;
     ensure_hooks_disabled(root, &args.package)?;
+    if entry.script_activation.is_some() {
+        bail!(
+            "Package '{}' is currently active as a script. \
+             Run `numan deactivate {}` first.",
+            args.package,
+            args.package
+        );
+    }
     if !args.force && entry.module_activation.is_some() {
         bail!(
-            "Package '{}' is currently active as a module. \
+            "Package '{}' is currently active. \
              Run `numan deactivate {}` first or use --force.",
             args.package,
             args.package
@@ -237,7 +253,9 @@ fn ensure_not_bundled_plugin(entry: &LockfileEntry, pkg_id: &str) -> Result<()> 
 mod tests {
     use super::*;
     use crate::core::package::ModuleImportMode;
-    use crate::state::lockfile::{LockfileEntry, ModuleActivation, PluginActivation};
+    use crate::state::lockfile::{
+        LockfileEntry, ModuleActivation, PluginActivation, ScriptActivation,
+    };
     use std::collections::BTreeMap;
 
     fn base_entry() -> LockfileEntry {
@@ -275,6 +293,8 @@ mod tests {
             module_activation: None,
             module_import_mode: None,
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: BTreeMap::new(),
         }
     }
@@ -344,12 +364,19 @@ mod tests {
         }
     }
 
-    /// Mirrors the execute() guard order: plugin gate always, module only without --force.
+    /// Mirrors the execute() guard order: plugin gate always, scripts always,
+    /// module only without --force.
     fn ensure_removable(entry: &LockfileEntry, pkg_id: &str, force: bool) -> Result<()> {
         ensure_plugin_not_active(entry, pkg_id)?;
+        if entry.script_activation.is_some() {
+            bail!(
+                "Package '{pkg_id}' is currently active as a script. \
+                 Run `numan deactivate {pkg_id}` first."
+            );
+        }
         if !force && entry.module_activation.is_some() {
             bail!(
-                "Package '{pkg_id}' is currently active as a module. \
+                "Package '{pkg_id}' is currently active. \
                  Run `numan deactivate {pkg_id}` first or use --force."
             );
         }
@@ -484,7 +511,7 @@ mod tests {
             ..base_entry()
         };
         let err = ensure_removable(&entry, "owner/mod", false).unwrap_err();
-        assert!(err.to_string().contains("active as a module"));
+        assert!(err.to_string().contains("currently active"));
     }
 
     #[test]
@@ -495,6 +522,25 @@ mod tests {
             ..base_entry()
         };
         ensure_removable(&entry, "owner/mod", true).unwrap();
+    }
+
+    #[test]
+    fn refuse_active_script_even_with_force() {
+        let entry = LockfileEntry {
+            package_type: "script".to_string(),
+            script_activation: Some(ScriptActivation {
+                commands: Vec::new(),
+                vendor_autoload_dir: "/tmp/vendor".to_string(),
+                managed_file_path: "/tmp/vendor/numan.nu".to_string(),
+                nu_executable_sha256: "abc".to_string(),
+                nu_version: "0.95.0".to_string(),
+                activated_at: "0".to_string(),
+            }),
+            ..base_entry()
+        };
+        let err = ensure_removable(&entry, "owner/script", true).unwrap_err();
+        assert!(err.to_string().contains("active as a script"));
+        assert!(err.to_string().contains("deactivate"));
     }
 
     #[test]

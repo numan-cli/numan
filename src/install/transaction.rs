@@ -399,6 +399,24 @@ pub fn install_package(
     // A malformed declaration must not leave an orphaned immutable install.
     let hook_bindings = persist_hook_bindings(resolved.activation.as_ref(), &id.to_string())?;
 
+    // Validate declared script entry points before promotion too (issue #14):
+    // an invalid declaration must fail the install before the immutable payload
+    // is renamed into place, otherwise `--force` could replace a payload that
+    // the lockfile still references.
+    let script_entry_points = match resolved.activation.as_ref() {
+        Some(spec) if spec.kind == "nu-script" => {
+            if pkg.package_type != crate::core::package::PackageType::Script {
+                bail!(
+                    "Package {id} declares activation kind 'nu-script' but is not a script package"
+                );
+            }
+            crate::core::package::validate_script_entry_points(&spec.entry_points)
+                .with_context(|| format!("Invalid script activation declaration for {id}"))?;
+            Some(spec.entry_points.clone())
+        }
+        _ => None,
+    };
+
     // 9. Snapshot lockfile before mutation (after download/extraction preflight succeeds).
     // Skip when the lockfile is empty — there is no prior state worth restoring.
     if !Lockfile::load(options.root)?.packages.is_empty() {
@@ -449,6 +467,8 @@ pub fn install_package(
         .filter(|spec| spec.kind == "nu-module")
         .map(|spec| spec.import.clone());
 
+    // Persist declared script entry points only for "nu-script" specs on
+    // script packages (issue #14); validated before promotion above.
     let overlay = overlay_package_spec(resolved.activation.as_ref(), &pkg.package_type, &id)?;
     let locked_dependencies: BTreeMap<String, String> = resolved
         .dependencies
@@ -496,6 +516,8 @@ pub fn install_package(
         module_activation: None,
         module_import_mode,
         overlay,
+        script_activation: None,
+        script_entry_points,
         locked_dependencies,
     };
 

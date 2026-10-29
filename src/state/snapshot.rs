@@ -684,7 +684,7 @@ fn capture_autoload(
     let sha256 = compute_sha256(content.as_bytes());
 
     let active_module_ids = if let Some(ref identity) = nu_identity {
-        AutoloadState::active_module_ids_from_lockfile(
+        AutoloadState::active_autoload_ids_from_lockfile(
             &Lockfile::load(root)?,
             &identity.nu_executable_sha256,
             &identity.nu_version,
@@ -918,6 +918,8 @@ mod tests {
             module_activation: None,
             module_import_mode: None,
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: BTreeMap::new(),
         }
     }

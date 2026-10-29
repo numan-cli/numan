@@ -699,6 +699,8 @@ mod tests {
             hook_bindings: None,
             module_import_mode: None,
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: BTreeMap::new(),
         }
     }

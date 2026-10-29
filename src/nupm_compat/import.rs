@@ -596,6 +596,8 @@ fn commit_imports(
             module_activation: None,
             module_import_mode: Some(ModuleImportMode::Module),
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: BTreeMap::new(),
         };
         lockfile.packages.insert(resolved.package_id.clone(), entry);
@@ -979,6 +981,8 @@ mod tests {
             module_activation: None,
             module_import_mode: None,
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: BTreeMap::new(),
         }
     }

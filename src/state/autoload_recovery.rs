@@ -101,6 +101,45 @@ fn apply_replaced_transition(
         let entry = lockfile.packages.get_mut(package_id).ok_or_else(|| {
             anyhow!("Cannot recover module '{package_id}': package is missing from lockfile")
         })?;
+        if entry.package_type == "script" {
+            // Script activation record (issue #14): rebuild unconditionally
+            // from the persisted declaration, with targets re-validated
+            // through the same containment/regular-file rules as normal
+            // activation. A missing declaration cannot be completed.
+            let declared = entry.script_entry_points.clone().unwrap_or_default();
+            if declared.is_empty() {
+                bail!(
+                    "Cannot recover script '{package_id}': lockfile has no persisted entry points"
+                );
+            }
+            crate::core::package::validate_script_entry_points(&declared).map_err(|e| {
+                anyhow!("Cannot recover script '{package_id}': invalid persisted entry points: {e}")
+            })?;
+            let mut commands = Vec::new();
+            for ep in &declared {
+                let resolved = crate::nu::autoload::resolve_entry(
+                    root,
+                    &entry.payload_path,
+                    &ep.path,
+                    ModuleImportMode::Module,
+                    package_id,
+                )?;
+                commands.push(crate::state::lockfile::ScriptActivationCommand {
+                    name: ep.name.clone(),
+                    path: ep.path.clone(),
+                    script_path: resolved.absolute_path.to_string_lossy().into_owned(),
+                });
+            }
+            entry.script_activation = Some(crate::state::lockfile::ScriptActivation {
+                commands,
+                vendor_autoload_dir: journal.vendor_autoload_dir.clone(),
+                managed_file_path: journal.managed_file_path.clone(),
+                nu_executable_sha256: nu_paths.nu_executable_hash.clone(),
+                nu_version: nu_paths.nu_version.clone(),
+                activated_at: activated_at.clone(),
+            });
+            continue;
+        }
         if entry.package_type != "module" {
             bail!(
                 "Cannot recover module '{}': lockfile type is '{}'",
@@ -142,6 +181,15 @@ fn apply_replaced_transition(
         if should_clear {
             entry.module_activation = None;
         }
+        let should_clear_script = entry.script_activation.as_ref().is_some_and(|a| {
+            a.nu_executable_sha256 == journal.nu_executable_sha256
+                && a.nu_version == journal.nu_version
+                && a.vendor_autoload_dir == journal.vendor_autoload_dir
+                && a.managed_file_path == journal.managed_file_path
+        });
+        if should_clear_script {
+            entry.script_activation = None;
+        }
     }
 
     if journal.operation == AutoloadOperation::Deactivate {
@@ -156,6 +204,7 @@ fn apply_replaced_transition(
             }
             if let Some(entry) = lockfile.packages.get_mut(package_id) {
                 entry.module_activation = None;
+                entry.script_activation = None;
             }
         }
     }
@@ -188,8 +237,17 @@ fn reconstruct_entry_path(root: &Path, package_id: &str, entry: &LockfileEntry) 
     if entry.payload_path.is_empty() {
         bail!("Cannot recover module '{package_id}': payload_path is not set in lockfile");
     }
-    root.join(&entry.payload_path)
-        .join(relative_entry)
+    // Route through the same containment/canonicalization rules as normal
+    // activation; a crafted lockfile entry must not escape the payload.
+    let resolved = crate::nu::autoload::resolve_entry(
+        root,
+        &entry.payload_path,
+        relative_entry,
+        ModuleImportMode::Module,
+        package_id,
+    )?;
+    resolved
+        .absolute_path
         .to_str()
         .map(ToOwned::to_owned)
         .ok_or_else(|| {

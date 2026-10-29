@@ -4,8 +4,8 @@ use clap::Args;
 use std::path::{Component, Path, PathBuf};
 
 use crate::nu::autoload::{
-    generate_autoload_content, replace_managed_file, resolve_entry, validate_candidate,
-    write_candidate, CandidateRunner, NuCandidateRunner,
+    generate_managed_content, replace_managed_file, resolve_entry, validate_candidate,
+    write_candidate, CandidateRunner, NuCandidateRunner, ResolvedScriptCommand,
 };
 use crate::nu::paths::NuPaths;
 use crate::state::autoload_journal::{sha256_file, SCHEMA_VERSION as AUTOLOAD_SCHEMA_VERSION};
@@ -13,7 +13,9 @@ use crate::state::autoload_journal::{AutoloadOperation, AutoloadStage, PendingAu
 use crate::state::autoload_recovery::reconcile_pending_autoload;
 use crate::state::autoload_state::AutoloadState;
 use crate::state::journal::{PendingActivation, PendingActivationEntry, PendingStatus};
-use crate::state::lockfile::{Lockfile, ModuleActivation, PluginActivation};
+use crate::state::lockfile::{
+    Lockfile, ModuleActivation, PluginActivation, ScriptActivation, ScriptActivationCommand,
+};
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::format_timestamp;
 
@@ -56,6 +58,14 @@ struct ModuleTarget {
     payload_path: String,
     entry_relative: String,
     import_mode: crate::core::package::ModuleImportMode,
+}
+
+/// Resolved script target ready for autoload generation (issue #14).
+#[derive(Debug)]
+struct ScriptTarget {
+    package_id: String,
+    payload_path: String,
+    entry_points: Vec<crate::core::package::ScriptEntryPoint>,
 }
 
 /// `plugin add` Nu program — paths come only from environment variables.
@@ -168,10 +178,10 @@ fn execute_activating(
         Some(acquire_mutation_lock(root)?)
     };
 
-    let (plugin_targets, module_targets, managed_file_path) =
+    let (plugin_targets, module_targets, script_targets, managed_file_path) =
         prepare_activation_targets(args, root, &nu_paths)?;
 
-    if plugin_targets.is_empty() && module_targets.is_empty() {
+    if plugin_targets.is_empty() && module_targets.is_empty() && script_targets.is_empty() {
         let lockfile = Lockfile::load(root)?;
         snapshot_before_activate_profile_sync(root, &nu_paths, args, &lockfile)?;
         sync_user_activate_profile(root, &nu_paths, args, &lockfile)?;
@@ -198,6 +208,7 @@ fn execute_activating(
             runner,
             plugin_targets,
             module_targets,
+            script_targets,
             managed_file_path,
         );
     }
@@ -211,10 +222,10 @@ fn execute_activating(
     );
 
     let _lock = acquire_mutation_lock(root)?;
-    let (plugin_targets, module_targets, managed_file_path) =
+    let (plugin_targets, module_targets, script_targets, managed_file_path) =
         prepare_activation_targets(args, root, &nu_paths)?;
 
-    if plugin_targets.is_empty() && module_targets.is_empty() {
+    if plugin_targets.is_empty() && module_targets.is_empty() && script_targets.is_empty() {
         let lockfile = Lockfile::load(root)?;
         snapshot_before_activate_profile_sync(root, &nu_paths, args, &lockfile)?;
         sync_user_activate_profile(root, &nu_paths, args, &lockfile)?;
@@ -230,27 +241,40 @@ fn execute_activating(
         runner,
         plugin_targets,
         module_targets,
+        script_targets,
         managed_file_path,
     )
 }
 
+#[allow(clippy::type_complexity)]
 fn prepare_activation_targets(
     args: &ActivateArgs,
     root: &Path,
     nu_paths: &NuPaths,
-) -> Result<(Vec<PluginTarget>, Vec<ModuleTarget>, Option<String>)> {
+) -> Result<(
+    Vec<PluginTarget>,
+    Vec<ModuleTarget>,
+    Vec<ScriptTarget>,
+    Option<String>,
+)> {
     let mut lockfile = Lockfile::load(root)?;
     reconcile_plugin_journal(root, nu_paths, &mut lockfile)?;
     print_autoload_recovery(reconcile_pending_autoload(root, nu_paths, &mut lockfile)?);
     lockfile = Lockfile::load(root)?;
     let plugin_targets = resolve_plugin_targets(args, &lockfile, nu_paths, root)?;
     let module_targets = resolve_module_targets(args, &lockfile, nu_paths)?;
-    let managed_file_path = if !module_targets.is_empty() {
+    let script_targets = resolve_script_targets(args, &lockfile, nu_paths)?;
+    let managed_file_path = if !module_targets.is_empty() || !script_targets.is_empty() {
         Some(resolve_managed_file_path(nu_paths)?)
     } else {
         None
     };
-    Ok((plugin_targets, module_targets, managed_file_path))
+    Ok((
+        plugin_targets,
+        module_targets,
+        script_targets,
+        managed_file_path,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -262,6 +286,7 @@ fn run_activation_lanes(
     runner: Option<&dyn CandidateRunner>,
     plugin_targets: Vec<PluginTarget>,
     module_targets: Vec<ModuleTarget>,
+    script_targets: Vec<ScriptTarget>,
     managed_file_path: Option<String>,
 ) -> Result<()> {
     let mut lockfile = Lockfile::load(root)?;
@@ -291,8 +316,8 @@ fn run_activation_lanes(
         }
     }
 
-    if !module_targets.is_empty() {
-        let managed_file_path = managed_file_path.expect("module targets require managed file");
+    if !module_targets.is_empty() || !script_targets.is_empty() {
+        let managed_file_path = managed_file_path.expect("autoload targets require managed file");
         let real_runner;
         let runner_ref: &dyn CandidateRunner = if let Some(r) = runner {
             r
@@ -306,6 +331,7 @@ fn run_activation_lanes(
             nu_paths,
             &mut lockfile,
             &module_targets,
+            &script_targets,
             &managed_file_path,
             runner_ref,
             Some(snapshot.id.clone()),
@@ -356,7 +382,7 @@ fn snapshot_before_activate_profile_sync(
             let entry = lockfile.packages.get(id)?;
             let kind = match entry.package_type.as_str() {
                 "plugin" => crate::state::activation_profile::ProfileKind::Plugin,
-                "module" => crate::state::activation_profile::ProfileKind::Module,
+                "module" | "script" => crate::state::activation_profile::ProfileKind::Module,
                 _ => return None,
             };
             Some((kind, id.as_str()))
@@ -500,11 +526,13 @@ fn run_plugin_lane(
 /// Run the module autoload lane. Returns `true` if the module lane failed.
 ///
 /// Implements the 13-step module-autoload transaction protocol from Phase4Plan §10.1.
+#[allow(clippy::too_many_arguments)]
 fn run_module_lane(
     root: &Path,
     nu_paths: &NuPaths,
     lockfile: &mut Lockfile,
     targets: &[ModuleTarget],
+    script_targets: &[ScriptTarget],
     managed_file_path: &str,
     runner: &dyn CandidateRunner,
     pre_mutation_snapshot_id: Option<String>,
@@ -531,15 +559,110 @@ fn run_module_lane(
         entries.push(resolved);
     }
 
-    // Collect already-active module entries (for modules not in this activation run)
-    // so the generated file includes ALL active modules
-    let currently_active_ids: Vec<String> = AutoloadState::active_module_ids_from_lockfile(
+    // Resolve all script commands, checking public-name collisions against
+    // every other active or activating script package (rejection, never
+    // shadowing; issue #14).
+    let mut script_commands: Vec<ResolvedScriptCommand> = Vec::new();
+    let mut claimed: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for target in script_targets {
+        crate::core::package::validate_script_entry_points(&target.entry_points)
+            .with_context(|| format!("Invalid script declaration for '{}'", target.package_id))?;
+        for ep in &target.entry_points {
+            if let Some(owner) = claimed.insert(ep.name.clone(), target.package_id.clone()) {
+                bail!(
+                    "Script command '{}' is claimed by both '{}' and '{}'; refusing to shadow",
+                    ep.name,
+                    owner,
+                    target.package_id
+                );
+            }
+            let resolved = resolve_entry(
+                root,
+                &target.payload_path,
+                &ep.path,
+                crate::core::package::ModuleImportMode::Module,
+                &target.package_id,
+            )
+            .with_context(|| {
+                format!(
+                    "Failed to resolve script target '{}' for '{}'",
+                    ep.path, target.package_id
+                )
+            })?;
+            script_commands.push(ResolvedScriptCommand {
+                scoped_id: target.package_id.clone(),
+                name: ep.name.clone(),
+                script_path: resolved.absolute_path,
+                nu_executable: nu_paths.nu_executable.clone(),
+            });
+        }
+    }
+
+    // Collect already-active autoload contributors (modules and scripts not
+    // in this activation run) so the generated file includes ALL of them.
+    let currently_active_ids: Vec<String> = AutoloadState::active_autoload_ids_from_lockfile(
         lockfile,
         &nu_paths.nu_executable_hash,
         &nu_paths.nu_version,
         vendor_autoload_dir,
         managed_file_path,
     );
+
+    // Add already-active scripts not in this batch, collision-checked
+    // against the batch's claimed names.
+    for (pkg_id, entry) in &lockfile.packages {
+        if entry.package_type != "script" {
+            continue;
+        }
+        if script_targets.iter().any(|t| &t.package_id == pkg_id) {
+            continue;
+        }
+        if currently_active_ids.contains(pkg_id) {
+            if let Some(sa) = &entry.script_activation {
+                for cmd in &sa.commands {
+                    if !crate::core::package::is_valid_script_command_name(&cmd.name) {
+                        bail!(
+                            "Active script package '{}' has an invalid stored command name '{}'; deactivate and re-activate it",
+                            pkg_id,
+                            cmd.name
+                        );
+                    }
+                    if let Some(owner) = claimed.get(&cmd.name) {
+                        bail!(
+                            "Script command '{}' from active package '{}' collides with '{}'; deactivate one of them first",
+                            cmd.name,
+                            pkg_id,
+                            owner
+                        );
+                    }
+                    // Re-resolve the target from the declaration instead of
+                    // trusting the stored absolute path: a deleted payload
+                    // file or swapped symlink must fail this activation,
+                    // not silently regenerate a dangling wrapper.
+                    let resolved = resolve_entry(
+                        root,
+                        &entry.payload_path,
+                        &cmd.path,
+                        crate::core::package::ModuleImportMode::Module,
+                        pkg_id,
+                    )
+                    .with_context(|| {
+                        format!(
+                            "Active script target '{}' for '{}' no longer resolves; deactivate and re-activate it",
+                            cmd.path, pkg_id
+                        )
+                    })?;
+                    claimed.insert(cmd.name.clone(), pkg_id.clone());
+                    script_commands.push(ResolvedScriptCommand {
+                        scoped_id: pkg_id.clone(),
+                        name: cmd.name.clone(),
+                        script_path: resolved.absolute_path,
+                        nu_executable: nu_paths.nu_executable.clone(),
+                    });
+                }
+            }
+        }
+    }
 
     // Add already-active modules not in this batch to the entry list
     for (pkg_id, entry) in &lockfile.packages {
@@ -564,8 +687,8 @@ fn run_module_lane(
     }
 
     // Step 4: Generate candidate content
-    let content =
-        generate_autoload_content(&entries).context("Failed to generate autoload content")?;
+    let content = generate_managed_content(&entries, &script_commands)
+        .context("Failed to generate autoload content")?;
 
     // Step 5: Write candidate file (same directory as managed file)
     let candidate_path =
@@ -602,15 +725,20 @@ fn run_module_lane(
     let mut desired_active_ids: Vec<String> = targets
         .iter()
         .map(|t| t.package_id.clone())
+        .chain(script_targets.iter().map(|t| t.package_id.clone()))
         .chain(currently_active_ids.iter().cloned())
         .collect();
     desired_active_ids.sort();
     desired_active_ids.dedup();
 
-    let targeted_ids: Vec<String> = targets.iter().map(|t| t.package_id.clone()).collect();
+    let targeted_ids: Vec<String> = targets
+        .iter()
+        .map(|t| t.package_id.clone())
+        .chain(script_targets.iter().map(|t| t.package_id.clone()))
+        .collect();
 
     // Step 5 (Nu validation): Execute candidate with the candidate runner
-    let scoped_ids: Vec<&str> = targets.iter().map(|t| t.package_id.as_str()).collect();
+    let scoped_ids: Vec<&str> = targeted_ids.iter().map(|s| s.as_str()).collect();
     if let Err(e) = validate_candidate(&candidate_path, runner, &scoped_ids) {
         // Candidate was removed by validate_candidate on failure
         eprintln!(
@@ -692,6 +820,35 @@ fn run_module_lane(
         }
     }
 
+    for target in script_targets {
+        if let Some(pkg) = lockfile.packages.get_mut(&target.package_id) {
+            let commands = target
+                .entry_points
+                .iter()
+                .filter_map(|ep| {
+                    script_commands
+                        .iter()
+                        .find(|c| c.scoped_id == target.package_id && c.name == ep.name)
+                        .map(|c| ScriptActivationCommand {
+                            name: ep.name.clone(),
+                            path: ep.path.clone(),
+                            script_path: c.script_path.to_string_lossy().into_owned(),
+                        })
+                })
+                .collect::<Vec<_>>();
+            if commands.len() == target.entry_points.len() {
+                pkg.script_activation = Some(ScriptActivation {
+                    commands,
+                    vendor_autoload_dir: vendor_autoload_dir.to_string(),
+                    managed_file_path: managed_file_path.to_string(),
+                    nu_executable_sha256: nu_paths.nu_executable_hash.clone(),
+                    nu_version: nu_paths.nu_version.clone(),
+                    activated_at: ts.clone(),
+                });
+            }
+        }
+    }
+
     if let Err(e) = lockfile.save(root) {
         // Lockfile save failed after replacement — preserve the Replaced journal
         eprintln!(
@@ -744,6 +901,19 @@ fn run_module_lane(
             target.package_id,
         );
     }
+    for target in script_targets {
+        let names: Vec<&str> = target
+            .entry_points
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        println!(
+            "{} Script {} added to autoload (commands: {}) — takes effect in future Nu sessions",
+            console::style("✓").green(),
+            target.package_id,
+            names.join(", "),
+        );
+    }
 
     Ok(false) // lane succeeded
 }
@@ -773,7 +943,8 @@ pub(crate) fn activate_modules_unlocked(
         check: false,
     };
     let module_targets = resolve_module_targets(&args, &lockfile, &nu_paths)?;
-    if module_targets.is_empty() {
+    let script_targets = resolve_script_targets(&args, &lockfile, &nu_paths)?;
+    if module_targets.is_empty() && script_targets.is_empty() {
         return Ok(false);
     }
     let managed_file_path = resolve_managed_file_path(&nu_paths)?;
@@ -782,6 +953,7 @@ pub(crate) fn activate_modules_unlocked(
         &nu_paths,
         &mut lockfile,
         &module_targets,
+        &script_targets,
         &managed_file_path,
         runner,
         pre_mutation_snapshot_id,
@@ -839,12 +1011,24 @@ fn execute_list(lockfile: &Lockfile, nu_paths: &NuPaths) -> Result<()> {
                     "inactive"
                 }
             }
+            "script" => {
+                if entry.is_script_active_for(
+                    &nu_paths.nu_executable_hash,
+                    &nu_paths.nu_version,
+                    vendor_dir,
+                    &managed_path,
+                ) {
+                    "active"
+                } else {
+                    "inactive"
+                }
+            }
             _ => "n/a",
         };
 
         let target = match entry.package_type.as_str() {
             "plugin" => nu_paths.plugin_registry_path.as_str(),
-            "module" => vendor_dir,
+            "module" | "script" => vendor_dir,
             _ => "-",
         };
 
@@ -905,7 +1089,10 @@ fn execute_check(
                 lockfile
                     .packages
                     .get(*id)
-                    .map(|e| e.package_type == "module")
+                    .map(|e| {
+                        e.package_type == "module"
+                            || (e.package_type == "script" && e.is_script_activatable())
+                    })
                     .unwrap_or(false)
             })
             .map(|s| s.as_str())
@@ -965,6 +1152,82 @@ fn execute_check(
                 continue;
             }
         };
+
+        if entry.package_type == "script" {
+            if !entry.is_script_activatable() {
+                println!(
+                    "{} {}: script not activatable — no declared entry points or unresolved dependencies",
+                    console::style("✗").red(),
+                    pkg_id
+                );
+                any_issues = true;
+                continue;
+            }
+
+            let declared = entry.script_entry_points.as_deref().unwrap_or_default();
+            let mut script_ok = true;
+            if let Err(e) = crate::core::package::validate_script_entry_points(declared) {
+                println!(
+                    "{} {}: invalid script declaration: {}",
+                    console::style("✗").red(),
+                    pkg_id,
+                    e
+                );
+                script_ok = false;
+            }
+            for ep in declared {
+                if let Err(e) = resolve_entry(
+                    root,
+                    &entry.payload_path,
+                    &ep.path,
+                    crate::core::package::ModuleImportMode::Module,
+                    pkg_id,
+                ) {
+                    println!(
+                        "{} {}: script target '{}' does not resolve: {}",
+                        console::style("✗").red(),
+                        pkg_id,
+                        ep.path,
+                        e
+                    );
+                    script_ok = false;
+                }
+            }
+            if let Some(sa) = &entry.script_activation {
+                if !entry.is_script_active_for(
+                    &nu_paths.nu_executable_hash,
+                    &nu_paths.nu_version,
+                    vendor_dir,
+                    &managed_path_str,
+                ) {
+                    println!(
+                        "{} {}: script activation record is stale for the current Nu identity",
+                        console::style("✗").red(),
+                        pkg_id
+                    );
+                    script_ok = false;
+                } else if sa.commands.is_empty() {
+                    println!(
+                        "{} {}: script activation record has no commands",
+                        console::style("✗").red(),
+                        pkg_id
+                    );
+                    script_ok = false;
+                }
+            }
+
+            if script_ok {
+                println!(
+                    "{} {}: script check passed ({} entry point(s))",
+                    console::style("✓").green(),
+                    pkg_id,
+                    declared.len()
+                );
+            } else {
+                any_issues = true;
+            }
+            continue;
+        }
 
         if entry.package_type != "module" {
             println!(
@@ -1092,9 +1355,8 @@ fn resolve_plugin_targets(
                     continue;
                 }
                 "script" => {
-                    bail!(
-                        "Package '{pkg_id}' is a script — script activation is deferred to a later phase."
-                    );
+                    // Script targets are handled in resolve_script_targets
+                    continue;
                 }
                 "completion" => {
                     bail!(
@@ -1262,6 +1524,93 @@ fn resolve_module_targets(
         }
         Ok(targets)
     }
+}
+
+/// Resolve all script targets to activate (issue #14).
+fn resolve_script_targets(
+    args: &ActivateArgs,
+    lockfile: &Lockfile,
+    nu_paths: &NuPaths,
+) -> Result<Vec<ScriptTarget>> {
+    let vendor_dir = nu_paths.vendor_autoload_dir.as_deref().unwrap_or("");
+    let managed_path_str = if vendor_dir.is_empty() {
+        String::new()
+    } else {
+        format!("{vendor_dir}/numan.nu")
+    };
+
+    let mut targets = Vec::new();
+    if args.packages.is_empty() {
+        for (id, entry) in &lockfile.packages {
+            if entry.package_type != "script" {
+                continue;
+            }
+            if entry.is_script_active_for(
+                &nu_paths.nu_executable_hash,
+                &nu_paths.nu_version,
+                vendor_dir,
+                &managed_path_str,
+            ) {
+                continue;
+            }
+            if !entry.is_script_activatable() {
+                continue;
+            }
+            targets.push(ScriptTarget {
+                package_id: id.clone(),
+                payload_path: entry.payload_path.clone(),
+                entry_points: entry.script_entry_points.clone().unwrap_or_default(),
+            });
+        }
+        return Ok(targets);
+    }
+
+    for pkg_id in &args.packages {
+        let entry = match lockfile.packages.get(pkg_id) {
+            Some(e) => e,
+            None => continue,
+        };
+        if entry.package_type != "script" {
+            continue;
+        }
+        if entry.is_script_active_for(
+            &nu_paths.nu_executable_hash,
+            &nu_paths.nu_version,
+            vendor_dir,
+            &managed_path_str,
+        ) {
+            println!(
+                "{} {} is already active for Nu {} (skipped)",
+                console::style("✓").green(),
+                pkg_id,
+                nu_paths.nu_version,
+            );
+            continue;
+        }
+        if !entry.is_script_activatable() {
+            if entry
+                .script_entry_points
+                .as_ref()
+                .map(|e| !e.is_empty())
+                .unwrap_or(false)
+            {
+                bail!(
+                    "Package '{pkg_id}' declares script entry points but has locked dependencies \
+                     that must be resolved before activation."
+                );
+            }
+            bail!(
+                "Package '{pkg_id}' is a script without declared entry points — it is install-only. \
+                 Script activation requires the registry entry to declare activation entry_points (issue #14)."
+            );
+        }
+        targets.push(ScriptTarget {
+            package_id: pkg_id.clone(),
+            payload_path: entry.payload_path.clone(),
+            entry_points: entry.script_entry_points.clone().unwrap_or_default(),
+        });
+    }
+    Ok(targets)
 }
 
 // ── Journal reconciliation ─────────────────────────────────────────────────────
@@ -1578,7 +1927,7 @@ mod tests {
     // ── Module lane planning tests ────────────────────────────────────────────
 
     #[test]
-    fn script_type_fails_with_deferred_error() {
+    fn script_without_entry_points_is_install_only() {
         use crate::state::lockfile::{Lockfile, LockfileEntry};
         use std::collections::BTreeMap;
 
@@ -1622,6 +1971,8 @@ mod tests {
                 module_activation: None,
                 module_import_mode: None,
                 overlay: None,
+                script_activation: None,
+                script_entry_points: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -1653,10 +2004,16 @@ mod tests {
             check: false,
         };
 
-        let err = resolve_plugin_targets(&args, &lockfile, &fake_nu_paths, root).unwrap_err();
+        // Scripts are handled by resolve_script_targets, not the plugin lane.
         assert!(
-            err.to_string().contains("script") && err.to_string().contains("deferred"),
-            "Expected deferred error for script type, got: {err}"
+            resolve_plugin_targets(&args, &lockfile, &fake_nu_paths, root)
+                .unwrap()
+                .is_empty()
+        );
+        let err = resolve_script_targets(&args, &lockfile, &fake_nu_paths).unwrap_err();
+        assert!(
+            err.to_string().contains("install-only"),
+            "Expected install-only error for script without entry points, got: {err}"
         );
     }
 
@@ -1705,6 +2062,8 @@ mod tests {
                 module_activation: None,
                 module_import_mode: None,
                 overlay: None,
+                script_activation: None,
+                script_entry_points: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -1794,6 +2153,8 @@ mod tests {
                 }),
                 module_import_mode: Some(ModuleImportMode::Module),
                 overlay: None,
+                script_activation: None,
+                script_entry_points: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -1879,6 +2240,8 @@ mod tests {
                 module_activation: None,
                 module_import_mode: Some(ModuleImportMode::Module),
                 overlay: None,
+                script_activation: None,
+                script_entry_points: None,
                 locked_dependencies: deps, // has dependencies — not activatable
             },
         );

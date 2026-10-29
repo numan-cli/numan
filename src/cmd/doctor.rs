@@ -951,7 +951,7 @@ fn check_lockfile(
         let has_active_modules = lockfile
             .packages
             .values()
-            .any(|e| e.module_activation.is_some());
+            .any(|e| e.module_activation.is_some() || e.script_activation.is_some());
         if has_active_modules && paths.vendor_autoload_dir.is_none() {
             findings.push(finding(
                 "nu_paths.vendor_missing",
@@ -1027,6 +1027,23 @@ fn check_activation(
                 RepairTier::Confirm,
             ));
         }
+        if entry.package_type == "script"
+            && entry.script_activation.is_some()
+            && !entry.is_script_active_for(
+                &paths.nu_executable_hash,
+                &paths.nu_version,
+                vendor_dir,
+                &managed_path,
+            )
+        {
+            findings.push(finding(
+                "activation.script_stale",
+                Severity::Warn,
+                format!("Script '{id}' activation is stale for current Nu"),
+                Some(CMD_ACTIVATE),
+                RepairTier::Confirm,
+            ));
+        }
     }
 
     if let Ok(Some(state)) = AutoloadState::load(root) {
@@ -1044,7 +1061,7 @@ fn check_activation(
     let has_active_modules = lockfile
         .packages
         .values()
-        .any(|e| e.module_activation.is_some());
+        .any(|e| e.module_activation.is_some() || e.script_activation.is_some());
     if has_active_modules && !managed_path.is_empty() {
         let managed = Path::new(&managed_path);
         if !managed.is_file() {
@@ -2209,6 +2226,8 @@ mod tests {
                 module_activation: None,
                 module_import_mode: None,
                 overlay: None,
+                script_activation: None,
+                script_entry_points: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -2281,6 +2300,8 @@ mod tests {
                 module_activation: None,
                 module_import_mode: None,
                 overlay: None,
+                script_activation: None,
+                script_entry_points: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -2370,6 +2391,8 @@ mod tests {
                 module_activation: None,
                 module_import_mode: None,
                 overlay: None,
+                script_activation: None,
+                script_entry_points: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );

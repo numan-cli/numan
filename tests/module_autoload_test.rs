@@ -159,6 +159,8 @@ impl ModuleTestEnv {
             module_activation: None,
             module_import_mode: Some(import_mode),
             overlay: None,
+            script_activation: None,
+            script_entry_points: None,
             locked_dependencies: BTreeMap::new(),
         };
 
