@@ -122,7 +122,7 @@ pub fn execute_with_candidate_runner_and_unregistrar(
     print_autoload_recovery(reconcile_pending_autoload(root, &nu_paths, &mut lockfile)?);
     let lockfile = Lockfile::load(root)?;
 
-    // 3. Classify explicit package IDs (plugins + modules; script/completion deferred).
+    // 3. Classify explicit package IDs (plugins + modules/scripts/completions).
     let targets_requested = classify_and_validate_packages(args, &lockfile, root, &nu_paths)?;
 
     if targets_requested.is_empty() {
@@ -245,6 +245,7 @@ pub fn execute_with_candidate_runner_and_unregistrar(
             Some(e) if e.package_type == "plugin" => e.activation.is_none(),
             Some(e) if e.package_type == "module" => e.module_activation.is_none(),
             Some(e) if e.package_type == "script" => e.script_activation.is_none(),
+            Some(e) if e.package_type == "completion" => e.completion_activation.is_none(),
             _ => false,
         };
         if clear {
@@ -301,7 +302,7 @@ fn snapshot_before_deactivate_profile_sync(
             Some(entry) => {
                 let kind = match entry.package_type.as_str() {
                     "plugin" => Some(crate::state::activation_profile::ProfileKind::Plugin),
-                    "module" | "script" => {
+                    "module" | "script" | "completion" => {
                         Some(crate::state::activation_profile::ProfileKind::Module)
                     }
                     _ => None,
@@ -346,6 +347,7 @@ fn is_full_module_deactivation(lockfile: &Lockfile, requested: &[ActiveModule]) 
         .filter(|(_, pkg)| {
             (pkg.package_type == "module" && pkg.module_activation.is_some())
                 || (pkg.package_type == "script" && pkg.script_activation.is_some())
+                || (pkg.package_type == "completion" && pkg.completion_activation.is_some())
         })
         .map(|(id, _)| id.as_str())
         .collect();
@@ -520,9 +522,18 @@ pub(crate) fn deactivate_modules_unlocked(
                 vendor_autoload_dir: sa.vendor_autoload_dir.clone(),
                 managed_file_path: sa.managed_file_path.clone(),
             });
+        } else if entry.package_type == "completion" {
+            let Some(ca) = &entry.completion_activation else {
+                continue;
+            };
+            targets.push(ActiveModule {
+                package_id: pkg_id.clone(),
+                vendor_autoload_dir: ca.vendor_autoload_dir.clone(),
+                managed_file_path: ca.managed_file_path.clone(),
+            });
         } else {
             bail!(
-                "Package '{pkg_id}' is not a module or script (type: {})",
+                "Package '{pkg_id}' is not a module, script, or completion (type: {})",
                 entry.package_type
             );
         }
@@ -565,7 +576,8 @@ pub fn plugin_name_from_executable_path(executable_path: &str) -> String {
 ///
 /// - Plugins with `activation.is_some()` are collected as `ActivePlugin`.
 /// - Modules with `module_activation` are collected as `ActiveModule`.
-/// - Script/completion packages return a deferred-feature error.
+/// - Completion packages with `completion_activation` are collected as
+///   `ActiveModule` alongside modules and scripts (issue #15).
 /// - Unknown package IDs fail.
 /// - Plugins that are not currently active are skipped when listed explicitly
 ///   (idempotent after journal reconcile). Modules that are not active are also
@@ -577,7 +589,7 @@ fn classify_and_validate_packages(
     root: &Path,
     nu_paths: &NuPaths,
 ) -> Result<ClassifiedTargets> {
-    // First pass: reject deferred / unknown types in the explicit list.
+    // First pass: reject unknown types in the explicit list.
     for pkg_id in &args.packages {
         let entry = match lockfile.packages.get(pkg_id) {
             Some(e) => e,
@@ -586,12 +598,7 @@ fn classify_and_validate_packages(
             }
         };
         match entry.package_type.as_str() {
-            "module" | "plugin" | "script" => {}
-            "completion" => {
-                bail!(
-                    "Package '{pkg_id}' is a completion — completion deactivation is deferred to a later phase."
-                );
-            }
+            "module" | "plugin" | "script" | "completion" => {}
             other => {
                 bail!("Package '{pkg_id}' has unknown type '{other}' — cannot deactivate.");
             }
@@ -631,6 +638,14 @@ fn classify_and_validate_packages(
                         package_id: pkg_id.clone(),
                         vendor_autoload_dir: sa.vendor_autoload_dir.clone(),
                         managed_file_path: sa.managed_file_path.clone(),
+                    });
+                }
+                "completion" if entry.completion_activation.is_some() => {
+                    let ca = entry.completion_activation.as_ref().unwrap();
+                    modules.push(ActiveModule {
+                        package_id: pkg_id.clone(),
+                        vendor_autoload_dir: ca.vendor_autoload_dir.clone(),
+                        managed_file_path: ca.managed_file_path.clone(),
                     });
                 }
                 _ => {}
@@ -685,7 +700,19 @@ fn classify_and_validate_packages(
                         });
                     }
                 },
-                _ => unreachable!("deferred types rejected in first pass"),
+                "completion" => match &entry.completion_activation {
+                    None => {
+                        continue;
+                    }
+                    Some(ca) => {
+                        modules.push(ActiveModule {
+                            package_id: pkg_id.clone(),
+                            vendor_autoload_dir: ca.vendor_autoload_dir.clone(),
+                            managed_file_path: ca.managed_file_path.clone(),
+                        });
+                    }
+                },
+                _ => unreachable!("unknown types rejected in first pass"),
             }
         }
     }
@@ -1174,6 +1201,7 @@ fn run_partial_deactivation(
     // Resolve remaining module entries and script commands from the lockfile.
     let mut remaining_entries = Vec::new();
     let mut remaining_scripts: Vec<ResolvedScriptCommand> = Vec::new();
+    let mut remaining_completions: Vec<crate::nu::autoload::ResolvedCompletionTarget> = Vec::new();
     for pkg_id in remaining_ids {
         let entry = lockfile.packages.get(pkg_id).with_context(|| {
             format!("Package '{pkg_id}' in remaining set not found in lockfile")
@@ -1197,6 +1225,24 @@ fn run_partial_deactivation(
                 });
             }
         }
+        if let Some(ca) = &entry.completion_activation {
+            for tgt in &ca.targets {
+                // Re-resolve instead of trusting the stored absolute path,
+                // mirroring the script branch above.
+                let resolved = crate::nu::autoload::resolve_entry(
+                    root,
+                    &entry.payload_path,
+                    &tgt.path,
+                    crate::core::package::ModuleImportMode::Module,
+                    pkg_id,
+                )?;
+                remaining_completions.push(crate::nu::autoload::ResolvedCompletionTarget {
+                    scoped_id: pkg_id.clone(),
+                    command: tgt.command.clone(),
+                    target_path: resolved.absolute_path,
+                });
+            }
+        }
         if let Some(ma) = &entry.module_activation {
             let resolved_entry = crate::nu::autoload::ResolvedEntry {
                 absolute_path: PathBuf::from(&ma.entry_path),
@@ -1204,8 +1250,8 @@ fn run_partial_deactivation(
                 scoped_id: pkg_id.clone(),
             };
             remaining_entries.push(resolved_entry);
-        } else if entry.script_activation.is_some() {
-            // Script contributor: wrappers already collected above.
+        } else if entry.script_activation.is_some() || entry.completion_activation.is_some() {
+            // Script/completion contributor: contributions already collected above.
         } else {
             // Remaining module has no activation record — skip (shouldn't happen).
             eprintln!(
@@ -1222,8 +1268,12 @@ fn run_partial_deactivation(
     // post-deactivation set.
 
     // Step 4: Generate candidate content for remaining modules.
-    let content = generate_managed_content(&remaining_entries, &remaining_scripts)
-        .context("Failed to generate autoload content for partial deactivation")?;
+    let content = generate_managed_content(
+        &remaining_entries,
+        &remaining_scripts,
+        &remaining_completions,
+    )
+    .context("Failed to generate autoload content for partial deactivation")?;
 
     // Step 5: Write candidate file (same directory as managed file).
     let candidate_path = write_candidate(managed_path, &content)
@@ -1353,6 +1403,7 @@ fn clear_module_activations(
         if let Some(pkg) = lockfile.packages.get_mut(&target.package_id) {
             pkg.module_activation = None;
             pkg.script_activation = None;
+            pkg.completion_activation = None;
         }
     }
     lockfile.save(root)
@@ -1437,6 +1488,8 @@ mod tests {
                     overlay: None,
                     script_activation: None,
                     script_entry_points: None,
+                    completion_activation: None,
+                    completion_targets: None,
                     locked_dependencies: BTreeMap::new(),
                 },
             );
@@ -1675,7 +1728,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_type_returns_deferred_error() {
+    fn completion_type_inactive_is_skipped() {
         let dir = TempDir::new().unwrap();
         let lockfile = make_lockfile_with_modules(vec![("owner/mycomp", "completion", false)]);
 
@@ -1685,11 +1738,11 @@ mod tests {
             verbose: false,
         };
 
-        let err = classify_and_validate_packages(&args, &lockfile, dir.path(), &fake_nu_paths())
-            .unwrap_err();
+        let targets =
+            classify_and_validate_packages(&args, &lockfile, dir.path(), &fake_nu_paths()).unwrap();
         assert!(
-            err.to_string().contains("deferred"),
-            "Expected deferred error for completion type, got: {err}"
+            targets.modules.is_empty(),
+            "inactive completion must be skipped"
         );
     }
 
@@ -2071,6 +2124,8 @@ mod tests {
             overlay: None,
             script_activation: None,
             script_entry_points: None,
+            completion_activation: None,
+            completion_targets: None,
             locked_dependencies: BTreeMap::new(),
         };
 

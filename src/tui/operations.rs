@@ -111,7 +111,10 @@ pub fn load(root: &Path) -> Result<Data> {
 }
 
 pub fn activation(entry: &LockfileEntry, nu: Option<&NuPaths>) -> &'static str {
-    if !matches!(entry.package_type.as_str(), "plugin" | "module" | "script") {
+    if !matches!(
+        entry.package_type.as_str(),
+        "plugin" | "module" | "script" | "completion"
+    ) {
         return "unsupported";
     }
     let Some(nu) = nu else {
@@ -133,6 +136,12 @@ pub fn activation(entry: &LockfileEntry, nu: Option<&NuPaths>) -> &'static str {
                         dir,
                         &path,
                     )
+                    || entry.is_completion_active_for(
+                        &nu.nu_executable_hash,
+                        &nu.nu_version,
+                        dir,
+                        &path,
+                    )
             })
         })
     };
@@ -141,6 +150,7 @@ pub fn activation(entry: &LockfileEntry, nu: Option<&NuPaths>) -> &'static str {
     } else if entry.activation.is_some()
         || entry.module_activation.is_some()
         || entry.script_activation.is_some()
+        || entry.completion_activation.is_some()
     {
         "other Nu"
     } else {
@@ -157,8 +167,9 @@ pub fn install_only_note(package_type: &PackageType) -> Option<&'static str> {
              Install only downloads the payload; run or source it from its payload path afterwards.",
         ),
         PackageType::Completion => Some(
-            "Install-only: completions cannot be activated. Install only downloads the \
-             payload; source it from your shell configuration afterwards.",
+            "Install-only: this completion package declares no targets, so it cannot be \
+             activated. Install only downloads the payload; source it from your shell \
+             configuration afterwards.",
         ),
         PackageType::Plugin | PackageType::Module => None,
     }
@@ -166,7 +177,9 @@ pub fn install_only_note(package_type: &PackageType) -> Option<&'static str> {
 
 /// Install-only note for a concrete catalog package: script packages
 /// that declare `nu-script` entry points can be activated (issue #14),
-/// so the note applies only when no version declares entry points.
+/// and completion packages that declare `nu-completion` targets can be
+/// activated (issue #15), so the note applies only when no version
+/// declares the relevant activation surface.
 pub fn install_only_note_for_package(
     package: &crate::core::package::Package,
 ) -> Option<&'static str> {
@@ -175,6 +188,17 @@ pub fn install_only_note_for_package(
             v.activation
                 .as_ref()
                 .map(|spec| spec.kind == "nu-script" && !spec.entry_points.is_empty())
+                .unwrap_or(false)
+        });
+        if declared {
+            return None;
+        }
+    }
+    if package.package_type == PackageType::Completion {
+        let declared = package.versions.iter().any(|v| {
+            v.activation
+                .as_ref()
+                .map(|spec| spec.kind == "nu-completion" && !spec.targets.is_empty())
                 .unwrap_or(false)
         });
         if declared {
@@ -404,11 +428,17 @@ pub fn prepare(
         }
         Action::Activate => {
             let entry = entry.context("Package is not installed.")?;
-            if !matches!(entry.package_type.as_str(), "plugin" | "module" | "script") {
+            if !matches!(
+                entry.package_type.as_str(),
+                "plugin" | "module" | "script" | "completion"
+            ) {
                 bail!("Activation is unsupported for this package type.");
             }
             if entry.package_type == "script" && !entry.is_script_activatable() {
                 bail!("Script package has no declared entry points and cannot be activated.");
+            }
+            if entry.package_type == "completion" && !entry.is_completion_activatable() {
+                bail!("Completion package has no declared targets and cannot be activated.");
             }
             let nu = nu.context("Initialize Nu context before modifying packages.")?;
             if activation(entry, Some(nu)) == "active" {
@@ -439,6 +469,7 @@ pub fn prepare(
             if entry.activation.is_some()
                 || entry.module_activation.is_some()
                 || entry.script_activation.is_some()
+                || entry.completion_activation.is_some()
             {
                 bail!("Deactivate this package via CLI before removal. Force is CLI only.");
             }

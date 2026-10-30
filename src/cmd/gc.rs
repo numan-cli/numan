@@ -250,6 +250,8 @@ mod tests {
                 overlay: None,
                 script_activation: None,
                 script_entry_points: None,
+                completion_activation: None,
+                completion_targets: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -332,6 +334,8 @@ mod tests {
                 overlay: None,
                 script_activation: None,
                 script_entry_points: None,
+                completion_activation: None,
+                completion_targets: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -406,6 +410,8 @@ mod tests {
                 overlay: None,
                 script_activation: None,
                 script_entry_points: None,
+                completion_activation: None,
+                completion_targets: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );

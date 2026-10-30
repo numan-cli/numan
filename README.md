@@ -42,7 +42,7 @@ These workflows are covered by unit tests, hermetic integration tests, and real-
 
 - **Registry-backed installs**: Search packages, inspect available versions, and install `owner/name` or `owner/name@version`.
 - **Official registry**: `numan init` configures the `official` registry automatically. Its production trust root is built into numan, and `numan registry sync` verifies every signed index.
-- **Package types**: Plugins and modules support `numan activate`. Hook profiles require explicit `numan hook enable`. Scripts and completion packages are currently install-only.
+- **Package types**: Plugins, modules, scripts, and completion packages support `numan activate`. Hook profiles require explicit `numan hook enable`. Packages without an activation declaration are install-only.
 - **Verified artifacts**: Plugin binaries require SHA-256 hashes, and registry indexes require valid Ed25519 signatures.
 - **Scoped activation**: Plugins remain active only while the Nushell executable hash, Nushell version, and plugin registry path match the recorded activation state.
 - **Module autoloads**: numan writes managed vendor autoload files with ownership markers and validates candidate files before promotion.
@@ -62,12 +62,17 @@ These workflows are covered by unit tests, hermetic integration tests, and real-
 | Module | Yes | `numan activate` (managed vendor autoload) | Supported |
 | Overlay module | Yes | `numan overlay use` / `hide` (interactive Nu wrapper) | Explicit activation in the current shell; applied at the next prompt |
 | Hook profile | Yes | `numan hook enable` (owned vendor autoload) | Explicit opt-in; handlers run only on declared interactive events |
-| Script | Yes | None | Install-only; activation is deferred |
-| Completion package | Yes | None | Install-only; activation is deferred |
+| Script | Yes | `numan activate` (managed vendor autoload) | Supported |
+| Completion package | Yes | `numan activate` (managed vendor autoload) | Supported |
 
-Install-only packages remain inert: numan downloads, verifies, locks, lists,
-removes, and garbage-collects their payloads, but does not execute them or
-modify Nu configuration for them. Hook packages are also inert until explicitly
+Install remains inert for every package type: installation only downloads,
+verifies, locks, lists, removes, and garbage-collects payloads; nothing is
+executed or wired into Nu until an explicit activation command. Packages
+whose registry entry declares no activation surface stay install-only.
+Completion packages declare their targets (`activation: {kind: "nu-completion",
+targets: [{command, path, kind}, ...]}`); a target is owned exclusively by one
+active package, and `command-backed` providers run only when Nushell requests
+a completion, never at install or activation time. Hook packages are also inert until explicitly
 enabled; inspect their declared events with `numan info` first. Hook changes load
 in new Nushell sessions. This is separate from numan's own shell
 completion installer: `numan completions <shell>` is supported for bash, fish,
@@ -362,7 +367,7 @@ Global flag: `--root <path>` — override the numan root directory (all commands
 | `numan info <owner/name>` | Show package metadata and available versions |
 | `numan install <owner/name[@version]>` | Download, verify, extract, and lock |
 | `numan list` | List installed packages and activation status |
-| `numan activate [pkg...]` | Register plugins / write module autoloads (scripts and completion packages are deferred) |
+| `numan activate [pkg...]` | Register plugins / write managed autoloads (modules, scripts, completion packages) |
 | `numan deactivate [pkg...]` | Remove module autoload entries |
 | `numan hook enable [pkg...]` | Explicitly enable declared Nushell hook bindings |
 | `numan hook disable [pkg...]` | Disable hook bindings; no IDs disables all |

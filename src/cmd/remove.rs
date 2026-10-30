@@ -78,6 +78,14 @@ pub fn execute_reviewed(
             args.package
         );
     }
+    if entry.completion_activation.is_some() {
+        bail!(
+            "Package '{}' is currently active as a completion. \
+             Run `numan deactivate {}` first.",
+            args.package,
+            args.package
+        );
+    }
     if !args.force && entry.module_activation.is_some() {
         bail!(
             "Package '{}' is currently active. \
@@ -119,6 +127,14 @@ pub fn execute_reviewed(
     if entry.script_activation.is_some() {
         bail!(
             "Package '{}' is currently active as a script. \
+             Run `numan deactivate {}` first.",
+            args.package,
+            args.package
+        );
+    }
+    if entry.completion_activation.is_some() {
+        bail!(
+            "Package '{}' is currently active as a completion. \
              Run `numan deactivate {}` first.",
             args.package,
             args.package
@@ -254,7 +270,7 @@ mod tests {
     use super::*;
     use crate::core::package::ModuleImportMode;
     use crate::state::lockfile::{
-        LockfileEntry, ModuleActivation, PluginActivation, ScriptActivation,
+        CompletionActivation, LockfileEntry, ModuleActivation, PluginActivation, ScriptActivation,
     };
     use std::collections::BTreeMap;
 
@@ -295,6 +311,8 @@ mod tests {
             overlay: None,
             script_activation: None,
             script_entry_points: None,
+            completion_activation: None,
+            completion_targets: None,
             locked_dependencies: BTreeMap::new(),
         }
     }
@@ -371,6 +389,12 @@ mod tests {
         if entry.script_activation.is_some() {
             bail!(
                 "Package '{pkg_id}' is currently active as a script. \
+                 Run `numan deactivate {pkg_id}` first."
+            );
+        }
+        if entry.completion_activation.is_some() {
+            bail!(
+                "Package '{pkg_id}' is currently active as a completion. \
                  Run `numan deactivate {pkg_id}` first."
             );
         }
@@ -540,6 +564,25 @@ mod tests {
         };
         let err = ensure_removable(&entry, "owner/script", true).unwrap_err();
         assert!(err.to_string().contains("active as a script"));
+        assert!(err.to_string().contains("deactivate"));
+    }
+
+    #[test]
+    fn refuse_active_completion_even_with_force() {
+        let entry = LockfileEntry {
+            package_type: "completion".to_string(),
+            completion_activation: Some(CompletionActivation {
+                targets: Vec::new(),
+                vendor_autoload_dir: "/tmp/vendor".to_string(),
+                managed_file_path: "/tmp/vendor/numan.nu".to_string(),
+                nu_executable_sha256: "abc".to_string(),
+                nu_version: "0.95.0".to_string(),
+                activated_at: "0".to_string(),
+            }),
+            ..base_entry()
+        };
+        let err = ensure_removable(&entry, "owner/comp", true).unwrap_err();
+        assert!(err.to_string().contains("active as a completion"));
         assert!(err.to_string().contains("deactivate"));
     }
 

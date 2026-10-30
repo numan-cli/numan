@@ -251,7 +251,7 @@ pub fn render_use_statement(path: &Path, mode: &ModuleImportMode) -> Result<Stri
 /// The file begins with the exact ownership header required by
 /// [`OWNERSHIP_MARKER`] and is encoded as plain UTF-8 without BOM.
 pub fn generate_autoload_content(entries: &[ResolvedEntry]) -> Result<String> {
-    generate_managed_content(entries, &[])
+    generate_managed_content(entries, &[], &[])
 }
 
 /// A fully-validated script command ready for managed-file generation
@@ -314,19 +314,75 @@ pub fn render_script_wrapper(command: &ResolvedScriptCommand) -> Result<String> 
     ))
 }
 
-/// Generate the full content of `numan.nu` from module entries and script
-/// commands. Modules render first (sorted by scoped ID), then script
-/// wrappers (sorted by scoped ID, then command name), under the
-/// ownership header.
+/// A fully-validated completion target ready for managed-file generation
+/// (issue #15). Constructed by the activate lane from a package's declared
+/// targets after containment checks via [`resolve_entry`].
+#[derive(Debug, Clone)]
+pub struct ResolvedCompletionTarget {
+    /// Canonical scoped package ID (e.g. `"owner/name"`), used for ordering.
+    pub scoped_id: String,
+    /// External command name this target augments, as declared.
+    pub command: String,
+    /// Absolute canonical path to the `.nu` completion source file.
+    pub target_path: PathBuf,
+}
+
+/// Render one completion target's contribution to the managed file:
+///
+/// ```nu
+/// # numan:completion <owner/name> <command>
+/// use "<absolute path>" *
+/// ```
+///
+/// The `use ... *` form matches how Nushell custom-completion files are
+/// consumed (they export `extern` definitions plus completer functions).
+/// Rendering only references the file: no completer runs at activation
+/// time; Nushell executes command-backed providers only when it requests
+/// a completion in a live session.
+pub fn render_completion_use(target: &ResolvedCompletionTarget) -> Result<String> {
+    if target.scoped_id.chars().any(|c| c.is_control()) {
+        bail!(
+            "Completion package ID '{}' contains control characters",
+            target.scoped_id.escape_debug()
+        );
+    }
+    if !crate::core::package::is_valid_script_command_name(&target.command) {
+        bail!(
+            "Invalid completion command name '{}'",
+            target.command.escape_debug()
+        );
+    }
+    let stmt = render_use_statement(&target.target_path, &ModuleImportMode::All)?;
+    Ok(format!(
+        "# numan:completion {scoped} {command}\n{stmt}",
+        scoped = target.scoped_id,
+        command = target.command,
+    ))
+}
+
+/// Generate the full content of `numan.nu` from module entries, script
+/// commands, and completion targets. Modules render first (sorted by
+/// scoped ID), then script wrappers (sorted by scoped ID, then command
+/// name), then completion targets (sorted by scoped ID, then command),
+/// under the ownership header.
 pub fn generate_managed_content(
     entries: &[ResolvedEntry],
     script_commands: &[ResolvedScriptCommand],
+    completion_targets: &[ResolvedCompletionTarget],
 ) -> Result<String> {
     let mut sorted: Vec<&ResolvedEntry> = entries.iter().collect();
     sorted.sort_by(|a, b| a.scoped_id.cmp(&b.scoped_id));
 
     let mut sorted_scripts: Vec<&ResolvedScriptCommand> = script_commands.iter().collect();
     sorted_scripts.sort_by(|a, b| a.scoped_id.cmp(&b.scoped_id).then(a.name.cmp(&b.name)));
+
+    let mut sorted_completions: Vec<&ResolvedCompletionTarget> =
+        completion_targets.iter().collect();
+    sorted_completions.sort_by(|a, b| {
+        a.scoped_id
+            .cmp(&b.scoped_id)
+            .then(a.command.cmp(&b.command))
+    });
 
     let mut out = String::new();
     out.push_str(OWNERSHIP_MARKER);
@@ -341,6 +397,12 @@ pub fn generate_managed_content(
     for command in &sorted_scripts {
         out.push('\n');
         out.push_str(&render_script_wrapper(command)?);
+        out.push('\n');
+    }
+
+    for target in &sorted_completions {
+        out.push('\n');
+        out.push_str(&render_completion_use(target)?);
         out.push('\n');
     }
 
@@ -909,6 +971,63 @@ mod tests {
             err.to_string().contains("managed-file drift") || err.to_string().contains("ownership"),
             "Expected ownership error, got: {err}"
         );
+    }
+
+    // ── completion targets (issue #15) ─────────────────────────────────────
+
+    #[test]
+    fn render_completion_use_line() {
+        let target = ResolvedCompletionTarget {
+            scoped_id: "nushell/git-completions".to_string(),
+            command: "git".to_string(),
+            target_path: PathBuf::from("/root/packages/completions/nushell/git/1.0.0-aaa/git.nu"),
+        };
+        let rendered = render_completion_use(&target).unwrap();
+        assert_eq!(
+            rendered,
+            "# numan:completion nushell/git-completions git\n\
+             use \"/root/packages/completions/nushell/git/1.0.0-aaa/git.nu\" *"
+        );
+    }
+
+    #[test]
+    fn render_completion_rejects_bad_command() {
+        let target = ResolvedCompletionTarget {
+            scoped_id: "owner/x".to_string(),
+            command: "has space".to_string(),
+            target_path: PathBuf::from("/root/x.nu"),
+        };
+        assert!(render_completion_use(&target).is_err());
+    }
+
+    #[test]
+    fn managed_content_renders_completions_after_scripts_sorted() {
+        let script = ResolvedScriptCommand {
+            scoped_id: "acme/weather".to_string(),
+            name: "wttr".to_string(),
+            script_path: PathBuf::from("/root/wttr.nu"),
+            nu_executable: "/usr/bin/nu".to_string(),
+        };
+        let completions = vec![
+            ResolvedCompletionTarget {
+                scoped_id: "nushell/git-completions".to_string(),
+                command: "git".to_string(),
+                target_path: PathBuf::from("/root/git.nu"),
+            },
+            ResolvedCompletionTarget {
+                scoped_id: "acme/tools".to_string(),
+                command: "cargo".to_string(),
+                target_path: PathBuf::from("/root/cargo.nu"),
+            },
+        ];
+        let content = generate_managed_content(&[], &[script], &completions).unwrap();
+        let script_pos = content.find("# numan:script").unwrap();
+        let acme_pos = content.find("# numan:completion acme/tools cargo").unwrap();
+        let git_pos = content
+            .find("# numan:completion nushell/git-completions git")
+            .unwrap();
+        assert!(script_pos < acme_pos, "{content}");
+        assert!(acme_pos < git_pos, "{content}");
     }
 
     // ── resolve_entry ────────────────────────────────────────────────────────

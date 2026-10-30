@@ -732,6 +732,8 @@ fn list_shows_bundled_with_nu_tag() {
             overlay: None,
             script_activation: None,
             script_entry_points: None,
+            completion_activation: None,
+            completion_targets: None,
             locked_dependencies: Default::default(),
         },
     );

@@ -225,7 +225,10 @@ pub fn execute_reviewed(
             None => {
                 // Fail closed: without cached NuPaths we cannot verify activation
                 // identity, so refuse active plugins/modules instead of Plain.
-                if current.module_activation.is_some() || current.script_activation.is_some() {
+                if current.module_activation.is_some()
+                    || current.script_activation.is_some()
+                    || current.completion_activation.is_some()
+                {
                     let e = anyhow::anyhow!(
                         "Package '{}' is currently active. \
                          Run `numan deactivate {}` first, then run update again.",
@@ -646,6 +649,14 @@ fn plan_active_update(
             pkg_id
         );
     }
+    if entry.completion_activation.is_some() {
+        bail!(
+            "Package '{}' is currently active as a completion. \
+             Run `numan deactivate {}` first, then run update again.",
+            pkg_id,
+            pkg_id
+        );
+    }
     if entry.activation.is_some() {
         let matching = entry.is_active_for(
             &nu_paths.nu_executable_hash,
@@ -680,7 +691,8 @@ mod tests {
     use crate::state::active_plugin_mutation::EnvOverrideGuard;
     use crate::state::lifecycle_journal::PendingLifecycle;
     use crate::state::lockfile::{
-        Lockfile, LockfileEntry, ModuleActivation, PluginActivation, ScriptActivation,
+        CompletionActivation, Lockfile, LockfileEntry, ModuleActivation, PluginActivation,
+        ScriptActivation,
     };
     use crate::state::plugin_deactivate_journal::PendingPluginDeactivate;
     use std::collections::BTreeMap;
@@ -762,6 +774,8 @@ mod tests {
             overlay: None,
             script_activation: None,
             script_entry_points: None,
+            completion_activation: None,
+            completion_targets: None,
             locked_dependencies: BTreeMap::new(),
         }
     }
@@ -914,6 +928,23 @@ mod tests {
         assert!(err.to_string().contains("active as a script"));
     }
 
+    #[test]
+    fn plan_active_update_rejects_completion_activation() {
+        let entry = LockfileEntry {
+            completion_activation: Some(CompletionActivation {
+                targets: Vec::new(),
+                vendor_autoload_dir: "/tmp/vendor".to_string(),
+                managed_file_path: "/tmp/vendor/numan.nu".to_string(),
+                nu_executable_sha256: "abc".to_string(),
+                nu_version: "0.95.0".to_string(),
+                activated_at: "0".to_string(),
+            }),
+            ..base_entry()
+        };
+        let err = plan_active_update(&entry, "owner/comp", &matching_nu_paths()).unwrap_err();
+        assert!(err.to_string().contains("active as a completion"));
+    }
+
     struct ActiveUpdateEnv {
         _dir: TempDir,
         root: PathBuf,
@@ -995,6 +1026,8 @@ mod tests {
                     overlay: None,
                     script_activation: None,
                     script_entry_points: None,
+                    completion_activation: None,
+                    completion_targets: None,
                     locked_dependencies: BTreeMap::new(),
                 },
             );

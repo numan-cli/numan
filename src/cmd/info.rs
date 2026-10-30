@@ -55,9 +55,21 @@ pub fn format_info(pkg: &Package, platform: &Platform, nu: Option<&NuVersion>) -
             }
         }
         crate::core::package::PackageType::Completion => {
-            out.push_str(
-                "Activation: install-only (activation deferred; install does not wire Nu)\n",
-            );
+            let declared = pkg.versions.iter().any(|v| {
+                v.activation
+                    .as_ref()
+                    .map(|spec| spec.kind == "nu-completion" && !spec.targets.is_empty())
+                    .unwrap_or(false)
+            });
+            if declared {
+                out.push_str(
+                    "Activation: explicit `numan activate` required; install does not wire Nu\n",
+                );
+            } else {
+                out.push_str(
+                    "Activation: install-only (no declared targets; install does not wire Nu)\n",
+                );
+            }
         }
         _ => {}
     }
@@ -112,6 +124,24 @@ pub fn format_info(pkg: &Package, platform: &Platform, nu: Option<&NuVersion>) -
                     "    script: {} -> {} (inactive until activated)\n",
                     ep.name, ep.path
                 ));
+            }
+        }
+
+        if let Some(activation) = ver
+            .activation
+            .as_ref()
+            .filter(|spec| spec.kind == "nu-completion")
+        {
+            for target in &activation.targets {
+                out.push_str(&format!(
+                    "    completion: {} -> {} [{}] (inactive until activated)\n",
+                    target.command, target.path, target.kind
+                ));
+                if target.kind == crate::core::package::CompletionKind::CommandBacked {
+                    out.push_str(
+                        "    note: this completion provider can execute code during completion (only when Nushell requests a completion; never at install or activation)\n",
+                    );
+                }
             }
         }
 
@@ -284,6 +314,7 @@ mod tests {
                 name: "wttr".into(),
                 path: "wttr.nu".into(),
             }],
+            targets: Vec::new(),
         });
         let out = format_info(&pkg, &linux_platform(), None);
         assert!(
@@ -306,6 +337,47 @@ mod tests {
     }
 
     #[test]
+    fn format_info_shows_completion_targets_and_command_backed_disclosure() {
+        let mut pkg = sample_plugin(false);
+        pkg.package_type = PackageType::Completion;
+        pkg.versions[0].activation = Some(crate::core::package::RegistryActivationSpec {
+            kind: "nu-completion".into(),
+            import: Default::default(),
+            entry: None,
+            overlay_name: None,
+            exports: None,
+            bindings: None,
+            entry_points: Vec::new(),
+            targets: vec![
+                crate::core::package::CompletionTarget {
+                    command: "git".into(),
+                    path: "git.nu".into(),
+                    kind: crate::core::package::CompletionKind::CommandBacked,
+                },
+                crate::core::package::CompletionTarget {
+                    command: "cargo".into(),
+                    path: "cargo.nu".into(),
+                    kind: crate::core::package::CompletionKind::Static,
+                },
+            ],
+        });
+        let out = format_info(&pkg, &linux_platform(), None);
+        assert!(
+            out.contains("Activation: explicit `numan activate` required"),
+            "{out}"
+        );
+        assert!(
+            out.contains("completion: git -> git.nu [command-backed] (inactive until activated)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("completion: cargo -> cargo.nu [static] (inactive until activated)"),
+            "{out}"
+        );
+        assert!(out.contains("can execute code during completion"), "{out}");
+    }
+
+    #[test]
     fn format_info_shows_hook_triggers_before_explicit_activation() {
         let mut pkg = sample_plugin(false);
         pkg.versions[0].activation = Some(crate::core::package::RegistryActivationSpec {
@@ -321,6 +393,7 @@ mod tests {
                 filter: None,
             }]),
             entry_points: Vec::new(),
+            targets: Vec::new(),
         });
         let out = format_info(&pkg, &linux_platform(), None);
         assert!(out.contains("high-risk Nushell hooks"), "{out}");

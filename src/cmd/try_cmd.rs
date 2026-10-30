@@ -345,10 +345,19 @@ where
         bail!("Install reported no changes for '{package_id}'");
     }
 
-    let install_only = matches!(
-        package.package_type,
-        PackageType::Script | PackageType::Completion
-    );
+    // Scripts stay install-only under `try` (existing behaviour).
+    // Completions are install-only only when the installed entry declares
+    // no targets; a completion package with declared targets activates
+    // through the normal path below (issue #15).
+    let install_only = match package.package_type {
+        PackageType::Script => true,
+        PackageType::Completion => !Lockfile::load(root)?
+            .packages
+            .get(package_id)
+            .map(|entry| entry.is_completion_activatable())
+            .unwrap_or(false),
+        _ => false,
+    };
     let hook_package = Lockfile::load(root)?
         .packages
         .get(package_id)
@@ -959,6 +968,8 @@ mod tests {
             overlay: None,
             script_activation: None,
             script_entry_points: None,
+            completion_activation: None,
+            completion_targets: None,
             locked_dependencies: BTreeMap::new(),
         }
     }

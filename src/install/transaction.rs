@@ -417,6 +417,22 @@ pub fn install_package(
         _ => None,
     };
 
+    // Validate declared completion targets before promotion too (issue #15),
+    // mirroring the script validation above.
+    let completion_targets = match resolved.activation.as_ref() {
+        Some(spec) if spec.kind == "nu-completion" => {
+            if pkg.package_type != crate::core::package::PackageType::Completion {
+                bail!(
+                    "Package {id} declares activation kind 'nu-completion' but is not a completion package"
+                );
+            }
+            crate::core::package::validate_completion_targets(&spec.targets)
+                .with_context(|| format!("Invalid completion activation declaration for {id}"))?;
+            Some(spec.targets.clone())
+        }
+        _ => None,
+    };
+
     // 9. Snapshot lockfile before mutation (after download/extraction preflight succeeds).
     // Skip when the lockfile is empty — there is no prior state worth restoring.
     if !Lockfile::load(options.root)?.packages.is_empty() {
@@ -518,6 +534,8 @@ pub fn install_package(
         overlay,
         script_activation: None,
         script_entry_points,
+        completion_activation: None,
+        completion_targets,
         locked_dependencies,
     };
 

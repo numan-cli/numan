@@ -111,8 +111,8 @@ pub struct VersionEntry {
     pub source: Option<SourceInfo>,
     #[serde(default)]
     pub dependencies: BTreeMap<String, String>,
-    /// Optional activation metadata for module packages.
-    /// `None` for plugins, scripts, and completions.
+    /// Optional activation metadata (module, overlay, hook, script, or
+    /// completion packages). `None` for plugins and install-only packages.
     #[serde(default)]
     pub activation: Option<RegistryActivationSpec>,
     /// Optional provenance marker, e.g. `"commit-snapshot"` for versions
@@ -238,8 +238,8 @@ impl fmt::Display for ModuleImportMode {
 /// Each activation kind is handled only by its explicit capability command.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RegistryActivationSpec {
-    /// Activation kind. `"nu-module"`, `"nu-overlay"`, `"nu-hook"`, or
-    /// `"nu-script"`.
+    /// Activation kind. `"nu-module"`, `"nu-overlay"`, `"nu-hook"`,
+    /// `"nu-script"`, or `"nu-completion"`.
     pub kind: String,
     /// Import mode for the module. Defaults to `ModuleImportMode::Module`.
     /// Ignored for `nu-overlay` and `nu-hook`.
@@ -261,6 +261,9 @@ pub struct RegistryActivationSpec {
     /// Declared script entry points. Only meaningful for `"nu-script"`.
     #[serde(default)]
     pub entry_points: Vec<ScriptEntryPoint>,
+    /// Declared completion targets. Only meaningful for `"nu-completion"`.
+    #[serde(default)]
+    pub targets: Vec<CompletionTarget>,
 }
 
 /// One public command contributed by a script package (issue #14).
@@ -389,6 +392,101 @@ pub fn validate_script_entry_points(entry_points: &[ScriptEntryPoint]) -> Result
     Ok(())
 }
 
+/// Declared completion kind for a [`CompletionTarget`] (issue #15).
+///
+/// The kind is declared by the package, never inferred from the source:
+/// `Static` means completions are literal values in the source file;
+/// `CommandBacked` means the source defines completer functions that
+/// Nushell executes when it requests a completion. Activation and install
+/// never invoke a completer either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompletionKind {
+    #[serde(rename = "static")]
+    Static,
+    #[serde(rename = "command-backed")]
+    CommandBacked,
+}
+
+impl fmt::Display for CompletionKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CompletionKind::Static => write!(f, "static"),
+            CompletionKind::CommandBacked => write!(f, "command-backed"),
+        }
+    }
+}
+
+/// One command surface contributed by a completion package (issue #15).
+///
+/// `command` is the external command the package augments (a single
+/// command name, e.g. `git`); `path` is the package-relative `.nu` source
+/// file contributing that command's completions; `kind` is the declared
+/// completion kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompletionTarget {
+    pub command: String,
+    pub path: String,
+    pub kind: CompletionKind,
+}
+
+/// Validate a package's declared completion targets.
+///
+/// Mirrors [`validate_script_entry_points`]: rejects an empty declaration,
+/// invalid or duplicate command names (command names use the script
+/// command-name grammar and must not be Nushell reserved keywords),
+/// duplicate targets, and targets that are not safe package-relative
+/// `.nu` paths. File existence is checked later, at activation time,
+/// against the installed payload.
+pub fn validate_completion_targets(targets: &[CompletionTarget]) -> Result<()> {
+    if targets.is_empty() {
+        bail!("Completion activation requires at least one target");
+    }
+    let mut commands = std::collections::BTreeSet::new();
+    let mut paths = std::collections::BTreeSet::new();
+    for target in targets {
+        if !is_valid_script_command_name(&target.command) {
+            bail!(
+                "Invalid completion command name '{}': must start with a letter or '_' \
+                 and contain only letters, digits, '_' or '-'",
+                target.command
+            );
+        }
+        if is_nu_reserved_keyword(&target.command) {
+            bail!(
+                "Invalid completion command name '{}': reserved Nushell keyword",
+                target.command
+            );
+        }
+        if !commands.insert(&target.command) {
+            bail!("Duplicate completion command '{}'", target.command);
+        }
+        let rel = std::path::Path::new(&target.path);
+        if !crate::util::fs_safety::is_safe_relative_path(rel) {
+            bail!(
+                "Completion target '{}': path '{}' is not a safe package-relative path",
+                target.command,
+                target.path
+            );
+        }
+        match rel.extension() {
+            Some(ext) if ext == "nu" => {}
+            _ => bail!(
+                "Completion target '{}': path '{}' does not have a '.nu' extension",
+                target.command,
+                target.path
+            ),
+        }
+        let normalized: std::path::PathBuf = rel
+            .components()
+            .filter(|c| !matches!(c, std::path::Component::CurDir))
+            .collect();
+        if !paths.insert(normalized) {
+            bail!("Duplicate completion target path '{}'", target.path);
+        }
+    }
+    Ok(())
+}
+
 /// A single hook binding declared by a package (issue #16).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookBinding {
@@ -468,6 +566,77 @@ mod tests {
         .unwrap_err()
         .to_string()
         .contains("unsupported Nushell hook event"));
+    }
+
+    #[test]
+    fn completion_target_kind_serializes_kebab() {
+        let t: CompletionTarget =
+            serde_json::from_str(r#"{"command":"git","path":"git.nu","kind":"command-backed"}"#)
+                .unwrap();
+        assert_eq!(t.kind, CompletionKind::CommandBacked);
+        let t: CompletionTarget =
+            serde_json::from_str(r#"{"command":"git","path":"git.nu","kind":"static"}"#).unwrap();
+        assert_eq!(t.kind, CompletionKind::Static);
+        assert!(serde_json::from_str::<CompletionTarget>(
+            r#"{"command":"git","path":"git.nu","kind":"inferred"}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn validate_completion_targets_rules() {
+        let ok = vec![
+            CompletionTarget {
+                command: "git".into(),
+                path: "git.nu".into(),
+                kind: CompletionKind::CommandBacked,
+            },
+            CompletionTarget {
+                command: "cargo".into(),
+                path: "cargo.nu".into(),
+                kind: CompletionKind::Static,
+            },
+        ];
+        assert!(validate_completion_targets(&ok).is_ok());
+        assert!(validate_completion_targets(&[]).is_err());
+        let one = |command: &str, path: &str| {
+            vec![CompletionTarget {
+                command: command.into(),
+                path: path.into(),
+                kind: CompletionKind::Static,
+            }]
+        };
+        assert!(validate_completion_targets(&one("9git", "git.nu")).is_err());
+        assert!(validate_completion_targets(&one("has space", "git.nu")).is_err());
+        assert!(validate_completion_targets(&one("if", "git.nu")).is_err());
+        assert!(validate_completion_targets(&one("git", "../escape.nu")).is_err());
+        assert!(validate_completion_targets(&one("git", "git.txt")).is_err());
+        let dup_cmd = vec![
+            CompletionTarget {
+                command: "git".into(),
+                path: "a.nu".into(),
+                kind: CompletionKind::Static,
+            },
+            CompletionTarget {
+                command: "git".into(),
+                path: "b.nu".into(),
+                kind: CompletionKind::Static,
+            },
+        ];
+        assert!(validate_completion_targets(&dup_cmd).is_err());
+        let dup_path = vec![
+            CompletionTarget {
+                command: "git".into(),
+                path: "./git.nu".into(),
+                kind: CompletionKind::Static,
+            },
+            CompletionTarget {
+                command: "cargo".into(),
+                path: "git.nu".into(),
+                kind: CompletionKind::Static,
+            },
+        ];
+        assert!(validate_completion_targets(&dup_path).is_err());
     }
 
     #[test]

@@ -81,6 +81,39 @@ pub struct ScriptActivation {
     pub activated_at: String,
 }
 
+/// One activated completion target: declared command plus resolved source.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompletionActivationTarget {
+    /// External command name this target augments, as declared.
+    pub command: String,
+    /// Package-relative `.nu` source path as declared.
+    pub path: String,
+    /// Absolute canonical path to the source within the installed payload.
+    pub target_path: String,
+    /// Declared completion kind (`static` / `command-backed`).
+    pub kind: crate::core::package::CompletionKind,
+}
+
+/// Per-Nu-identity activation record stored on a completion lockfile entry
+/// (issue #15). Mirrors [`ScriptActivation`]'s identity fields: the record
+/// is current only when Nu hash, Nu version, vendor-autoload directory,
+/// and managed file path all match the cached `NuPaths`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompletionActivation {
+    /// Targets this package contributes while active.
+    pub targets: Vec<CompletionActivationTarget>,
+    /// Absolute path to the selected vendor-autoload directory.
+    pub vendor_autoload_dir: String,
+    /// Absolute path to the Numan-managed autoload file (`numan.nu`).
+    pub managed_file_path: String,
+    /// SHA-256 of the Nu executable used when this activation was recorded.
+    pub nu_executable_sha256: String,
+    /// Version string of the Nu executable used when recorded.
+    pub nu_version: String,
+    /// Timestamp when this activation record was written.
+    pub activated_at: String,
+}
+
 /// Registry metadata persisted for a package that can be activated as a Nu overlay.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OverlayPackageSpec {
@@ -236,6 +269,19 @@ pub struct LockfileEntry {
     #[serde(default)]
     pub script_entry_points: Option<Vec<crate::core::package::ScriptEntryPoint>>,
 
+    /// Activation record for this completion package under a specific Nu
+    /// identity and vendor-autoload target. `None` means not yet activated
+    /// (issue #15).
+    #[serde(default)]
+    pub completion_activation: Option<CompletionActivation>,
+
+    /// Completion targets persisted from the registry at install time
+    /// (`activation.kind = "nu-completion"`). `None` for non-completion
+    /// packages and for completion packages installed without a
+    /// declaration, which stay install-only.
+    #[serde(default)]
+    pub completion_targets: Option<Vec<crate::core::package::CompletionTarget>>,
+
     /// Registry dependency map captured at install time.
     /// Activation requires this to be empty in Phase 4.
     #[serde(default)]
@@ -322,6 +368,38 @@ impl LockfileEntry {
         self.script_entry_points
             .as_ref()
             .map(|eps| !eps.is_empty())
+            .unwrap_or(false)
+            && self.locked_dependencies.is_empty()
+    }
+
+    /// Returns `true` if this completion entry is active for the given Nu
+    /// identity and vendor-autoload target. All four identity fields must
+    /// match, mirroring [`Self::is_script_active_for`].
+    pub fn is_completion_active_for(
+        &self,
+        nu_executable_sha256: &str,
+        nu_version: &str,
+        vendor_autoload_dir: &str,
+        managed_file_path: &str,
+    ) -> bool {
+        match &self.completion_activation {
+            Some(a) => {
+                a.nu_executable_sha256 == nu_executable_sha256
+                    && a.nu_version == nu_version
+                    && a.vendor_autoload_dir == vendor_autoload_dir
+                    && a.managed_file_path == managed_file_path
+            }
+            None => false,
+        }
+    }
+
+    /// Returns `true` when this completion package can be activated
+    /// (issue #15): declared targets were persisted at install time and no
+    /// locked dependencies need resolution.
+    pub fn is_completion_activatable(&self) -> bool {
+        self.completion_targets
+            .as_ref()
+            .map(|targets| !targets.is_empty())
             .unwrap_or(false)
             && self.locked_dependencies.is_empty()
     }
@@ -510,6 +588,8 @@ mod tests {
             overlay: None,
             script_activation: None,
             script_entry_points: None,
+            completion_activation: None,
+            completion_targets: None,
             locked_dependencies: BTreeMap::new(),
         }
     }
@@ -570,6 +650,8 @@ mod tests {
                 overlay: None,
                 script_activation: None,
                 script_entry_points: None,
+                completion_activation: None,
+                completion_targets: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -650,6 +732,8 @@ mod tests {
             overlay: None,
             script_activation: None,
             script_entry_points: None,
+            completion_activation: None,
+            completion_targets: None,
             locked_dependencies: BTreeMap::new(),
         }
     }
@@ -792,6 +876,8 @@ mod tests {
         let no_points = LockfileEntry {
             package_type: "script".to_string(),
             script_entry_points: None,
+            completion_activation: None,
+            completion_targets: None,
             ..make_base_entry()
         };
         assert!(!no_points.is_script_activatable());
@@ -799,6 +885,8 @@ mod tests {
         let empty_points = LockfileEntry {
             package_type: "script".to_string(),
             script_entry_points: Some(Vec::new()),
+            completion_activation: None,
+            completion_targets: None,
             ..make_base_entry()
         };
         assert!(!empty_points.is_script_activatable());
@@ -820,6 +908,97 @@ mod tests {
     }
 
     #[test]
+    fn is_completion_active_for_matches_correctly() {
+        let entry = LockfileEntry {
+            package_type: "completion".to_string(),
+            completion_activation: Some(CompletionActivation {
+                targets: Vec::new(),
+                vendor_autoload_dir: "/nu/vendor/autoload".to_string(),
+                managed_file_path: "/nu/vendor/autoload/numan.nu".to_string(),
+                nu_executable_sha256: "exe-hash".to_string(),
+                nu_version: "0.113.1".to_string(),
+                activated_at: "0".to_string(),
+            }),
+            ..make_base_entry()
+        };
+
+        assert!(entry.is_completion_active_for(
+            "exe-hash",
+            "0.113.1",
+            "/nu/vendor/autoload",
+            "/nu/vendor/autoload/numan.nu"
+        ));
+        assert!(!entry.is_completion_active_for(
+            "wrong-hash",
+            "0.113.1",
+            "/nu/vendor/autoload",
+            "/nu/vendor/autoload/numan.nu"
+        ));
+        assert!(!entry.is_completion_active_for(
+            "exe-hash",
+            "0.114.0",
+            "/nu/vendor/autoload",
+            "/nu/vendor/autoload/numan.nu"
+        ));
+        assert!(!entry.is_completion_active_for(
+            "exe-hash",
+            "0.113.1",
+            "/other/vendor/autoload",
+            "/nu/vendor/autoload/numan.nu"
+        ));
+        assert!(!entry.is_completion_active_for(
+            "exe-hash",
+            "0.113.1",
+            "/nu/vendor/autoload",
+            "/other/path/numan.nu"
+        ));
+    }
+
+    #[test]
+    fn is_completion_activatable_requires_targets_and_no_deps() {
+        use crate::core::package::{CompletionKind, CompletionTarget};
+
+        let target = CompletionTarget {
+            command: "git".to_string(),
+            path: "git.nu".to_string(),
+            kind: CompletionKind::CommandBacked,
+        };
+        let ready = LockfileEntry {
+            package_type: "completion".to_string(),
+            completion_targets: Some(vec![target.clone()]),
+            locked_dependencies: BTreeMap::new(),
+            ..make_base_entry()
+        };
+        assert!(ready.is_completion_activatable());
+
+        let no_targets = LockfileEntry {
+            package_type: "completion".to_string(),
+            completion_targets: None,
+            ..make_base_entry()
+        };
+        assert!(!no_targets.is_completion_activatable());
+
+        let empty_targets = LockfileEntry {
+            package_type: "completion".to_string(),
+            completion_targets: Some(Vec::new()),
+            ..make_base_entry()
+        };
+        assert!(!empty_targets.is_completion_activatable());
+
+        let with_deps = LockfileEntry {
+            package_type: "completion".to_string(),
+            completion_targets: Some(vec![target]),
+            locked_dependencies: {
+                let mut m = BTreeMap::new();
+                m.insert("owner/dep".to_string(), "^1.0.0".to_string());
+                m
+            },
+            ..make_base_entry()
+        };
+        assert!(!with_deps.is_completion_activatable());
+    }
+
+    #[test]
     fn is_module_activatable_requires_mode_entry_and_no_deps() {
         use crate::core::package::ModuleImportMode;
 
@@ -833,6 +1012,8 @@ mod tests {
             overlay: None,
             script_activation: None,
             script_entry_points: None,
+            completion_activation: None,
+            completion_targets: None,
             locked_dependencies: BTreeMap::new(),
             ..make_base_entry()
         };
@@ -870,6 +1051,8 @@ mod tests {
             overlay: None,
             script_activation: None,
             script_entry_points: None,
+            completion_activation: None,
+            completion_targets: None,
             locked_dependencies: {
                 let mut m = BTreeMap::new();
                 m.insert("owner/dep".to_string(), "^1.0.0".to_string());
@@ -907,6 +1090,8 @@ mod tests {
                 overlay: None,
                 script_activation: None,
                 script_entry_points: None,
+                completion_activation: None,
+                completion_targets: None,
                 locked_dependencies: deps,
                 module_activation: Some(ModuleActivation {
                     entry_path: "/root/packages/modules/owner/mymod/1.0.0-aaa/mod.nu".to_string(),

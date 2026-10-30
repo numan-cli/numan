@@ -162,6 +162,7 @@ impl Fixture {
                     exports: None,
                     bindings: None,
                     entry_points: Vec::new(),
+                    targets: Vec::new(),
                 }),
                 provenance: None,
                 evidence_tier: None,

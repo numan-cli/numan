@@ -211,10 +211,11 @@ where
 
     let old_paths = NuPaths::load(root)?;
     let mut lockfile = Lockfile::load(root)?;
-    let has_active_modules = lockfile
-        .packages
-        .values()
-        .any(|entry| entry.module_activation.is_some() || entry.script_activation.is_some());
+    let has_active_modules = lockfile.packages.values().any(|entry| {
+        entry.module_activation.is_some()
+            || entry.script_activation.is_some()
+            || entry.completion_activation.is_some()
+    });
 
     if has_active_modules {
         validate_refresh_for_active_modules(
@@ -309,7 +310,11 @@ fn validate_refresh_for_active_modules(
     let active_ids: Vec<String> = lockfile
         .packages
         .iter()
-        .filter(|(_, entry)| entry.module_activation.is_some() || entry.script_activation.is_some())
+        .filter(|(_, entry)| {
+            entry.module_activation.is_some()
+                || entry.script_activation.is_some()
+                || entry.completion_activation.is_some()
+        })
         .map(|(id, _)| id.clone())
         .collect();
 
@@ -341,6 +346,10 @@ fn refresh_activation_records(lockfile: &mut Lockfile, new_paths: &NuPaths) -> R
             activation.nu_executable_sha256 = new_paths.nu_executable_hash.clone();
             activation.nu_version = new_paths.nu_version.clone();
         }
+        if let Some(ref mut activation) = entry.completion_activation {
+            activation.nu_executable_sha256 = new_paths.nu_executable_hash.clone();
+            activation.nu_version = new_paths.nu_version.clone();
+        }
     }
     Ok(())
 }
@@ -349,7 +358,10 @@ fn refresh_activation_records(lockfile: &mut Lockfile, new_paths: &NuPaths) -> R
 /// rewrite `numan.nu` so script wrappers invoke the refreshed executable.
 ///
 /// Module `use` statements do not embed the Nu path, so only script wrappers
-/// need regeneration. Candidate validation runs before the atomic replace.
+/// need regeneration on a path change; active completion targets are
+/// re-resolved and revalidated on the same pass (issue #15), and included
+/// whenever regeneration does happen. Candidate validation runs before the
+/// atomic replace.
 fn regenerate_managed_autoload_for_refresh(
     root: &Path,
     old_paths: &NuPaths,
@@ -361,7 +373,11 @@ fn regenerate_managed_autoload_for_refresh(
         .packages
         .values()
         .any(|entry| entry.script_activation.is_some());
-    if !has_scripts {
+    let has_completions = lockfile
+        .packages
+        .values()
+        .any(|entry| entry.completion_activation.is_some());
+    if !has_scripts && !has_completions {
         return Ok(());
     }
 
@@ -373,6 +389,7 @@ fn regenerate_managed_autoload_for_refresh(
 
     let mut entries = Vec::new();
     let mut scripts = Vec::new();
+    let mut completions = Vec::new();
     let mut active_ids = Vec::new();
     for (pkg_id, entry) in &lockfile.packages {
         if let Some(ma) = &entry.module_activation {
@@ -408,6 +425,30 @@ fn regenerate_managed_autoload_for_refresh(
             }
             active_ids.push(pkg_id.clone());
         }
+        if let Some(ca) = &entry.completion_activation {
+            for tgt in &ca.targets {
+                let resolved = crate::nu::autoload::resolve_entry(
+                    root,
+                    &entry.payload_path,
+                    &tgt.path,
+                    crate::core::package::ModuleImportMode::Module,
+                    pkg_id,
+                )
+                .with_context(|| {
+                    format!(
+                        "Active completion target '{}' for '{}' no longer resolves; \
+                         deactivate and re-activate it",
+                        tgt.path, pkg_id
+                    )
+                })?;
+                completions.push(crate::nu::autoload::ResolvedCompletionTarget {
+                    scoped_id: pkg_id.clone(),
+                    command: tgt.command.clone(),
+                    target_path: resolved.absolute_path,
+                });
+            }
+            active_ids.push(pkg_id.clone());
+        }
     }
 
     if old_paths.nu_executable == new_paths.nu_executable {
@@ -415,8 +456,9 @@ fn regenerate_managed_autoload_for_refresh(
         return Ok(());
     }
 
-    let content = crate::nu::autoload::generate_managed_content(&entries, &scripts)
-        .context("Failed to regenerate managed autoload content for `numan init --refresh`")?;
+    let content =
+        crate::nu::autoload::generate_managed_content(&entries, &scripts, &completions)
+            .context("Failed to regenerate managed autoload content for `numan init --refresh`")?;
     let candidate = write_candidate(&managed_file, &content)
         .context("Failed to write managed autoload candidate for `numan init --refresh`")?;
     let runner = runner_factory(&new_paths.nu_executable);
@@ -533,6 +575,8 @@ mod tests {
             overlay: None,
             script_activation: None,
             script_entry_points: None,
+            completion_activation: None,
+            completion_targets: None,
             locked_dependencies: BTreeMap::new(),
         }
     }

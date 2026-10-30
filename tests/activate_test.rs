@@ -130,6 +130,8 @@ impl TestEnv {
             overlay: None,
             script_activation: None,
             script_entry_points: None,
+            completion_activation: None,
+            completion_targets: None,
             locked_dependencies: std::collections::BTreeMap::new(),
         }
     }
@@ -346,6 +348,8 @@ fn test_activate_path_with_spaces() {
             overlay: None,
             script_activation: None,
             script_entry_points: None,
+            completion_activation: None,
+            completion_targets: None,
             locked_dependencies: std::collections::BTreeMap::new(),
         },
     );
