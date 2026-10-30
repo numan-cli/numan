@@ -184,10 +184,15 @@ pub fn install_package(
     // managed `numan.nu` still carries the package's lines, orphaning them
     // and dropping any completion target-ownership claims (issue #15
     // review). Refuse like update/remove do. A non-force reinstall of the
-    // same version early-returns below and keeps the record, so it stays
-    // allowed.
+    // same version with an intact payload early-returns below and keeps the
+    // record, so it stays allowed.
     if let Some(existing) = lockfile.packages.get(&lock_key) {
-        if options.force || existing.version != version_str {
+        // A missing payload also falls through to the fresh-install path even
+        // for a same-version non-force reinstall, so treat it as a replacement.
+        let replacing = options.force
+            || existing.version != version_str
+            || !options.root.join(existing.payload_path()).exists();
+        if replacing {
             ensure_reinstall_preserves_activation(existing, &lock_key)?;
         }
     }

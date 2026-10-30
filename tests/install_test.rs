@@ -908,4 +908,21 @@ fn integration_force_reinstall_refuses_active_completion() {
             .is_some(),
         "force reinstall must not clear the completion activation record"
     );
+
+    // A same-version non-force reinstall also replaces the entry when the
+    // installed payload directory is missing, so it must refuse too rather
+    // than silently orphaning the managed autoload lines.
+    let payload_dir = root.join(lockfile.packages["test/completions"].payload_path());
+    std::fs::remove_dir_all(&payload_dir).unwrap();
+    let err = transaction::install_package("test/completions", None, &options).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("active as a completion"), "got: {msg}");
+    assert!(msg.contains("deactivate"), "got: {msg}");
+    let lockfile = Lockfile::load(&root).unwrap();
+    assert!(
+        lockfile.packages["test/completions"]
+            .completion_activation
+            .is_some(),
+        "missing-payload reinstall must not clear the completion activation record"
+    );
 }

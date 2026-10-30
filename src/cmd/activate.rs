@@ -2089,9 +2089,20 @@ fn print_grouped_consent_table(
         let target = managed_file.unwrap_or("<none>");
         println!("Completion startup autoload");
         for t in completions {
-            let commands: Vec<&str> = t.targets.iter().map(|x| x.command.as_str()).collect();
-            println!("  {} ({}) -> {}", t.package_id, commands.join(", "), target);
+            for ct in &t.targets {
+                println!(
+                    "  {} {} -> {} [{}]",
+                    t.package_id, ct.command, ct.path, ct.kind
+                );
+                if ct.kind == crate::core::package::CompletionKind::CommandBacked {
+                    println!(
+                        "    note: this completion provider can execute code during completion \
+                         (only when Nushell requests a completion; never at install or activation)"
+                    );
+                }
+            }
         }
+        println!("  -> {target}");
         println!();
     }
 }

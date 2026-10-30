@@ -22,9 +22,10 @@ use numan_cli::nu::paths::NuPaths;
 use numan_cli::state::autoload_journal::{
     AutoloadOperation, AutoloadStage, PendingAutoload, SCHEMA_VERSION as AUTOLOAD_SCHEMA_VERSION,
 };
+use numan_cli::state::autoload_recovery::{reconcile_pending_autoload, AutoloadRecoveryOutcome};
 use numan_cli::state::autoload_state::AutoloadState;
 use numan_cli::state::lockfile::{Lockfile, LockfileEntry};
-use numan_cli::util::fs_safety::OWNERSHIP_MARKER;
+use numan_cli::util::fs_safety::{acquire_mutation_lock, OWNERSHIP_MARKER};
 
 use tempfile::TempDir;
 
@@ -784,4 +785,92 @@ fn activate_recovers_interrupted_completion_deactivation() {
     let content = std::fs::read_to_string(env.managed_file_path()).unwrap();
     assert!(content.contains("# numan:completion acme/next-completions cargo"));
     assert!(!content.contains("old-completions"));
+}
+
+#[test]
+fn recovery_rebuilds_completion_record_from_replaced_activate_journal() {
+    // The rebuild branch of `apply_replaced_transition` is distinct from the
+    // deactivation-clearing case above: here an interrupted *activation*
+    // replaced the managed file and journaled the transition, but crashed
+    // before writing the completion_activation record and autoload state.
+    // Recovery must rebuild the record from the persisted declaration.
+    let env = CompletionTestEnv::new();
+    env.write_nu_paths();
+    let (id, entry) = env.create_completion(
+        "acme",
+        "git-completions",
+        &[("git.nu", "# git completions\n")],
+        vec![ct("git", "git.nu", CompletionKind::CommandBacked)],
+    );
+    env.write_lockfile(vec![(id.clone(), entry)]);
+
+    let runner = FakeCandidateRunner::success();
+    execute_with_candidate_runner(
+        &env.activate_args(&[&id]),
+        env.root(),
+        &CompletionTestEnv::ok_registrar(),
+        &runner,
+    )
+    .unwrap();
+
+    // Simulate the crash window: the managed file is in place, but the
+    // lockfile record and derived autoload state were never written.
+    let managed_content = std::fs::read(env.managed_file_path()).unwrap();
+    let candidate_sha = integrity::compute_sha256(&managed_content);
+    AutoloadState::delete(env.root()).unwrap();
+    let mut lockfile = Lockfile::load(env.root()).unwrap();
+    lockfile
+        .packages
+        .get_mut(&id)
+        .unwrap()
+        .completion_activation = None;
+    lockfile.save(env.root()).unwrap();
+
+    std::fs::create_dir_all(env.root().join("state")).unwrap();
+    PendingAutoload {
+        schema_version: AUTOLOAD_SCHEMA_VERSION,
+        operation: AutoloadOperation::Activate,
+        stage: AutoloadStage::Replaced,
+        nu_executable_sha256: env.nu_hash.clone(),
+        nu_version: "0.116.1".to_string(),
+        vendor_autoload_dir: env.vendor_dir_str(),
+        managed_file_path: format!("{}/numan.nu", env.vendor_dir_str()),
+        previous_file_exists: false,
+        previous_file_sha256: None,
+        desired_file_exists: true,
+        candidate_sha256: Some(candidate_sha),
+        previous_active_module_ids: vec![],
+        desired_active_module_ids: vec![id.clone()],
+        targeted_module_ids: vec![id.clone()],
+        created_at: "0000000000000003".to_string(),
+        pre_mutation_snapshot_id: None,
+    }
+    .save(env.root())
+    .unwrap();
+
+    let _guard = acquire_mutation_lock(env.root()).unwrap();
+    let nu_paths = NuPaths::load(env.root()).unwrap();
+    let mut lockfile = Lockfile::load(env.root()).unwrap();
+    assert_eq!(
+        reconcile_pending_autoload(env.root(), &nu_paths, &mut lockfile).unwrap(),
+        AutoloadRecoveryOutcome::ReplacedCompleted
+    );
+
+    let recovered = Lockfile::load(env.root()).unwrap();
+    let record = recovered.packages[&id]
+        .completion_activation
+        .as_ref()
+        .expect("recovery must rebuild the completion record");
+    assert_eq!(record.targets.len(), 1);
+    assert_eq!(record.targets[0].command, "git");
+    assert_eq!(record.targets[0].kind, CompletionKind::CommandBacked);
+    assert!(record.targets[0].target_path.ends_with("git.nu"));
+    assert_eq!(
+        AutoloadState::load(env.root())
+            .unwrap()
+            .unwrap()
+            .active_module_ids,
+        vec![id.clone()]
+    );
+    assert!(PendingAutoload::load(env.root()).unwrap().is_none());
 }
