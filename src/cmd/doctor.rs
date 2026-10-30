@@ -948,10 +948,11 @@ fn check_lockfile(
     }
 
     if let Some(paths) = nu_paths {
-        let has_active_modules = lockfile
-            .packages
-            .values()
-            .any(|e| e.module_activation.is_some() || e.script_activation.is_some());
+        let has_active_modules = lockfile.packages.values().any(|e| {
+            e.module_activation.is_some()
+                || e.script_activation.is_some()
+                || e.completion_activation.is_some()
+        });
         if has_active_modules && paths.vendor_autoload_dir.is_none() {
             findings.push(finding(
                 "nu_paths.vendor_missing",
@@ -1044,6 +1045,23 @@ fn check_activation(
                 RepairTier::Confirm,
             ));
         }
+        if entry.package_type == "completion"
+            && entry.completion_activation.is_some()
+            && !entry.is_completion_active_for(
+                &paths.nu_executable_hash,
+                &paths.nu_version,
+                vendor_dir,
+                &managed_path,
+            )
+        {
+            findings.push(finding(
+                "activation.completion_stale",
+                Severity::Warn,
+                format!("Completion '{id}' activation is stale for current Nu"),
+                Some(CMD_ACTIVATE),
+                RepairTier::Confirm,
+            ));
+        }
     }
 
     if let Ok(Some(state)) = AutoloadState::load(root) {
@@ -1058,10 +1076,11 @@ fn check_activation(
         }
     }
 
-    let has_active_modules = lockfile
-        .packages
-        .values()
-        .any(|e| e.module_activation.is_some() || e.script_activation.is_some());
+    let has_active_modules = lockfile.packages.values().any(|e| {
+        e.module_activation.is_some()
+            || e.script_activation.is_some()
+            || e.completion_activation.is_some()
+    });
     if has_active_modules && !managed_path.is_empty() {
         let managed = Path::new(&managed_path);
         if !managed.is_file() {
@@ -1674,6 +1693,8 @@ fn apply_repairs(
                     | "journal.autoload_pending"
                     | "activation.plugin_stale"
                     | "activation.module_stale"
+                    | "activation.script_stale"
+                    | "activation.completion_stale"
                     | "autoload.projection"
                     | "autoload.managed_missing"
             )
@@ -1877,6 +1898,8 @@ fn print_report_to(
                 "activation.plugin_mutation_gated",
                 "activation.plugin_stale",
                 "activation.module_stale",
+                "activation.script_stale",
+                "activation.completion_stale",
                 "autoload.projection",
                 "autoload.managed_missing",
                 "autoload.managed_foreign",
@@ -2228,6 +2251,8 @@ mod tests {
                 overlay: None,
                 script_activation: None,
                 script_entry_points: None,
+                completion_activation: None,
+                completion_targets: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -2302,6 +2327,8 @@ mod tests {
                 overlay: None,
                 script_activation: None,
                 script_entry_points: None,
+                completion_activation: None,
+                completion_targets: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -2393,6 +2420,8 @@ mod tests {
                 overlay: None,
                 script_activation: None,
                 script_entry_points: None,
+                completion_activation: None,
+                completion_targets: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );

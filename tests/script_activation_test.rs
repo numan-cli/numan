@@ -127,6 +127,8 @@ impl ScriptTestEnv {
             overlay: None,
             script_activation: None,
             script_entry_points: Some(entry_points),
+            completion_activation: None,
+            completion_targets: None,
             locked_dependencies: BTreeMap::new(),
         };
         (pkg_id, entry)
@@ -336,7 +338,8 @@ fn real_nu_script_command_runs_and_forwards_exit_status() {
         nu_executable: nu.clone(),
     };
     let rendered =
-        numan_cli::nu::autoload::generate_managed_content(&[], std::slice::from_ref(&cmd)).unwrap();
+        numan_cli::nu::autoload::generate_managed_content(&[], std::slice::from_ref(&cmd), &[])
+            .unwrap();
     std::fs::write(&wrapper, format!("{rendered}\nhello world\n")).unwrap();
     let out = std::process::Command::new(&nu)
         .arg("--no-config-file")

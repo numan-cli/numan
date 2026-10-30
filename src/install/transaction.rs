@@ -179,6 +179,24 @@ pub fn install_package(
     let mut lockfile = Lockfile::load(options.root)?;
     let lock_key = id.to_string();
 
+    // A reinstall that would replace the entry must not silently clear an
+    // autoload activation record: the fresh entry starts inactive while the
+    // managed `numan.nu` still carries the package's lines, orphaning them
+    // and dropping any completion target-ownership claims (issue #15
+    // review). Refuse like update/remove do. A non-force reinstall of the
+    // same version with an intact payload early-returns below and keeps the
+    // record, so it stays allowed.
+    if let Some(existing) = lockfile.packages.get(&lock_key) {
+        // A missing payload also falls through to the fresh-install path even
+        // for a same-version non-force reinstall, so treat it as a replacement.
+        let replacing = options.force
+            || existing.version != version_str
+            || !options.root.join(existing.payload_path()).exists();
+        if replacing {
+            ensure_reinstall_preserves_activation(existing, &lock_key)?;
+        }
+    }
+
     if !options.force {
         if let Some(entry) = lockfile.packages.get_mut(&lock_key) {
             if entry.version == version_str {
@@ -417,6 +435,22 @@ pub fn install_package(
         _ => None,
     };
 
+    // Validate declared completion targets before promotion too (issue #15),
+    // mirroring the script validation above.
+    let completion_targets = match resolved.activation.as_ref() {
+        Some(spec) if spec.kind == "nu-completion" => {
+            if pkg.package_type != crate::core::package::PackageType::Completion {
+                bail!(
+                    "Package {id} declares activation kind 'nu-completion' but is not a completion package"
+                );
+            }
+            crate::core::package::validate_completion_targets(&spec.targets)
+                .with_context(|| format!("Invalid completion activation declaration for {id}"))?;
+            Some(spec.targets.clone())
+        }
+        _ => None,
+    };
+
     // 9. Snapshot lockfile before mutation (after download/extraction preflight succeeds).
     // Skip when the lockfile is empty — there is no prior state worth restoring.
     if !Lockfile::load(options.root)?.packages.is_empty() {
@@ -518,6 +552,8 @@ pub fn install_package(
         overlay,
         script_activation: None,
         script_entry_points,
+        completion_activation: None,
+        completion_targets,
         locked_dependencies,
     };
 
@@ -560,6 +596,39 @@ fn format_timestamp() -> String {
         .unwrap_or_default()
         .as_secs();
     format!("{secs:016}")
+}
+
+/// Refuse to replace the lockfile entry of a package that is currently
+/// active through the managed autoload file (module, script, or
+/// completion): the replacement entry would start with no activation
+/// record while `numan.nu` still carries the package's contribution.
+/// Mirrors the guards in `update` and `remove`.
+fn ensure_reinstall_preserves_activation(entry: &LockfileEntry, package_id: &str) -> Result<()> {
+    if entry.module_activation.is_some() {
+        bail!(
+            "Package '{}' is currently active as a module. \
+             Run `numan deactivate {}` first.",
+            package_id,
+            package_id
+        );
+    }
+    if entry.script_activation.is_some() {
+        bail!(
+            "Package '{}' is currently active as a script. \
+             Run `numan deactivate {}` first.",
+            package_id,
+            package_id
+        );
+    }
+    if entry.completion_activation.is_some() {
+        bail!(
+            "Package '{}' is currently active as a completion. \
+             Run `numan deactivate {}` first.",
+            package_id,
+            package_id
+        );
+    }
+    Ok(())
 }
 
 fn persist_hook_bindings(

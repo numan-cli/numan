@@ -12,7 +12,8 @@ use numan_cli::nu::autoload::{CandidateRunner, FakeCandidateRunner};
 use numan_cli::nu::paths::NuPaths;
 use numan_cli::state::autoload_state::AutoloadState;
 use numan_cli::state::lockfile::{
-    Lockfile, LockfileEntry, ModuleActivation, ScriptActivation, ScriptActivationCommand,
+    CompletionActivation, CompletionActivationTarget, Lockfile, LockfileEntry, ModuleActivation,
+    ScriptActivation, ScriptActivationCommand,
 };
 use numan_cli::util::fs_safety::OWNERSHIP_MARKER;
 use tempfile::TempDir;
@@ -136,6 +137,8 @@ impl InitRefreshEnv {
                 overlay: None,
                 script_activation: None,
                 script_entry_points: None,
+                completion_activation: None,
+                completion_targets: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -193,6 +196,69 @@ impl InitRefreshEnv {
         );
         lockfile.save(self.root()).unwrap();
     }
+
+    fn write_active_completion_lockfile(&self, nu_exe: &Path) {
+        let payload_rel = "packages/completions/owner/completions/1.0.0-aabbccdd";
+        let payload_abs = self.root().join(payload_rel);
+        std::fs::create_dir_all(&payload_abs).unwrap();
+        std::fs::write(payload_abs.join("git.nu"), b"# git completions\n").unwrap();
+
+        let mut lockfile = Lockfile::empty();
+        lockfile.packages.insert(
+            "owner/completions".to_string(),
+            LockfileEntry {
+                package_type: "completion".to_string(),
+                payload_path: payload_rel.to_string(),
+                completion_targets: Some(vec![numan_cli::core::package::CompletionTarget {
+                    command: "git".to_string(),
+                    path: "git.nu".to_string(),
+                    kind: numan_cli::core::package::CompletionKind::CommandBacked,
+                }]),
+                completion_activation: Some(CompletionActivation {
+                    targets: vec![CompletionActivationTarget {
+                        command: "git".to_string(),
+                        path: "git.nu".to_string(),
+                        target_path: payload_abs.join("git.nu").to_string_lossy().into_owned(),
+                        kind: numan_cli::core::package::CompletionKind::CommandBacked,
+                    }],
+                    vendor_autoload_dir: self.vendor_dir_str(),
+                    managed_file_path: self.managed_file.to_string_lossy().into_owned(),
+                    nu_executable_sha256: integrity::compute_sha256(
+                        &std::fs::read(nu_exe).unwrap(),
+                    ),
+                    nu_version: "0.113.1".to_string(),
+                    activated_at: "now".to_string(),
+                }),
+                ..empty_lockfile_entry()
+            },
+        );
+        lockfile.save(self.root()).unwrap();
+    }
+
+    fn write_completion_managed_file(&self) -> String {
+        let target = self
+            .root()
+            .join("packages/completions/owner/completions/1.0.0-aabbccdd/git.nu");
+        let content = format!(
+            "{OWNERSHIP_MARKER}\n# numan:completion owner/completions git\nuse \"{}\" *\n",
+            nu_string_literal(target.to_string_lossy().as_ref())
+        );
+        std::fs::write(&self.managed_file, &content).unwrap();
+        content
+    }
+
+    fn write_completion_autoload_state(&self, nu_hash: &str, content: &str) {
+        let state = AutoloadState::new(
+            self.vendor_dir_str(),
+            self.managed_file.to_string_lossy().into_owned(),
+            nu_hash.to_string(),
+            "0.113.1".to_string(),
+            integrity::compute_sha256(content.as_bytes()),
+            vec!["owner/completions".to_string()],
+            "now".to_string(),
+        );
+        state.save(self.root()).unwrap();
+    }
 }
 
 fn empty_lockfile_entry() -> LockfileEntry {
@@ -232,6 +298,8 @@ fn empty_lockfile_entry() -> LockfileEntry {
         overlay: None,
         script_activation: None,
         script_entry_points: None,
+        completion_activation: None,
+        completion_targets: None,
         locked_dependencies: BTreeMap::new(),
     }
 }
@@ -347,6 +415,125 @@ fn refresh_regenerates_script_wrappers_for_new_nu_executable() {
     assert_eq!(
         state.generated_file_sha256,
         integrity::compute_sha256(content.as_bytes())
+    );
+}
+
+#[test]
+fn refresh_with_active_completion_keeps_identity_when_nu_path_unchanged() {
+    let env = InitRefreshEnv::new();
+    let vendor = env.vendor_dir_str();
+    let paths_v1 = env.paths(&env.nu_v1, &vendor);
+    paths_v1.save(env.root()).unwrap();
+    env.write_active_completion_lockfile(&env.nu_v1);
+    let managed = env.write_completion_managed_file();
+    env.write_completion_autoload_state(&env.hash_v1, &managed);
+
+    let detect = {
+        let paths = paths_v1.clone();
+        move || Ok(paths.clone())
+    };
+    execute_with_runner(
+        &InitArgs { refresh: true },
+        env.root(),
+        detect,
+        fake_runner_factory,
+    )
+    .unwrap();
+
+    // Managed file and activation identity are untouched.
+    let content = std::fs::read_to_string(&env.managed_file).unwrap();
+    assert_eq!(content, managed);
+    let lockfile = Lockfile::load(env.root()).unwrap();
+    let activation = lockfile.packages["owner/completions"]
+        .completion_activation
+        .as_ref()
+        .unwrap();
+    assert_eq!(activation.nu_executable_sha256, env.hash_v1);
+}
+
+#[test]
+fn refresh_with_active_completion_regenerates_for_new_nu_executable() {
+    let env = InitRefreshEnv::new();
+    let vendor = env.vendor_dir_str();
+    let paths_v1 = env.paths(&env.nu_v1, &vendor);
+    paths_v1.save(env.root()).unwrap();
+    env.write_active_completion_lockfile(&env.nu_v1);
+    let managed = env.write_completion_managed_file();
+    env.write_completion_autoload_state(&env.hash_v1, &managed);
+
+    let paths_v2 = env.paths(&env.nu_v2, &vendor);
+    let detect = {
+        let paths = paths_v2.clone();
+        move || Ok(paths.clone())
+    };
+    execute_with_runner(
+        &InitArgs { refresh: true },
+        env.root(),
+        detect,
+        fake_runner_factory,
+    )
+    .unwrap();
+
+    let content = std::fs::read_to_string(&env.managed_file).unwrap();
+    assert!(
+        content.contains("# numan:completion owner/completions git"),
+        "{content}"
+    );
+    assert!(content.contains("git.nu"), "{content}");
+
+    let lockfile = Lockfile::load(env.root()).unwrap();
+    let activation = lockfile.packages["owner/completions"]
+        .completion_activation
+        .as_ref()
+        .unwrap();
+    assert_eq!(activation.nu_executable_sha256, env.hash_v2);
+
+    let state = AutoloadState::load(env.root()).unwrap().unwrap();
+    assert_eq!(
+        state.generated_file_sha256,
+        integrity::compute_sha256(content.as_bytes())
+    );
+}
+
+#[test]
+fn refresh_validation_failure_keeps_live_managed_file_with_active_completion() {
+    let env = InitRefreshEnv::new();
+    let vendor = env.vendor_dir_str();
+    let paths_v1 = env.paths(&env.nu_v1, &vendor);
+    paths_v1.save(env.root()).unwrap();
+    env.write_active_completion_lockfile(&env.nu_v1);
+    let managed = env.write_completion_managed_file();
+
+    let paths_v2 = env.paths(&env.nu_v2, &vendor);
+    let detect = {
+        let paths = paths_v2.clone();
+        move || Ok(paths.clone())
+    };
+    let err = execute_with_runner(
+        &InitArgs { refresh: true },
+        env.root(),
+        detect,
+        failing_runner_factory,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("candidate rejected"),
+        "expected validation failure, got: {err}"
+    );
+
+    // The live managed file must survive a failed refresh validation:
+    // validation runs against a copy, never the live file.
+    assert!(env.managed_file.is_file());
+    assert_eq!(std::fs::read_to_string(&env.managed_file).unwrap(), managed);
+
+    let lockfile = Lockfile::load(env.root()).unwrap();
+    let activation = lockfile.packages["owner/completions"]
+        .completion_activation
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        activation.nu_executable_sha256, env.hash_v1,
+        "refresh must not commit lockfile when validation fails"
     );
 }
 

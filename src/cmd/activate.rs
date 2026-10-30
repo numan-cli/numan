@@ -5,7 +5,8 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::nu::autoload::{
     generate_managed_content, replace_managed_file, resolve_entry, validate_candidate,
-    write_candidate, CandidateRunner, NuCandidateRunner, ResolvedScriptCommand,
+    write_candidate, CandidateRunner, NuCandidateRunner, ResolvedCompletionTarget,
+    ResolvedScriptCommand,
 };
 use crate::nu::paths::NuPaths;
 use crate::state::autoload_journal::{sha256_file, SCHEMA_VERSION as AUTOLOAD_SCHEMA_VERSION};
@@ -14,7 +15,8 @@ use crate::state::autoload_recovery::reconcile_pending_autoload;
 use crate::state::autoload_state::AutoloadState;
 use crate::state::journal::{PendingActivation, PendingActivationEntry, PendingStatus};
 use crate::state::lockfile::{
-    Lockfile, ModuleActivation, PluginActivation, ScriptActivation, ScriptActivationCommand,
+    CompletionActivation, CompletionActivationTarget, Lockfile, ModuleActivation, PluginActivation,
+    ScriptActivation, ScriptActivationCommand,
 };
 use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::format_timestamp;
@@ -66,6 +68,14 @@ struct ScriptTarget {
     package_id: String,
     payload_path: String,
     entry_points: Vec<crate::core::package::ScriptEntryPoint>,
+}
+
+/// Resolved completion target ready for autoload generation (issue #15).
+#[derive(Debug)]
+struct CompletionTarget {
+    package_id: String,
+    payload_path: String,
+    targets: Vec<crate::core::package::CompletionTarget>,
 }
 
 /// `plugin add` Nu program — paths come only from environment variables.
@@ -178,10 +188,14 @@ fn execute_activating(
         Some(acquire_mutation_lock(root)?)
     };
 
-    let (plugin_targets, module_targets, script_targets, managed_file_path) =
+    let (plugin_targets, module_targets, script_targets, completion_targets, managed_file_path) =
         prepare_activation_targets(args, root, &nu_paths)?;
 
-    if plugin_targets.is_empty() && module_targets.is_empty() && script_targets.is_empty() {
+    if plugin_targets.is_empty()
+        && module_targets.is_empty()
+        && script_targets.is_empty()
+        && completion_targets.is_empty()
+    {
         let lockfile = Lockfile::load(root)?;
         snapshot_before_activate_profile_sync(root, &nu_paths, args, &lockfile)?;
         sync_user_activate_profile(root, &nu_paths, args, &lockfile)?;
@@ -197,6 +211,8 @@ fn execute_activating(
         print_grouped_consent_table(
             &plugin_targets,
             &module_targets,
+            &script_targets,
+            &completion_targets,
             managed_file_path.as_deref(),
             &nu_paths.plugin_registry_path,
         );
@@ -209,6 +225,7 @@ fn execute_activating(
             plugin_targets,
             module_targets,
             script_targets,
+            completion_targets,
             managed_file_path,
         );
     }
@@ -217,15 +234,21 @@ fn execute_activating(
     print_grouped_consent_table(
         &plugin_targets,
         &module_targets,
+        &script_targets,
+        &completion_targets,
         managed_file_path.as_deref(),
         &nu_paths.plugin_registry_path,
     );
 
     let _lock = acquire_mutation_lock(root)?;
-    let (plugin_targets, module_targets, script_targets, managed_file_path) =
+    let (plugin_targets, module_targets, script_targets, completion_targets, managed_file_path) =
         prepare_activation_targets(args, root, &nu_paths)?;
 
-    if plugin_targets.is_empty() && module_targets.is_empty() && script_targets.is_empty() {
+    if plugin_targets.is_empty()
+        && module_targets.is_empty()
+        && script_targets.is_empty()
+        && completion_targets.is_empty()
+    {
         let lockfile = Lockfile::load(root)?;
         snapshot_before_activate_profile_sync(root, &nu_paths, args, &lockfile)?;
         sync_user_activate_profile(root, &nu_paths, args, &lockfile)?;
@@ -242,6 +265,7 @@ fn execute_activating(
         plugin_targets,
         module_targets,
         script_targets,
+        completion_targets,
         managed_file_path,
     )
 }
@@ -255,6 +279,7 @@ fn prepare_activation_targets(
     Vec<PluginTarget>,
     Vec<ModuleTarget>,
     Vec<ScriptTarget>,
+    Vec<CompletionTarget>,
     Option<String>,
 )> {
     let mut lockfile = Lockfile::load(root)?;
@@ -264,7 +289,11 @@ fn prepare_activation_targets(
     let plugin_targets = resolve_plugin_targets(args, &lockfile, nu_paths, root)?;
     let module_targets = resolve_module_targets(args, &lockfile, nu_paths)?;
     let script_targets = resolve_script_targets(args, &lockfile, nu_paths)?;
-    let managed_file_path = if !module_targets.is_empty() || !script_targets.is_empty() {
+    let completion_targets = resolve_completion_targets(args, &lockfile, nu_paths)?;
+    let managed_file_path = if !module_targets.is_empty()
+        || !script_targets.is_empty()
+        || !completion_targets.is_empty()
+    {
         Some(resolve_managed_file_path(nu_paths)?)
     } else {
         None
@@ -273,6 +302,7 @@ fn prepare_activation_targets(
         plugin_targets,
         module_targets,
         script_targets,
+        completion_targets,
         managed_file_path,
     ))
 }
@@ -287,6 +317,7 @@ fn run_activation_lanes(
     plugin_targets: Vec<PluginTarget>,
     module_targets: Vec<ModuleTarget>,
     script_targets: Vec<ScriptTarget>,
+    completion_targets: Vec<CompletionTarget>,
     managed_file_path: Option<String>,
 ) -> Result<()> {
     let mut lockfile = Lockfile::load(root)?;
@@ -316,7 +347,7 @@ fn run_activation_lanes(
         }
     }
 
-    if !module_targets.is_empty() || !script_targets.is_empty() {
+    if !module_targets.is_empty() || !script_targets.is_empty() || !completion_targets.is_empty() {
         let managed_file_path = managed_file_path.expect("autoload targets require managed file");
         let real_runner;
         let runner_ref: &dyn CandidateRunner = if let Some(r) = runner {
@@ -332,6 +363,7 @@ fn run_activation_lanes(
             &mut lockfile,
             &module_targets,
             &script_targets,
+            &completion_targets,
             &managed_file_path,
             runner_ref,
             Some(snapshot.id.clone()),
@@ -382,7 +414,9 @@ fn snapshot_before_activate_profile_sync(
             let entry = lockfile.packages.get(id)?;
             let kind = match entry.package_type.as_str() {
                 "plugin" => crate::state::activation_profile::ProfileKind::Plugin,
-                "module" | "script" => crate::state::activation_profile::ProfileKind::Module,
+                "module" | "script" | "completion" => {
+                    crate::state::activation_profile::ProfileKind::Module
+                }
                 _ => return None,
             };
             Some((kind, id.as_str()))
@@ -533,6 +567,7 @@ fn run_module_lane(
     lockfile: &mut Lockfile,
     targets: &[ModuleTarget],
     script_targets: &[ScriptTarget],
+    completion_targets: &[CompletionTarget],
     managed_file_path: &str,
     runner: &dyn CandidateRunner,
     pre_mutation_snapshot_id: Option<String>,
@@ -594,6 +629,49 @@ fn run_module_lane(
                 name: ep.name.clone(),
                 script_path: resolved.absolute_path,
                 nu_executable: nu_paths.nu_executable.clone(),
+            });
+        }
+    }
+
+    // Resolve all completion targets, checking target ownership against
+    // every other active or activating completion package: a command
+    // target is owned exclusively, and Numan never silently replaces
+    // another package's completion (issue #15).
+    let mut completion_resolved: Vec<ResolvedCompletionTarget> = Vec::new();
+    let mut completion_claimed: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    for target in completion_targets {
+        crate::core::package::validate_completion_targets(&target.targets).with_context(|| {
+            format!("Invalid completion declaration for '{}'", target.package_id)
+        })?;
+        for ct in &target.targets {
+            if let Some(owner) =
+                completion_claimed.insert(ct.command.clone(), target.package_id.clone())
+            {
+                bail!(
+                    "Completion target '{}' is claimed by both '{}' and '{}'; refusing to shadow",
+                    ct.command,
+                    owner,
+                    target.package_id
+                );
+            }
+            let resolved = resolve_entry(
+                root,
+                &target.payload_path,
+                &ct.path,
+                crate::core::package::ModuleImportMode::Module,
+                &target.package_id,
+            )
+            .with_context(|| {
+                format!(
+                    "Failed to resolve completion target '{}' for '{}'",
+                    ct.path, target.package_id
+                )
+            })?;
+            completion_resolved.push(ResolvedCompletionTarget {
+                scoped_id: target.package_id.clone(),
+                command: ct.command.clone(),
+                target_path: resolved.absolute_path,
             });
         }
     }
@@ -664,6 +742,60 @@ fn run_module_lane(
         }
     }
 
+    // Add already-active completions not in this batch, ownership-checked
+    // against the batch's claimed commands (mirrors the script carry-in).
+    for (pkg_id, entry) in &lockfile.packages {
+        if entry.package_type != "completion" {
+            continue;
+        }
+        if completion_targets.iter().any(|t| &t.package_id == pkg_id) {
+            continue;
+        }
+        if currently_active_ids.contains(pkg_id) {
+            if let Some(ca) = &entry.completion_activation {
+                for tgt in &ca.targets {
+                    if !crate::core::package::is_valid_script_command_name(&tgt.command) {
+                        bail!(
+                            "Active completion package '{}' has an invalid stored command name '{}'; deactivate and re-activate it",
+                            pkg_id,
+                            tgt.command
+                        );
+                    }
+                    if let Some(owner) = completion_claimed.get(&tgt.command) {
+                        bail!(
+                            "Completion target '{}' from active package '{}' collides with '{}'; deactivate one of them first",
+                            tgt.command,
+                            pkg_id,
+                            owner
+                        );
+                    }
+                    // Re-resolve from the declaration, mirroring scripts: a
+                    // deleted payload file must fail this activation rather
+                    // than regenerate a dangling `use` line.
+                    let resolved = resolve_entry(
+                        root,
+                        &entry.payload_path,
+                        &tgt.path,
+                        crate::core::package::ModuleImportMode::Module,
+                        pkg_id,
+                    )
+                    .with_context(|| {
+                        format!(
+                            "Active completion target '{}' for '{}' no longer resolves; deactivate and re-activate it",
+                            tgt.path, pkg_id
+                        )
+                    })?;
+                    completion_claimed.insert(tgt.command.clone(), pkg_id.clone());
+                    completion_resolved.push(ResolvedCompletionTarget {
+                        scoped_id: pkg_id.clone(),
+                        command: tgt.command.clone(),
+                        target_path: resolved.absolute_path,
+                    });
+                }
+            }
+        }
+    }
+
     // Add already-active modules not in this batch to the entry list
     for (pkg_id, entry) in &lockfile.packages {
         if entry.package_type != "module" {
@@ -687,7 +819,7 @@ fn run_module_lane(
     }
 
     // Step 4: Generate candidate content
-    let content = generate_managed_content(&entries, &script_commands)
+    let content = generate_managed_content(&entries, &script_commands, &completion_resolved)
         .context("Failed to generate autoload content")?;
 
     // Step 5: Write candidate file (same directory as managed file)
@@ -726,6 +858,7 @@ fn run_module_lane(
         .iter()
         .map(|t| t.package_id.clone())
         .chain(script_targets.iter().map(|t| t.package_id.clone()))
+        .chain(completion_targets.iter().map(|t| t.package_id.clone()))
         .chain(currently_active_ids.iter().cloned())
         .collect();
     desired_active_ids.sort();
@@ -735,6 +868,7 @@ fn run_module_lane(
         .iter()
         .map(|t| t.package_id.clone())
         .chain(script_targets.iter().map(|t| t.package_id.clone()))
+        .chain(completion_targets.iter().map(|t| t.package_id.clone()))
         .collect();
 
     // Step 5 (Nu validation): Execute candidate with the candidate runner
@@ -849,6 +983,36 @@ fn run_module_lane(
         }
     }
 
+    for target in completion_targets {
+        if let Some(pkg) = lockfile.packages.get_mut(&target.package_id) {
+            let resolved_targets = target
+                .targets
+                .iter()
+                .filter_map(|ct| {
+                    completion_resolved
+                        .iter()
+                        .find(|c| c.scoped_id == target.package_id && c.command == ct.command)
+                        .map(|c| CompletionActivationTarget {
+                            command: ct.command.clone(),
+                            path: ct.path.clone(),
+                            target_path: c.target_path.to_string_lossy().into_owned(),
+                            kind: ct.kind,
+                        })
+                })
+                .collect::<Vec<_>>();
+            if resolved_targets.len() == target.targets.len() {
+                pkg.completion_activation = Some(CompletionActivation {
+                    targets: resolved_targets,
+                    vendor_autoload_dir: vendor_autoload_dir.to_string(),
+                    managed_file_path: managed_file_path.to_string(),
+                    nu_executable_sha256: nu_paths.nu_executable_hash.clone(),
+                    nu_version: nu_paths.nu_version.clone(),
+                    activated_at: ts.clone(),
+                });
+            }
+        }
+    }
+
     if let Err(e) = lockfile.save(root) {
         // Lockfile save failed after replacement — preserve the Replaced journal
         eprintln!(
@@ -914,6 +1078,15 @@ fn run_module_lane(
             names.join(", "),
         );
     }
+    for target in completion_targets {
+        let names: Vec<&str> = target.targets.iter().map(|t| t.command.as_str()).collect();
+        println!(
+            "{} Completion {} added to autoload (targets: {}) — takes effect in future Nu sessions",
+            console::style("✓").green(),
+            target.package_id,
+            names.join(", "),
+        );
+    }
 
     Ok(false) // lane succeeded
 }
@@ -944,7 +1117,8 @@ pub(crate) fn activate_modules_unlocked(
     };
     let module_targets = resolve_module_targets(&args, &lockfile, &nu_paths)?;
     let script_targets = resolve_script_targets(&args, &lockfile, &nu_paths)?;
-    if module_targets.is_empty() && script_targets.is_empty() {
+    let completion_targets = resolve_completion_targets(&args, &lockfile, &nu_paths)?;
+    if module_targets.is_empty() && script_targets.is_empty() && completion_targets.is_empty() {
         return Ok(false);
     }
     let managed_file_path = resolve_managed_file_path(&nu_paths)?;
@@ -954,6 +1128,7 @@ pub(crate) fn activate_modules_unlocked(
         &mut lockfile,
         &module_targets,
         &script_targets,
+        &completion_targets,
         &managed_file_path,
         runner,
         pre_mutation_snapshot_id,
@@ -1023,12 +1198,24 @@ fn execute_list(lockfile: &Lockfile, nu_paths: &NuPaths) -> Result<()> {
                     "inactive"
                 }
             }
+            "completion" => {
+                if entry.is_completion_active_for(
+                    &nu_paths.nu_executable_hash,
+                    &nu_paths.nu_version,
+                    vendor_dir,
+                    &managed_path,
+                ) {
+                    "active"
+                } else {
+                    "inactive"
+                }
+            }
             _ => "n/a",
         };
 
         let target = match entry.package_type.as_str() {
             "plugin" => nu_paths.plugin_registry_path.as_str(),
-            "module" | "script" => vendor_dir,
+            "module" | "script" | "completion" => vendor_dir,
             _ => "-",
         };
 
@@ -1092,6 +1279,7 @@ fn execute_check(
                     .map(|e| {
                         e.package_type == "module"
                             || (e.package_type == "script" && e.is_script_activatable())
+                            || (e.package_type == "completion" && e.is_completion_activatable())
                     })
                     .unwrap_or(false)
             })
@@ -1219,6 +1407,82 @@ fn execute_check(
             if script_ok {
                 println!(
                     "{} {}: script check passed ({} entry point(s))",
+                    console::style("✓").green(),
+                    pkg_id,
+                    declared.len()
+                );
+            } else {
+                any_issues = true;
+            }
+            continue;
+        }
+
+        if entry.package_type == "completion" {
+            if !entry.is_completion_activatable() {
+                println!(
+                    "{} {}: completion not activatable — no declared targets or unresolved dependencies",
+                    console::style("✗").red(),
+                    pkg_id
+                );
+                any_issues = true;
+                continue;
+            }
+
+            let declared = entry.completion_targets.as_deref().unwrap_or_default();
+            let mut completion_ok = true;
+            if let Err(e) = crate::core::package::validate_completion_targets(declared) {
+                println!(
+                    "{} {}: invalid completion declaration: {}",
+                    console::style("✗").red(),
+                    pkg_id,
+                    e
+                );
+                completion_ok = false;
+            }
+            for ct in declared {
+                if let Err(e) = resolve_entry(
+                    root,
+                    &entry.payload_path,
+                    &ct.path,
+                    crate::core::package::ModuleImportMode::Module,
+                    pkg_id,
+                ) {
+                    println!(
+                        "{} {}: completion target '{}' does not resolve: {}",
+                        console::style("✗").red(),
+                        pkg_id,
+                        ct.path,
+                        e
+                    );
+                    completion_ok = false;
+                }
+            }
+            if let Some(ca) = &entry.completion_activation {
+                if !entry.is_completion_active_for(
+                    &nu_paths.nu_executable_hash,
+                    &nu_paths.nu_version,
+                    vendor_dir,
+                    &managed_path_str,
+                ) {
+                    println!(
+                        "{} {}: completion activation record is stale for the current Nu identity",
+                        console::style("✗").red(),
+                        pkg_id
+                    );
+                    completion_ok = false;
+                } else if ca.targets.is_empty() {
+                    println!(
+                        "{} {}: completion activation record has no targets",
+                        console::style("✗").red(),
+                        pkg_id
+                    );
+                    completion_ok = false;
+                }
+            }
+
+            if completion_ok {
+                println!(
+                    "{} {}: completion check passed ({} target(s))",
                     console::style("✓").green(),
                     pkg_id,
                     declared.len()
@@ -1359,9 +1623,8 @@ fn resolve_plugin_targets(
                     continue;
                 }
                 "completion" => {
-                    bail!(
-                        "Package '{pkg_id}' is a completion — completion activation is deferred to a later phase."
-                    );
+                    // Completion targets are handled in resolve_completion_targets
+                    continue;
                 }
                 other => {
                     bail!("Package '{pkg_id}' has unknown type '{other}' — cannot activate.");
@@ -1613,6 +1876,93 @@ fn resolve_script_targets(
     Ok(targets)
 }
 
+/// Resolve all completion targets to activate (issue #15).
+fn resolve_completion_targets(
+    args: &ActivateArgs,
+    lockfile: &Lockfile,
+    nu_paths: &NuPaths,
+) -> Result<Vec<CompletionTarget>> {
+    let vendor_dir = nu_paths.vendor_autoload_dir.as_deref().unwrap_or("");
+    let managed_path_str = if vendor_dir.is_empty() {
+        String::new()
+    } else {
+        format!("{vendor_dir}/numan.nu")
+    };
+
+    let mut targets = Vec::new();
+    if args.packages.is_empty() {
+        for (id, entry) in &lockfile.packages {
+            if entry.package_type != "completion" {
+                continue;
+            }
+            if entry.is_completion_active_for(
+                &nu_paths.nu_executable_hash,
+                &nu_paths.nu_version,
+                vendor_dir,
+                &managed_path_str,
+            ) {
+                continue;
+            }
+            if !entry.is_completion_activatable() {
+                continue;
+            }
+            targets.push(CompletionTarget {
+                package_id: id.clone(),
+                payload_path: entry.payload_path.clone(),
+                targets: entry.completion_targets.clone().unwrap_or_default(),
+            });
+        }
+        return Ok(targets);
+    }
+
+    for pkg_id in &args.packages {
+        let entry = match lockfile.packages.get(pkg_id) {
+            Some(e) => e,
+            None => continue,
+        };
+        if entry.package_type != "completion" {
+            continue;
+        }
+        if entry.is_completion_active_for(
+            &nu_paths.nu_executable_hash,
+            &nu_paths.nu_version,
+            vendor_dir,
+            &managed_path_str,
+        ) {
+            println!(
+                "{} {} is already active for Nu {} (skipped)",
+                console::style("✓").green(),
+                pkg_id,
+                nu_paths.nu_version,
+            );
+            continue;
+        }
+        if !entry.is_completion_activatable() {
+            if entry
+                .completion_targets
+                .as_ref()
+                .map(|t| !t.is_empty())
+                .unwrap_or(false)
+            {
+                bail!(
+                    "Package '{pkg_id}' declares completion targets but has locked dependencies \
+                     that must be resolved before activation."
+                );
+            }
+            bail!(
+                "Package '{pkg_id}' is a completion package without declared targets — it is install-only. \
+                 Completion activation requires the registry entry to declare activation targets (issue #15)."
+            );
+        }
+        targets.push(CompletionTarget {
+            package_id: pkg_id.clone(),
+            payload_path: entry.payload_path.clone(),
+            targets: entry.completion_targets.clone().unwrap_or_default(),
+        });
+    }
+    Ok(targets)
+}
+
 // ── Journal reconciliation ─────────────────────────────────────────────────────
 
 /// Read-only preflight check: bail if any pending journal has a mismatched Nu
@@ -1696,10 +2046,13 @@ fn reconcile_plugin_journal(
 
 // ── Consent table ──────────────────────────────────────────────────────────────
 
-/// Print the grouped consent table showing plugins and modules grouped by operation.
+/// Print the grouped consent table showing plugins, modules, scripts, and
+/// completions grouped by operation.
 fn print_grouped_consent_table(
     plugins: &[PluginTarget],
     modules: &[ModuleTarget],
+    scripts: &[ScriptTarget],
+    completions: &[CompletionTarget],
     managed_file: Option<&str>,
     registry_path: &str,
 ) {
@@ -1719,6 +2072,37 @@ fn print_grouped_consent_table(
         for t in modules {
             println!("  {} -> {}", t.package_id, target);
         }
+        println!();
+    }
+
+    if !scripts.is_empty() {
+        let target = managed_file.unwrap_or("<none>");
+        println!("Script startup autoload");
+        for t in scripts {
+            let names: Vec<&str> = t.entry_points.iter().map(|e| e.name.as_str()).collect();
+            println!("  {} ({}) -> {}", t.package_id, names.join(", "), target);
+        }
+        println!();
+    }
+
+    if !completions.is_empty() {
+        let target = managed_file.unwrap_or("<none>");
+        println!("Completion startup autoload");
+        for t in completions {
+            for ct in &t.targets {
+                println!(
+                    "  {} {} -> {} [{}]",
+                    t.package_id, ct.command, ct.path, ct.kind
+                );
+                if ct.kind == crate::core::package::CompletionKind::CommandBacked {
+                    println!(
+                        "    note: this completion provider can execute code during completion \
+                         (only when Nushell requests a completion; never at install or activation)"
+                    );
+                }
+            }
+        }
+        println!("  -> {target}");
         println!();
     }
 }
@@ -1973,6 +2357,8 @@ mod tests {
                 overlay: None,
                 script_activation: None,
                 script_entry_points: None,
+                completion_activation: None,
+                completion_targets: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -2017,13 +2403,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn completion_type_fails_with_deferred_error() {
+    fn completion_test_lockfile(
+        targets: Option<Vec<crate::core::package::CompletionTarget>>,
+    ) -> (Lockfile, crate::nu::paths::NuPaths, tempfile::TempDir) {
         use crate::state::lockfile::{Lockfile, LockfileEntry};
         use std::collections::BTreeMap;
 
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
 
         let mut packages: BTreeMap<String, LockfileEntry> = BTreeMap::new();
         packages.insert(
@@ -2064,6 +2450,8 @@ mod tests {
                 overlay: None,
                 script_activation: None,
                 script_entry_points: None,
+                completion_activation: None,
+                completion_targets: targets,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -2087,19 +2475,49 @@ mod tests {
             vendor_autoload_dir: None,
         };
 
+        (lockfile, fake_nu_paths, dir)
+    }
+
+    #[test]
+    fn completion_without_targets_is_install_only() {
+        let (lockfile, fake_nu_paths, root) = completion_test_lockfile(None);
         let args = ActivateArgs {
             packages: vec!["owner/mycomp".to_string()],
-
             verbose: false,
             list: false,
             check: false,
         };
-
-        let err = resolve_plugin_targets(&args, &lockfile, &fake_nu_paths, root).unwrap_err();
+        // The plugin lane no longer rejects completions outright.
         assert!(
-            err.to_string().contains("completion") && err.to_string().contains("deferred"),
-            "Expected deferred error for completion type, got: {err}"
+            resolve_plugin_targets(&args, &lockfile, &fake_nu_paths, root.path())
+                .unwrap()
+                .is_empty()
         );
+        let err = resolve_completion_targets(&args, &lockfile, &fake_nu_paths).unwrap_err();
+        assert!(
+            err.to_string().contains("install-only"),
+            "Expected install-only error for completion without targets, got: {err}"
+        );
+    }
+
+    #[test]
+    fn completion_with_targets_resolves_for_activation() {
+        let (lockfile, fake_nu_paths, _root) =
+            completion_test_lockfile(Some(vec![crate::core::package::CompletionTarget {
+                command: "git".to_string(),
+                path: "git.nu".to_string(),
+                kind: crate::core::package::CompletionKind::CommandBacked,
+            }]));
+        let args = ActivateArgs {
+            packages: vec!["owner/mycomp".to_string()],
+            verbose: false,
+            list: false,
+            check: false,
+        };
+        let targets = resolve_completion_targets(&args, &lockfile, &fake_nu_paths).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].targets.len(), 1);
+        assert_eq!(targets[0].targets[0].command, "git");
     }
 
     #[test]
@@ -2155,6 +2573,8 @@ mod tests {
                 overlay: None,
                 script_activation: None,
                 script_entry_points: None,
+                completion_activation: None,
+                completion_targets: None,
                 locked_dependencies: BTreeMap::new(),
             },
         );
@@ -2242,6 +2662,8 @@ mod tests {
                 overlay: None,
                 script_activation: None,
                 script_entry_points: None,
+                completion_activation: None,
+                completion_targets: None,
                 locked_dependencies: deps, // has dependencies — not activatable
             },
         );

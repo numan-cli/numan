@@ -140,6 +140,45 @@ fn apply_replaced_transition(
             });
             continue;
         }
+        if entry.package_type == "completion" {
+            // Completion activation record (issue #15): rebuild
+            // unconditionally from the persisted declaration, mirroring the
+            // script branch above.
+            let declared = entry.completion_targets.clone().unwrap_or_default();
+            if declared.is_empty() {
+                bail!(
+                    "Cannot recover completion '{package_id}': lockfile has no persisted targets"
+                );
+            }
+            crate::core::package::validate_completion_targets(&declared).map_err(|e| {
+                anyhow!("Cannot recover completion '{package_id}': invalid persisted targets: {e}")
+            })?;
+            let mut targets = Vec::new();
+            for ct in &declared {
+                let resolved = crate::nu::autoload::resolve_entry(
+                    root,
+                    &entry.payload_path,
+                    &ct.path,
+                    ModuleImportMode::Module,
+                    package_id,
+                )?;
+                targets.push(crate::state::lockfile::CompletionActivationTarget {
+                    command: ct.command.clone(),
+                    path: ct.path.clone(),
+                    target_path: resolved.absolute_path.to_string_lossy().into_owned(),
+                    kind: ct.kind,
+                });
+            }
+            entry.completion_activation = Some(crate::state::lockfile::CompletionActivation {
+                targets,
+                vendor_autoload_dir: journal.vendor_autoload_dir.clone(),
+                managed_file_path: journal.managed_file_path.clone(),
+                nu_executable_sha256: nu_paths.nu_executable_hash.clone(),
+                nu_version: nu_paths.nu_version.clone(),
+                activated_at: activated_at.clone(),
+            });
+            continue;
+        }
         if entry.package_type != "module" {
             bail!(
                 "Cannot recover module '{}': lockfile type is '{}'",
@@ -190,6 +229,15 @@ fn apply_replaced_transition(
         if should_clear_script {
             entry.script_activation = None;
         }
+        let should_clear_completion = entry.completion_activation.as_ref().is_some_and(|a| {
+            a.nu_executable_sha256 == journal.nu_executable_sha256
+                && a.nu_version == journal.nu_version
+                && a.vendor_autoload_dir == journal.vendor_autoload_dir
+                && a.managed_file_path == journal.managed_file_path
+        });
+        if should_clear_completion {
+            entry.completion_activation = None;
+        }
     }
 
     if journal.operation == AutoloadOperation::Deactivate {
@@ -205,6 +253,7 @@ fn apply_replaced_transition(
             if let Some(entry) = lockfile.packages.get_mut(package_id) {
                 entry.module_activation = None;
                 entry.script_activation = None;
+                entry.completion_activation = None;
             }
         }
     }

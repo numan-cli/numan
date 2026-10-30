@@ -294,6 +294,8 @@ fn t18_registry_collision_fails_without_lockfile_change() {
             overlay: None,
             script_activation: None,
             script_entry_points: None,
+            completion_activation: None,
+            completion_targets: None,
             locked_dependencies: Default::default(),
         },
     );

@@ -109,9 +109,10 @@ impl AutoloadState {
 
     /// Sorted IDs of every package contributing to the managed autoload
     /// file for this Nu identity: active modules plus active scripts
-    /// (issue #14). The state file's `active_module_ids` field stores this
-    /// combined projection; the name predates script activation and is
-    /// kept for schema compatibility.
+    /// (issue #14) and active completions (issue #15). The state file's
+    /// `active_module_ids` field stores this combined projection; the
+    /// name predates script activation and is kept for schema
+    /// compatibility.
     pub fn active_autoload_ids_from_lockfile(
         lockfile: &Lockfile,
         nu_executable_sha256: &str,
@@ -127,12 +128,17 @@ impl AutoloadState {
             managed_file_path,
         );
         for (id, entry) in &lockfile.packages {
-            if entry.is_script_active_for(
+            if (entry.is_script_active_for(
                 nu_executable_sha256,
                 nu_version,
                 vendor_autoload_dir,
                 managed_file_path,
-            ) && !ids.contains(id)
+            ) || entry.is_completion_active_for(
+                nu_executable_sha256,
+                nu_version,
+                vendor_autoload_dir,
+                managed_file_path,
+            )) && !ids.contains(id)
             {
                 ids.push(id.clone());
             }
@@ -288,6 +294,8 @@ mod tests {
                     overlay: None,
                     script_activation: None,
                     script_entry_points: None,
+                    completion_activation: None,
+                    completion_targets: None,
                     locked_dependencies: BTreeMap::new(),
                 },
             );

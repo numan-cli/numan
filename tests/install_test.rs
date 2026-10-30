@@ -780,3 +780,149 @@ fn integration_install_self_heals_corrupted_cached_artifact() {
         "cache entry must be replaced with the verified artifact"
     );
 }
+
+#[test]
+fn integration_force_reinstall_refuses_active_completion() {
+    use numan_cli::core::package::{CompletionKind, CompletionTarget, RegistryActivationSpec};
+    use numan_cli::state::lockfile::CompletionActivation;
+
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+
+    let signing_key = setup_trusted_key(&root, "test");
+
+    let artifacts_dir = root.join("artifacts");
+    std::fs::create_dir_all(&artifacts_dir).unwrap();
+    let (zip_url, zip_sha) = create_plugin_zip(&artifacts_dir, "git.nu", b"# git completions\n");
+
+    let package = Package {
+        id: ScopedId::new("test", "completions"),
+        description: "Test completion package for integration test".to_string(),
+        repo: "https://github.com/test/completions".to_string(),
+        package_type: PackageType::Completion,
+        tags: vec!["test".to_string()],
+        versions: vec![VersionEntry {
+            version: semver::Version::new(1, 0, 0),
+            nu_version: "*".to_string(),
+            verified_with: vec![],
+            artifact: Artifact {
+                kind: "archive".to_string(),
+                url: Some(zip_url.clone()),
+                sha256: Some(zip_sha.clone()),
+                targets: HashMap::new(),
+                archive_root: None,
+                include: None,
+                entry: None,
+            },
+            source: None,
+            dependencies: BTreeMap::new(),
+            activation: Some(RegistryActivationSpec {
+                kind: "nu-completion".to_string(),
+                targets: vec![CompletionTarget {
+                    command: "git".to_string(),
+                    path: "git.nu".to_string(),
+                    kind: CompletionKind::Static,
+                }],
+                ..Default::default()
+            }),
+            provenance: None,
+            evidence_tier: None,
+            deferral_reason: None,
+        }],
+    };
+    create_signed_registry(&root, "test", vec![package], &signing_key);
+
+    std::fs::write(
+        root.join("config.toml"),
+        "[general]\ndefault_registry = \"test\"\n",
+    )
+    .unwrap();
+
+    let platform = Platform {
+        os: Os::Windows,
+        arch: Arch::X86_64,
+        env: Env::Msvc,
+        triple: "x86_64-pc-windows-msvc".to_string(),
+    };
+    let nu_version = NuVersion::parse("0.113.1").unwrap();
+
+    let options = InstallOptions {
+        root: &root,
+        platform: &platform,
+        nu_version: &nu_version,
+        force: false,
+        verbose: false,
+        registry_name: None,
+        snapshot_trigger: SnapshotTrigger::Install,
+    };
+
+    let result = transaction::install_package("test/completions", None, &options).unwrap();
+    assert!(result.installed);
+
+    // Mark the package active, as `numan activate` would record it.
+    let mut lockfile = Lockfile::load(&root).unwrap();
+    {
+        let entry = lockfile.packages.get_mut("test/completions").unwrap();
+        assert!(
+            entry.completion_targets.is_some(),
+            "install must persist the declared completion targets"
+        );
+        entry.completion_activation = Some(CompletionActivation {
+            targets: Vec::new(),
+            vendor_autoload_dir: "/tmp/vendor".to_string(),
+            managed_file_path: "/tmp/vendor/numan.nu".to_string(),
+            nu_executable_sha256: "abc".to_string(),
+            nu_version: "0.113.1".to_string(),
+            activated_at: "0".to_string(),
+        });
+    }
+    lockfile.save(&root).unwrap();
+
+    // A non-force reinstall of the same version is a no-op and must keep
+    // the activation record.
+    let again = transaction::install_package("test/completions", None, &options).unwrap();
+    assert!(again.already_existed);
+
+    // A force reinstall would replace the entry with a fresh inactive one
+    // while numan.nu keeps the package's lines: it must refuse and tell
+    // the user to deactivate first.
+    let force_options = InstallOptions {
+        root: &root,
+        platform: &platform,
+        nu_version: &nu_version,
+        force: true,
+        verbose: false,
+        registry_name: None,
+        snapshot_trigger: SnapshotTrigger::Install,
+    };
+    let err = transaction::install_package("test/completions", None, &force_options).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("active as a completion"), "got: {msg}");
+    assert!(msg.contains("deactivate"), "got: {msg}");
+
+    // The activation record survives the refused reinstall.
+    let lockfile = Lockfile::load(&root).unwrap();
+    assert!(
+        lockfile.packages["test/completions"]
+            .completion_activation
+            .is_some(),
+        "force reinstall must not clear the completion activation record"
+    );
+
+    // A same-version non-force reinstall also replaces the entry when the
+    // installed payload directory is missing, so it must refuse too rather
+    // than silently orphaning the managed autoload lines.
+    let payload_dir = root.join(lockfile.packages["test/completions"].payload_path());
+    std::fs::remove_dir_all(&payload_dir).unwrap();
+    let err = transaction::install_package("test/completions", None, &options).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("active as a completion"), "got: {msg}");
+    assert!(msg.contains("deactivate"), "got: {msg}");
+    let lockfile = Lockfile::load(&root).unwrap();
+    assert!(
+        lockfile.packages["test/completions"]
+            .completion_activation
+            .is_some(),
+        "missing-payload reinstall must not clear the completion activation record"
+    );
+}

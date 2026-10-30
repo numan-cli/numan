@@ -39,6 +39,11 @@ pub(crate) fn execute_to(root: &Path, out: &mut dyn Write) -> Result<()> {
     writeln!(out, "Installed packages ({}):\n", lockfile.packages.len())?;
 
     for (id, entry) in &lockfile.packages {
+        // Status here distinguishes plugin and hook activation only.
+        // Managed-file activations (module, script, completion) all report
+        // "installed", matching the pre-existing module/script treatment;
+        // `numan activate --list` is the surface that reports their
+        // per-Nu active state.
         let status = match &nu_paths {
             Some(p)
                 if active_hook_packages.as_ref().is_some_and(|profile| {
@@ -130,6 +135,8 @@ mod tests {
             overlay: None,
             script_activation: None,
             script_entry_points: None,
+            completion_activation: None,
+            completion_targets: None,
             locked_dependencies: Default::default(),
         }
     }
