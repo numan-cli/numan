@@ -19,6 +19,10 @@ use numan_cli::core::integrity;
 use numan_cli::core::package::{validate_completion_targets, CompletionKind, CompletionTarget};
 use numan_cli::nu::autoload::FakeCandidateRunner;
 use numan_cli::nu::paths::NuPaths;
+use numan_cli::state::autoload_journal::{
+    AutoloadOperation, AutoloadStage, PendingAutoload, SCHEMA_VERSION as AUTOLOAD_SCHEMA_VERSION,
+};
+use numan_cli::state::autoload_state::AutoloadState;
 use numan_cli::state::lockfile::{Lockfile, LockfileEntry};
 use numan_cli::util::fs_safety::OWNERSHIP_MARKER;
 
@@ -278,11 +282,15 @@ fn activation_writes_completion_use_lines_and_lockfile_record() {
     let git = record.targets.iter().find(|t| t.command == "git").unwrap();
     assert_eq!(git.kind, CompletionKind::CommandBacked);
     assert!(git.target_path.ends_with("git.nu"));
+    // The production activation record stores the managed path built as
+    // `format!("{vendor_dir}/numan.nu")`, so build the expected value the
+    // same way; `PathBuf::join` would use a backslash on Windows.
+    let managed_path_str = format!("{}/numan.nu", env.vendor_dir_str());
     assert!(saved.is_completion_active_for(
         &env.nu_hash,
         "0.116.1",
         &env.vendor_dir_str(),
-        &env.managed_file_path().to_string_lossy(),
+        &managed_path_str,
     ));
 }
 
@@ -468,7 +476,22 @@ fn deactivation_removes_only_that_packages_lines() {
 fn real_nu_completion_received_after_activation_and_gone_after_deactivation() {
     use numan_cli::nu::autoload::NuCandidateRunner;
 
-    let nu = std::env::var("NU_BINARY").unwrap_or_else(|_| "nu".to_string());
+    // Resolve the Nu executable to a real path once: CI runs this test with
+    // `nu` only on PATH and no NU_BINARY, and bare names resolve against the
+    // working directory for `std::fs` calls, not PATH.
+    let nu: PathBuf = match std::env::var("NU_BINARY") {
+        Ok(p) if !p.is_empty() => PathBuf::from(p),
+        _ => {
+            let exe_name = format!("nu{}", std::env::consts::EXE_SUFFIX);
+            std::env::var_os("PATH")
+                .and_then(|paths| {
+                    std::env::split_paths(&paths)
+                        .map(|dir| dir.join(&exe_name))
+                        .find(|candidate| candidate.is_file())
+                })
+                .expect("nu executable not found on PATH (set NU_BINARY to its path)")
+        }
+    };
     let nu_version_out = std::process::Command::new(&nu)
         .arg("--version")
         .output()
@@ -671,4 +694,94 @@ fn real_nu_completion_received_after_activation_and_gone_after_deactivation() {
         user_config_content,
         "user config must be untouched"
     );
+}
+
+#[test]
+fn activate_recovers_interrupted_completion_deactivation() {
+    // Mirror of the module recovery case: a deactivation replaced (deleted)
+    // the managed file and journaled the transition, then crashed before the
+    // lockfile record was cleared. The next activation must complete the
+    // interrupted deactivation (old completion's record cleared, not
+    // resurrected) and activate the new package.
+    let env = CompletionTestEnv::new();
+    env.write_nu_paths();
+    let (old_id, old_entry) = env.create_completion(
+        "acme",
+        "old-completions",
+        &[("git.nu", "# git completions\n")],
+        vec![ct("git", "git.nu", CompletionKind::Static)],
+    );
+    let (next_id, next_entry) = env.create_completion(
+        "acme",
+        "next-completions",
+        &[("cargo.nu", "# cargo completions\n")],
+        vec![ct("cargo", "cargo.nu", CompletionKind::Static)],
+    );
+    env.write_lockfile(vec![
+        (old_id.clone(), old_entry),
+        (next_id.clone(), next_entry),
+    ]);
+
+    let runner = FakeCandidateRunner::success();
+    execute_with_candidate_runner(
+        &env.activate_args(&[&old_id]),
+        env.root(),
+        &CompletionTestEnv::ok_registrar(),
+        &runner,
+    )
+    .unwrap();
+    let activation = Lockfile::load(env.root()).unwrap().packages[&old_id]
+        .completion_activation
+        .clone()
+        .unwrap();
+    let previous_sha = integrity::compute_sha256(&std::fs::read(env.managed_file_path()).unwrap());
+    std::fs::remove_file(env.managed_file_path()).unwrap();
+
+    std::fs::create_dir_all(env.root().join("state")).unwrap();
+    PendingAutoload {
+        schema_version: AUTOLOAD_SCHEMA_VERSION,
+        operation: AutoloadOperation::Deactivate,
+        stage: AutoloadStage::Replaced,
+        nu_executable_sha256: env.nu_hash.clone(),
+        nu_version: "0.116.1".to_string(),
+        vendor_autoload_dir: activation.vendor_autoload_dir,
+        managed_file_path: activation.managed_file_path,
+        previous_file_exists: true,
+        previous_file_sha256: Some(previous_sha),
+        desired_file_exists: false,
+        candidate_sha256: None,
+        previous_active_module_ids: vec![old_id.clone()],
+        desired_active_module_ids: vec![],
+        targeted_module_ids: vec![old_id.clone()],
+        created_at: "0000000000000002".to_string(),
+        pre_mutation_snapshot_id: None,
+    }
+    .save(env.root())
+    .unwrap();
+
+    execute_with_candidate_runner(
+        &env.activate_args(&[&next_id]),
+        env.root(),
+        &CompletionTestEnv::ok_registrar(),
+        &runner,
+    )
+    .unwrap();
+
+    let recovered = Lockfile::load(env.root()).unwrap();
+    assert!(
+        recovered.packages[&old_id].completion_activation.is_none(),
+        "interrupted deactivation must clear the old completion record"
+    );
+    assert!(recovered.packages[&next_id].completion_activation.is_some());
+    assert_eq!(
+        AutoloadState::load(env.root())
+            .unwrap()
+            .unwrap()
+            .active_module_ids,
+        vec![next_id.clone()]
+    );
+    assert!(PendingAutoload::load(env.root()).unwrap().is_none());
+    let content = std::fs::read_to_string(env.managed_file_path()).unwrap();
+    assert!(content.contains("# numan:completion acme/next-completions cargo"));
+    assert!(!content.contains("old-completions"));
 }

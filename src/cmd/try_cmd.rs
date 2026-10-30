@@ -381,6 +381,13 @@ where
         return Ok(());
     }
 
+    // A completion package that declares targets is about to be activated:
+    // disclose the targets (and the command-backed execution behaviour)
+    // before activating, matching the `numan info` disclosure (issue #15).
+    if package.package_type == PackageType::Completion {
+        print_completion_activation_disclosure(root, package_id)?;
+    }
+
     // Keep the install mutation lock through activation so a concurrent
     // remove/update cannot replace the just-installed payload before activate
     // reloads the lockfile. `activate::execute_under_lock` does not re-acquire.
@@ -399,6 +406,35 @@ where
     }
 
     println!("Installed and activated '{package_id}'.");
+    Ok(())
+}
+
+/// Disclosure printed before `numan try` activates a completion package:
+/// the declared targets it will wire into the managed autoload file, plus
+/// the command-backed execution note, matching `numan info` (issue #15).
+fn print_completion_activation_disclosure(root: &Path, package_id: &str) -> Result<()> {
+    let lockfile = Lockfile::load(root)?;
+    let Some(entry) = lockfile.packages.get(package_id) else {
+        return Ok(());
+    };
+    let Some(targets) = entry.completion_targets.as_ref() else {
+        return Ok(());
+    };
+    if targets.is_empty() {
+        return Ok(());
+    }
+    println!("Activating completion targets for '{package_id}':");
+    for target in targets {
+        println!(
+            "    completion: {} -> {} [{}]",
+            target.command, target.path, target.kind
+        );
+        if target.kind == crate::core::package::CompletionKind::CommandBacked {
+            println!(
+                "    note: this completion provider can execute code during completion (only when Nushell requests a completion; never at install or activation)"
+            );
+        }
+    }
     Ok(())
 }
 
@@ -785,6 +821,147 @@ mod tests {
         assert!(result.is_ok(), "{result:?}");
         assert!(installed.get());
         assert!(activated.get());
+    }
+
+    fn completion_lock_entry(
+        targets: Option<Vec<crate::core::package::CompletionTarget>>,
+        locked_dependencies: BTreeMap<String, String>,
+    ) -> crate::state::lockfile::LockfileEntry {
+        crate::state::lockfile::LockfileEntry {
+            hook_activation: None,
+            hook_bindings: None,
+            version: "1.0.0".to_string(),
+            package_type: "completion".to_string(),
+            source: "registry".to_string(),
+            target: None,
+            artifact_url: None,
+            artifact_sha256: None,
+            executable_path: None,
+            archive_root: None,
+            include: None,
+            entry: None,
+            installed_at: "now".to_string(),
+            nu_version_at_install: None,
+            activation: None,
+            registry_url: None,
+            registry_revision: None,
+            index_sha256: None,
+            signing_key_fingerprint: None,
+            git_url: None,
+            git_rev: None,
+            cargo_name: None,
+            cargo_lock_sha256: None,
+            built_sha256: None,
+            payload_path: "packages/completions/test/completions/1.0.0-deadbeef".to_string(),
+            revision_id: None,
+            payload_sha256: None,
+            executable_sha256: None,
+            selection_reason: None,
+            origin: None,
+            module_activation: None,
+            module_import_mode: None,
+            overlay: None,
+            script_activation: None,
+            script_entry_points: None,
+            completion_activation: None,
+            completion_targets: targets,
+            locked_dependencies,
+        }
+    }
+
+    fn completion_target() -> crate::core::package::CompletionTarget {
+        crate::core::package::CompletionTarget {
+            command: "git".to_string(),
+            path: "git.nu".to_string(),
+            kind: crate::core::package::CompletionKind::CommandBacked,
+        }
+    }
+
+    #[test]
+    fn try_package_completion_with_targets_activates() {
+        let root = tempfile::tempdir().unwrap();
+        let package = pkg("test/completions", "*", PackageType::Completion);
+        let platform = windows_platform();
+        let nu = NuVersion::parse("0.114.1").unwrap();
+        let args = TryArgs {
+            package: Some("test/completions".to_string()),
+            no_activate: false,
+        };
+
+        let activated = Cell::new(false);
+        let result = try_package(
+            &args,
+            root.path(),
+            &package,
+            "test/completions",
+            "test/completions",
+            None,
+            &platform,
+            &nu,
+            |_, _, options| {
+                let mut lock = Lockfile::empty();
+                lock.packages.insert(
+                    "test/completions".to_string(),
+                    completion_lock_entry(Some(vec![completion_target()]), BTreeMap::new()),
+                );
+                lock.save(options.root)?;
+                Ok(install_result("test/completions", "1.0.0", options.root))
+            },
+            |args, _, _lock| {
+                activated.set(true);
+                assert_eq!(args.packages, vec!["test/completions".to_string()]);
+                Ok(())
+            },
+        );
+        assert!(result.is_ok(), "{result:?}");
+        assert!(
+            activated.get(),
+            "a completion entry with declared targets must activate under try"
+        );
+    }
+
+    #[test]
+    fn try_package_completion_with_locked_dependencies_stays_install_only() {
+        let root = tempfile::tempdir().unwrap();
+        let package = pkg("test/completions", "*", PackageType::Completion);
+        let platform = windows_platform();
+        let nu = NuVersion::parse("0.114.1").unwrap();
+        let args = TryArgs {
+            package: Some("test/completions".to_string()),
+            no_activate: false,
+        };
+
+        let activated = Cell::new(false);
+        let result = try_package(
+            &args,
+            root.path(),
+            &package,
+            "test/completions",
+            "test/completions",
+            None,
+            &platform,
+            &nu,
+            |_, _, options| {
+                let mut deps = BTreeMap::new();
+                deps.insert("owner/dep".to_string(), "1.0.0".to_string());
+                let mut lock = Lockfile::empty();
+                lock.packages.insert(
+                    "test/completions".to_string(),
+                    completion_lock_entry(Some(vec![completion_target()]), deps),
+                );
+                lock.save(options.root)?;
+                Ok(install_result("test/completions", "1.0.0", options.root))
+            },
+            |_, _, _lock| {
+                activated.set(true);
+                Ok(())
+            },
+        );
+        assert!(result.is_ok(), "{result:?}");
+        assert!(
+            !activated.get(),
+            "a completion entry with locked dependencies must stay install-only under try"
+        );
     }
 
     #[test]

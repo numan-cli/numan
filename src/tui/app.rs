@@ -229,7 +229,7 @@ impl App {
                     .map(|v| v.version.to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
-                let install_only = operations::install_only_note(&item.package.package_type)
+                let install_only = operations::install_only_note_for_package(&item.package)
                     .map(|note| format!("\n\n{note}"))
                     .unwrap_or_default();
                 rows.push(Row { id, version, kind: item.package.package_type.to_string(), state: state.into(), registry: item.registry.clone(),

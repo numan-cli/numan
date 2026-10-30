@@ -211,6 +211,8 @@ fn execute_activating(
         print_grouped_consent_table(
             &plugin_targets,
             &module_targets,
+            &script_targets,
+            &completion_targets,
             managed_file_path.as_deref(),
             &nu_paths.plugin_registry_path,
         );
@@ -232,6 +234,8 @@ fn execute_activating(
     print_grouped_consent_table(
         &plugin_targets,
         &module_targets,
+        &script_targets,
+        &completion_targets,
         managed_file_path.as_deref(),
         &nu_paths.plugin_registry_path,
     );
@@ -2042,10 +2046,13 @@ fn reconcile_plugin_journal(
 
 // ── Consent table ──────────────────────────────────────────────────────────────
 
-/// Print the grouped consent table showing plugins and modules grouped by operation.
+/// Print the grouped consent table showing plugins, modules, scripts, and
+/// completions grouped by operation.
 fn print_grouped_consent_table(
     plugins: &[PluginTarget],
     modules: &[ModuleTarget],
+    scripts: &[ScriptTarget],
+    completions: &[CompletionTarget],
     managed_file: Option<&str>,
     registry_path: &str,
 ) {
@@ -2064,6 +2071,26 @@ fn print_grouped_consent_table(
         println!("Module startup autoload");
         for t in modules {
             println!("  {} -> {}", t.package_id, target);
+        }
+        println!();
+    }
+
+    if !scripts.is_empty() {
+        let target = managed_file.unwrap_or("<none>");
+        println!("Script startup autoload");
+        for t in scripts {
+            let names: Vec<&str> = t.entry_points.iter().map(|e| e.name.as_str()).collect();
+            println!("  {} ({}) -> {}", t.package_id, names.join(", "), target);
+        }
+        println!();
+    }
+
+    if !completions.is_empty() {
+        let target = managed_file.unwrap_or("<none>");
+        println!("Completion startup autoload");
+        for t in completions {
+            let commands: Vec<&str> = t.targets.iter().map(|x| x.command.as_str()).collect();
+            println!("  {} ({}) -> {}", t.package_id, commands.join(", "), target);
         }
         println!();
     }

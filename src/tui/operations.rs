@@ -8,7 +8,7 @@ use crate::cmd::{activate, doctor, plugin_lifecycle, remove, update};
 use crate::config::Config;
 use crate::core::{
     nu_version::NuVersion,
-    package::{Package, PackageType},
+    package::{CompletionKind, Package, PackageType},
     platform::Platform,
     registry::RegistryManager,
     resolve::Resolver,
@@ -457,6 +457,22 @@ pub fn prepare(
                     "Replace managed module projection: {}",
                     Path::new(target).join("numan.nu").display()
                 ));
+            }
+            if entry.package_type == "completion" {
+                if let Some(targets) = entry.completion_targets.as_ref() {
+                    for target in targets {
+                        effects.push(format!(
+                            "Completion: {} -> {} [{}]",
+                            target.command, target.path, target.kind
+                        ));
+                        if target.kind == CompletionKind::CommandBacked {
+                            effects.push(
+                                "note: this completion provider can execute code during completion (only when Nushell requests a completion; never at install or activation)"
+                                    .into(),
+                            );
+                        }
+                    }
+                }
             }
             effects.push(
                 "Invokes the selected Nu; affects future Nu sessions, not the running shell."

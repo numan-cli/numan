@@ -1693,6 +1693,8 @@ fn apply_repairs(
                     | "journal.autoload_pending"
                     | "activation.plugin_stale"
                     | "activation.module_stale"
+                    | "activation.script_stale"
+                    | "activation.completion_stale"
                     | "autoload.projection"
                     | "autoload.managed_missing"
             )
@@ -1896,6 +1898,8 @@ fn print_report_to(
                 "activation.plugin_mutation_gated",
                 "activation.plugin_stale",
                 "activation.module_stale",
+                "activation.script_stale",
+                "activation.completion_stale",
                 "autoload.projection",
                 "autoload.managed_missing",
                 "autoload.managed_foreign",

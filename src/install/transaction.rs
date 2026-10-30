@@ -179,6 +179,19 @@ pub fn install_package(
     let mut lockfile = Lockfile::load(options.root)?;
     let lock_key = id.to_string();
 
+    // A reinstall that would replace the entry must not silently clear an
+    // autoload activation record: the fresh entry starts inactive while the
+    // managed `numan.nu` still carries the package's lines, orphaning them
+    // and dropping any completion target-ownership claims (issue #15
+    // review). Refuse like update/remove do. A non-force reinstall of the
+    // same version early-returns below and keeps the record, so it stays
+    // allowed.
+    if let Some(existing) = lockfile.packages.get(&lock_key) {
+        if options.force || existing.version != version_str {
+            ensure_reinstall_preserves_activation(existing, &lock_key)?;
+        }
+    }
+
     if !options.force {
         if let Some(entry) = lockfile.packages.get_mut(&lock_key) {
             if entry.version == version_str {
@@ -578,6 +591,39 @@ fn format_timestamp() -> String {
         .unwrap_or_default()
         .as_secs();
     format!("{secs:016}")
+}
+
+/// Refuse to replace the lockfile entry of a package that is currently
+/// active through the managed autoload file (module, script, or
+/// completion): the replacement entry would start with no activation
+/// record while `numan.nu` still carries the package's contribution.
+/// Mirrors the guards in `update` and `remove`.
+fn ensure_reinstall_preserves_activation(entry: &LockfileEntry, package_id: &str) -> Result<()> {
+    if entry.module_activation.is_some() {
+        bail!(
+            "Package '{}' is currently active as a module. \
+             Run `numan deactivate {}` first.",
+            package_id,
+            package_id
+        );
+    }
+    if entry.script_activation.is_some() {
+        bail!(
+            "Package '{}' is currently active as a script. \
+             Run `numan deactivate {}` first.",
+            package_id,
+            package_id
+        );
+    }
+    if entry.completion_activation.is_some() {
+        bail!(
+            "Package '{}' is currently active as a completion. \
+             Run `numan deactivate {}` first.",
+            package_id,
+            package_id
+        );
+    }
+    Ok(())
 }
 
 fn persist_hook_bindings(

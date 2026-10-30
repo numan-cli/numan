@@ -79,3 +79,13 @@
 - Inferring a target's kind by parsing its source. The declaration is the
   contract; a package that mis-declares is a curation failure, surfaced by
   `numan info` showing the declared kind before activation.
+
+## Registry dependency
+
+This contract is implemented on the client side only. The numan-registry
+index schema (`schemas/index-v1.json` in numan-cli/numan-registry) does not
+yet permit the `targets` field on an activation spec, so registry packages
+cannot declare completion targets until that schema and its validation
+path are updated to accept `nu-completion` targets. That schema change is
+a tracked numan-registry follow-up; it is not part of the client PR that
+implements this spec.

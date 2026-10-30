@@ -690,7 +690,10 @@ mod tests {
     use crate::nu::autoload::{CandidateRunner, FakeCandidateRunner};
     use crate::nu::version_manager;
     use crate::state::activation_profile::{ActivationProfile, ProfileKind};
-    use crate::state::lockfile::{LockfileEntry, ModuleActivation, PluginActivation};
+    use crate::state::lockfile::{
+        CompletionActivation, CompletionActivationTarget, LockfileEntry, ModuleActivation,
+        PluginActivation,
+    };
     use crate::util::fs_safety::acquire_mutation_lock;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
@@ -854,6 +857,40 @@ mod tests {
         let dir = root.join(payload);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("mod.nu"), b"export def main [] {}").unwrap();
+    }
+
+    fn completion_entry(paths: &NuPaths, payload: &str, active: bool) -> LockfileEntry {
+        let vendor = paths.vendor_autoload_dir.clone().unwrap();
+        let managed = format!("{vendor}/numan.nu");
+        let mut entry = module_entry(paths, payload, false);
+        entry.package_type = "completion".to_string();
+        entry.entry = None;
+        entry.module_import_mode = None;
+        entry.completion_targets = Some(vec![crate::core::package::CompletionTarget {
+            command: "git".to_string(),
+            path: "git.nu".to_string(),
+            kind: crate::core::package::CompletionKind::Static,
+        }]);
+        entry.completion_activation = active.then(|| CompletionActivation {
+            targets: vec![CompletionActivationTarget {
+                command: "git".to_string(),
+                path: "git.nu".to_string(),
+                target_path: format!("{payload}/git.nu"),
+                kind: crate::core::package::CompletionKind::Static,
+            }],
+            vendor_autoload_dir: vendor,
+            managed_file_path: managed,
+            nu_executable_sha256: paths.nu_executable_hash.clone(),
+            nu_version: paths.nu_version.clone(),
+            activated_at: "0".to_string(),
+        });
+        entry
+    }
+
+    fn seed_completion_payload(root: &Path, payload: &str) {
+        let dir = root.join(payload);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("git.nu"), b"export extern \"git\" []\n").unwrap();
     }
 
     #[test]
@@ -1175,6 +1212,112 @@ mod tests {
             .get("o/semver")
             .unwrap()
             .is_active_for(&hash113, "0.113.1", &paths113.plugin_registry_path));
+    }
+
+    #[test]
+    fn collect_currently_active_includes_active_completion() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        let (exe, hash) = write_fake_nu(root, "0.113.1", b"nu-113");
+        let vendor = root.join("vendor");
+        let paths = save_paths(root, &exe, "0.113.1", &hash, &vendor);
+
+        let payload = "packages/completions/o/comp/1.0.0-aaa";
+        seed_completion_payload(root, payload);
+        let mut lockfile = Lockfile::empty();
+        lockfile
+            .packages
+            .insert("o/comp".into(), completion_entry(&paths, payload, true));
+        lockfile.packages.insert(
+            "o/inactive".into(),
+            completion_entry(&paths, payload, false),
+        );
+
+        let active = collect_currently_active(&lockfile, &paths);
+        assert_eq!(active.modules, vec!["o/comp".to_string()]);
+        assert!(active.plugins.is_empty());
+    }
+
+    #[test]
+    fn round_trip_cross_minor_restores_completion() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        let (exe113, hash113) = write_fake_nu(root, "0.113.1", b"nu-113-bytes");
+        let (exe114, hash114) = write_fake_nu(root, "0.114.0", b"nu-114-bytes");
+        let vendor = root.join("vendor");
+        let paths113 = save_paths(root, &exe113, "0.113.1", &hash113, &vendor);
+        version_manager::write_active_version(root, "0.113.1").unwrap();
+
+        let payload = "packages/completions/o/comp/1.0.0-aaa";
+        seed_completion_payload(root, payload);
+        let mut lockfile = Lockfile::empty();
+        lockfile
+            .packages
+            .insert("o/comp".into(), completion_entry(&paths113, payload, true));
+        lockfile.save(root).unwrap();
+
+        let reg = |_a: &str, _b: &str, _c: &str| Ok(());
+        let unreg = |_a: &str, _b: &str, _c: &str| Ok(());
+        let runner = FakeCandidateRunner::success();
+
+        let refresh114 = move |root: &Path| -> Result<()> {
+            let vendor = root.join("vendor");
+            save_paths(root, &exe114, "0.114.0", &hash114, &vendor);
+            Ok(())
+        };
+        let refresh113 = {
+            let exe113 = exe113.clone();
+            let hash113 = hash113.clone();
+            move |root: &Path| -> Result<()> {
+                let vendor = root.join("vendor");
+                save_paths(root, &exe113, "0.113.1", &hash113, &vendor);
+                Ok(())
+            }
+        };
+
+        let hooks_to_114 = SwitchHooks {
+            registrar: &reg,
+            unregistrar: &unreg,
+            runner: Some(&runner),
+            path_refresh: Some(&refresh114),
+        };
+        let _lock = acquire_mutation_lock(root).unwrap();
+        switch_active_nu_version(root, "0.114.0", &hooks_to_114, None).unwrap();
+        assert!(Lockfile::load(root)
+            .unwrap()
+            .packages
+            .get("o/comp")
+            .unwrap()
+            .completion_activation
+            .is_none());
+        let profile = ActivationProfile::load(root).unwrap().unwrap();
+        assert_eq!(
+            profile.set_for_minor("0.113").modules,
+            vec!["o/comp".to_string()]
+        );
+
+        let hooks_to_113 = SwitchHooks {
+            registrar: &reg,
+            unregistrar: &unreg,
+            runner: Some(&runner),
+            path_refresh: Some(&refresh113),
+        };
+        switch_active_nu_version(root, "0.113.1", &hooks_to_113, None).unwrap();
+        let vendor_str = vendor.to_string_lossy().into_owned();
+        let managed = format!("{vendor_str}/numan.nu");
+        let entry = Lockfile::load(root).unwrap();
+        let entry = entry.packages.get("o/comp").unwrap();
+        assert!(
+            entry.is_completion_active_for(&hash113, "0.113.1", &vendor_str, &managed),
+            "completion must be restored after switching back"
+        );
+        let content = std::fs::read_to_string(&managed).unwrap();
+        assert!(
+            content.contains("# numan:completion o/comp git"),
+            "managed file must carry the completion target after restore: {content}"
+        );
     }
 
     #[test]

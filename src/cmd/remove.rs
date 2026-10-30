@@ -361,6 +361,51 @@ mod tests {
         assert!(PendingLifecycle::load(root).unwrap().is_none());
     }
 
+    #[test]
+    fn execute_refuses_active_completion_even_with_force() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let payload = root.join("packages/completions/owner/comp/1.0.0-abc12345");
+        std::fs::create_dir_all(&payload).unwrap();
+        let source = payload.join("git.nu");
+        std::fs::write(&source, "# completions").unwrap();
+        let mut lockfile = Lockfile::empty();
+        let mut entry = base_entry();
+        entry.package_type = "completion".into();
+        entry.payload_path = "packages/completions/owner/comp/1.0.0-abc12345".into();
+        entry.completion_activation = Some(CompletionActivation {
+            targets: Vec::new(),
+            vendor_autoload_dir: "/tmp/vendor".to_string(),
+            managed_file_path: "/tmp/vendor/numan.nu".to_string(),
+            nu_executable_sha256: "abc".to_string(),
+            nu_version: "0.95.0".to_string(),
+            activated_at: "0".to_string(),
+        });
+        lockfile.packages.insert("owner/comp".into(), entry);
+        lockfile.save(root).unwrap();
+
+        let err = execute_with_tty(
+            &RemoveArgs {
+                package: "owner/comp".into(),
+                yes: true,
+                force: true,
+            },
+            root,
+            false,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("active as a completion"), "got: {msg}");
+        assert!(msg.contains("deactivate"), "got: {msg}");
+
+        // The lockfile entry and payload must be untouched.
+        assert!(source.is_file());
+        assert!(Lockfile::load(root)
+            .unwrap()
+            .packages
+            .contains_key("owner/comp"));
+    }
+
     fn plugin_activation() -> PluginActivation {
         PluginActivation {
             plugin_registry_path: "/tmp/plugins.nu".to_string(),

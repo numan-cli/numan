@@ -42,7 +42,7 @@ These workflows are covered by unit tests, hermetic integration tests, and real-
 
 - **Registry-backed installs**: Search packages, inspect available versions, and install `owner/name` or `owner/name@version`.
 - **Official registry**: `numan init` configures the `official` registry automatically. Its production trust root is built into numan, and `numan registry sync` verifies every signed index.
-- **Package types**: Plugins, modules, scripts, and completion packages support `numan activate`. Hook profiles require explicit `numan hook enable`. Packages without an activation declaration are install-only.
+- **Package types**: Plugins, modules, scripts, and completion packages support `numan activate`. Hook profiles require explicit `numan hook enable`. Packages without a supported activation surface are install-only.
 - **Verified artifacts**: Plugin binaries require SHA-256 hashes, and registry indexes require valid Ed25519 signatures.
 - **Scoped activation**: Plugins remain active only while the Nushell executable hash, Nushell version, and plugin registry path match the recorded activation state.
 - **Module autoloads**: numan writes managed vendor autoload files with ownership markers and validates candidate files before promotion.
@@ -66,8 +66,9 @@ These workflows are covered by unit tests, hermetic integration tests, and real-
 | Completion package | Yes | `numan activate` (managed vendor autoload) | Supported |
 
 Install remains inert for every package type: installation only downloads,
-verifies, locks, lists, removes, and garbage-collects payloads; nothing is
-executed or wired into Nu until an explicit activation command. Packages
+verifies, extracts, and locks payloads; nothing is executed or wired into
+Nu until an explicit activation command. Listing, removal, and garbage
+collection are separate lifecycle commands. Packages
 whose registry entry declares no activation surface stay install-only.
 Completion packages declare their targets (`activation: {kind: "nu-completion",
 targets: [{command, path, kind}, ...]}`); a target is owned exclusively by one
@@ -368,7 +369,7 @@ Global flag: `--root <path>` — override the numan root directory (all commands
 | `numan install <owner/name[@version]>` | Download, verify, extract, and lock |
 | `numan list` | List installed packages and activation status |
 | `numan activate [pkg...]` | Register plugins / write managed autoloads (modules, scripts, completion packages) |
-| `numan deactivate [pkg...]` | Remove module autoload entries |
+| `numan deactivate [pkg...]` | Remove managed autoload entries (modules, scripts, completion packages) / unregister plugins |
 | `numan hook enable [pkg...]` | Explicitly enable declared Nushell hook bindings |
 | `numan hook disable [pkg...]` | Disable hook bindings; no IDs disables all |
 | `numan hook list` | Show active hook bindings |

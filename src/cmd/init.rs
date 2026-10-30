@@ -320,7 +320,23 @@ fn validate_refresh_for_active_modules(
 
     let scoped_refs: Vec<&str> = active_ids.iter().map(String::as_str).collect();
     let runner = runner_factory(&new_paths.nu_executable);
-    validate_candidate(&managed_file, runner.as_ref(), &scoped_refs)?;
+    // Validate a copy, never the live file: `validate_candidate` deletes
+    // its argument on failure, and a failing refresh must not remove the
+    // managed autoload file (issue #15 review).
+    let content = std::fs::read_to_string(&managed_file).with_context(|| {
+        format!(
+            "Failed to read managed autoload file '{}'",
+            managed_file.display()
+        )
+    })?;
+    let candidate = write_candidate(&managed_file, &content)
+        .context("Failed to write managed autoload validation copy for `numan init --refresh`")?;
+    let result = validate_candidate(&candidate, runner.as_ref(), &scoped_refs);
+    if candidate.exists() {
+        // On failure validate_candidate already removed the copy.
+        let _ = std::fs::remove_file(&candidate);
+    }
+    result?;
 
     // Touch autoload-state path consistency — projection is updated after lockfile save.
     let _ = root;
