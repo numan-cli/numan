@@ -1,0 +1,42 @@
+name: CodeScene PR Refactoring Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request to refactor
+        required: true
+        type: number
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  refactor:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.body, '/cs-agent') &&
+      (contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) ||
+       github.event.comment.user.login == 'codescene-access[bot]'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Run CodeScene refactoring agent
+        uses: Mesililm-LLC/pr-refactoring-agent@58bd1554e60d5958fd7cd66e3e81591d662c2dd8 # v1.1.9 with isolated project config
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
+        with:
+          pr_number: ${{ inputs.pr_number || github.event.issue.number }}
+          command: ${{ (github.event_name == 'workflow_dispatch' || github.event.comment.body == '/cs-agent') && '/cs-agent skill:fix-code-health-degradations' || github.event.comment.body }}
+          model: ${{ vars.CODESCENE_AGENT_MODEL || 'cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4.1-flash-1017' }}
+          codescene_token: ${{ secrets.CODESCENE_ACCESS_TOKEN }}
+          opencode_auth_json: ${{ secrets.OPENCODE_AUTH_JSON }}
+
+
+
