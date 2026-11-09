@@ -11,6 +11,7 @@ use crate::core::platform::Platform;
 use crate::core::registry::RegistryManager;
 use crate::core::resolve::Resolver;
 use crate::install::transaction::{self, InstallOptions, InstallResult};
+use crate::nu::autoload::{CandidateRunner, NuCandidateRunner};
 use crate::nu::paths::NuPaths;
 use crate::state::active_plugin_mutation;
 use crate::state::lifecycle_journal::{
@@ -23,10 +24,26 @@ use crate::util::fs_safety::acquire_mutation_lock;
 use crate::util::hints;
 
 /// Update installed packages to their latest compatible versions
-#[derive(Parser)]
+#[derive(Parser, Default)]
 pub struct UpdateArgs {
     /// Package to update (owner/name). Omit to check/update all packages.
     package: Option<String>,
+
+    /// Explicitly update all installed packages (syncs registries first unless --no-sync is set)
+    #[arg(long, conflicts_with_all = ["package", "self_update"])]
+    pub all: bool,
+
+    /// Non-interactive mode; with --all, also orchestrates active module/script/completion updates
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+
+    /// Sync enabled registries before checking for updates
+    #[arg(long, conflicts_with = "self_update")]
+    pub sync: bool,
+
+    /// Skip syncing registries when --all is passed
+    #[arg(long, conflicts_with_all = ["sync", "self_update"])]
+    pub no_sync: bool,
 
     /// Report available updates without installing
     #[arg(long)]
@@ -40,6 +57,21 @@ pub struct UpdateArgs {
     /// Verbose output
     #[arg(short, long)]
     verbose: bool,
+}
+
+impl UpdateArgs {
+    pub fn unattended_all() -> Self {
+        Self {
+            package: None,
+            all: true,
+            yes: true,
+            sync: true,
+            no_sync: false,
+            check: false,
+            self_update: false,
+            verbose: false,
+        }
+    }
 }
 
 struct PendingUpdate {
@@ -57,16 +89,28 @@ enum ActiveUpdatePlan {
     Plain,
     /// Plugin activation present and mutation flag enabled: deactivate → install → activate.
     OrchestrateActivePlugin,
+    /// Module/script/completion activation present and opted in: deactivate → install → activate.
+    OrchestrateActiveAutoload,
 }
 
 /// Injectable install seam for update tests (production uses `transaction::install_package`).
 pub type UpdateInstallFn = dyn Fn(&str, Option<&str>, &InstallOptions<'_>) -> Result<InstallResult>;
+
+/// Injectable registry sync seam for update tests (production uses `registry::sync_registries_unlocked`).
+pub type UpdateSyncFn = dyn Fn(&Path) -> Result<()>;
 
 /// Injectable seams for update orchestration (tests inject fakes).
 pub struct UpdateHooks<'a> {
     pub lifecycle: &'a dyn PluginLifecycle,
     /// When `None`, uses [`transaction::install_package`].
     pub install: Option<&'a UpdateInstallFn>,
+}
+
+/// Extended runtime hooks for autoload candidate validation and registry sync in tests.
+pub struct UpdateRuntimeHooks<'a> {
+    pub hooks: &'a UpdateHooks<'a>,
+    pub candidate_runner: Option<&'a dyn CandidateRunner>,
+    pub sync: Option<&'a UpdateSyncFn>,
 }
 
 pub fn execute(args: &UpdateArgs, root: &Path) -> Result<()> {
@@ -93,6 +137,26 @@ pub fn execute_reviewed(
     hooks: &UpdateHooks<'_>,
     validate: &dyn Fn() -> Result<()>,
 ) -> Result<()> {
+    execute_reviewed_with_runtime(
+        args,
+        root,
+        &UpdateRuntimeHooks {
+            hooks,
+            candidate_runner: None,
+            sync: None,
+        },
+        validate,
+    )
+}
+
+/// Execute with extended runtime hooks (autoload candidate runner and registry sync seam).
+pub fn execute_reviewed_with_runtime(
+    args: &UpdateArgs,
+    root: &Path,
+    runtime: &UpdateRuntimeHooks<'_>,
+    validate: &dyn Fn() -> Result<()>,
+) -> Result<()> {
+    let hooks = runtime.hooks;
     if args.self_update {
         if args.package.is_some() {
             bail!("--self cannot be combined with a package name");
@@ -101,6 +165,10 @@ pub fn execute_reviewed(
         // and must not take the root mutation lock.
         return crate::cmd::self_update::execute(args.check, args.verbose);
     }
+
+    let should_sync = args.sync || (args.all && !args.no_sync);
+    let allow_autoload_orchestration =
+        (args.all && args.yes) || active_plugin_mutation::is_enabled();
 
     if args.check {
         warn_stale_lifecycle_journal(root)?;
@@ -123,6 +191,10 @@ pub fn execute_reviewed(
         resolve_nu_version_for_update(cached_nu_paths.as_ref(), &path_nu_version);
 
     if args.check {
+        if should_sync {
+            let _lock = acquire_mutation_lock(root)?;
+            run_registry_sync(root, runtime)?;
+        }
         let lockfile = Lockfile::load(root)?;
         if lockfile.is_empty() {
             println!("No packages installed.");
@@ -161,10 +233,14 @@ pub fn execute_reviewed(
 
     let _lock = acquire_mutation_lock(root)?;
     validate()?;
-    // Finish interrupted active-plugin reactivation before discovery so a
-    // LockfileUpdated package is not treated as already up to date.
-    resume_interrupted_reactivate(root, hooks)?;
+    // Finish interrupted active-plugin or active-autoload reactivation before discovery
+    // so a LockfileUpdated package is not treated as already up to date.
+    resume_interrupted_reactivate_with_runner(root, hooks, runtime.candidate_runner)?;
     warn_stale_lifecycle_journal(root)?;
+
+    if should_sync {
+        run_registry_sync(root, runtime)?;
+    }
 
     let lockfile = Lockfile::load(root)?;
     if lockfile.is_empty() {
@@ -205,13 +281,19 @@ pub fn execute_reviewed(
             failures.push(update.package_id.clone());
             continue;
         }
-        let current = match lockfile.packages.get(update.package_id.as_str()) {
+        let current_lockfile = Lockfile::load(root)?;
+        let current = match current_lockfile.packages.get(update.package_id.as_str()) {
             Some(entry) => entry,
             None => continue,
         };
 
         let plan = match &cached_nu_paths {
-            Some(paths) => match plan_active_update(current, &update.package_id, paths) {
+            Some(paths) => match plan_active_update_with_opts(
+                current,
+                &update.package_id,
+                paths,
+                allow_autoload_orchestration,
+            ) {
                 Ok(plan) => plan,
                 Err(e) => {
                     if args.package.is_some() {
@@ -274,7 +356,10 @@ pub fn execute_reviewed(
             }
         };
 
-        let needs_reactivate = plan == ActiveUpdatePlan::OrchestrateActivePlugin;
+        let needs_reactivate = matches!(
+            plan,
+            ActiveUpdatePlan::OrchestrateActivePlugin | ActiveUpdatePlan::OrchestrateActiveAutoload
+        );
         let journal = PendingLifecycle {
             op: LifecycleOp::Update,
             package_id: update.package_id.clone(),
@@ -295,29 +380,61 @@ pub fn execute_reviewed(
         journal.save(root)?;
 
         let mut deactivated = false;
-        if plan == ActiveUpdatePlan::OrchestrateActivePlugin {
-            create_snapshot(
-                root,
-                SnapshotReason::PreMutation,
-                SnapshotTrigger::Update,
-                None,
-                None,
-            )?;
-            if args.verbose {
-                println!(
-                    "  Deactivating {} before upgrade (active-plugin update)",
-                    update.package_id
-                );
+        let mut pre_snapshot_id: Option<String> = None;
+        match plan {
+            ActiveUpdatePlan::Plain => {}
+            ActiveUpdatePlan::OrchestrateActivePlugin => {
+                let snap = create_snapshot(
+                    root,
+                    SnapshotReason::PreMutation,
+                    SnapshotTrigger::Update,
+                    None,
+                    None,
+                )?;
+                pre_snapshot_id = Some(snap.id);
+                if args.verbose {
+                    println!(
+                        "  Deactivating {} before upgrade (active-plugin update)",
+                        update.package_id
+                    );
+                }
+                if let Err(e) = hooks.lifecycle.deactivate(root, &update.package_id) {
+                    eprintln!("Failed to deactivate {}: {}", update.package_id, e);
+                    // Leave PendingLifecycle at Prepared + deactivate journal for recovery.
+                    failures.push(update.package_id.clone());
+                    // Do not continue the batch: a leftover deactivate/activate journal
+                    // can poison the next orchestrated update (Codex batch-abort).
+                    break;
+                }
+                deactivated = true;
             }
-            if let Err(e) = hooks.lifecycle.deactivate(root, &update.package_id) {
-                eprintln!("Failed to deactivate {}: {}", update.package_id, e);
-                // Leave PendingLifecycle at Prepared + deactivate journal for recovery.
-                failures.push(update.package_id.clone());
-                // Do not continue the batch: a leftover deactivate/activate journal
-                // can poison the next orchestrated update (Codex batch-abort).
-                break;
+            ActiveUpdatePlan::OrchestrateActiveAutoload => {
+                let snap = create_snapshot(
+                    root,
+                    SnapshotReason::PreMutation,
+                    SnapshotTrigger::Update,
+                    None,
+                    None,
+                )?;
+                pre_snapshot_id = Some(snap.id.clone());
+                if args.verbose {
+                    println!(
+                        "  Deactivating {} before upgrade (active-autoload update)",
+                        update.package_id
+                    );
+                }
+                if let Err(e) = crate::cmd::deactivate::deactivate_modules_unlocked(
+                    root,
+                    std::slice::from_ref(&update.package_id),
+                    runtime.candidate_runner,
+                    Some(snap.id),
+                ) {
+                    eprintln!("Failed to deactivate {}: {}", update.package_id, e);
+                    failures.push(update.package_id.clone());
+                    break;
+                }
+                deactivated = true;
             }
-            deactivated = true;
         }
 
         // Same Nu identity as discovery (`resolve_nu_version`) for Plain and orchestrated.
@@ -347,27 +464,55 @@ pub fn execute_reviewed(
                 }
                 .save(root)?;
 
-                if plan == ActiveUpdatePlan::OrchestrateActivePlugin {
-                    if args.verbose {
-                        println!(
-                            "  Reactivating {} after upgrade (active-plugin update)",
-                            update.package_id
-                        );
+                match plan {
+                    ActiveUpdatePlan::Plain => {}
+                    ActiveUpdatePlan::OrchestrateActivePlugin => {
+                        if args.verbose {
+                            println!(
+                                "  Reactivating {} after upgrade (active-plugin update)",
+                                update.package_id
+                            );
+                        }
+                        if let Err(e) = hooks.lifecycle.activate(root, &update.package_id) {
+                            eprintln!(
+                                "Failed to reactivate {} after upgrade: {}",
+                                update.package_id, e
+                            );
+                            eprintln!(
+                                "Package was upgraded but is inactive. Run `numan activate {}`.",
+                                update.package_id
+                            );
+                            // Leave LockfileUpdated journal + activate journal for recovery.
+                            failures.push(update.package_id.clone());
+                            // Abort remaining updates so a Failed activate journal cannot
+                            // let the next plugin deactivate/upgrade then fail reactivate.
+                            break;
+                        }
                     }
-                    if let Err(e) = hooks.lifecycle.activate(root, &update.package_id) {
-                        eprintln!(
-                            "Failed to reactivate {} after upgrade: {}",
-                            update.package_id, e
-                        );
-                        eprintln!(
-                            "Package was upgraded but is inactive. Run `numan activate {}`.",
-                            update.package_id
-                        );
-                        // Leave LockfileUpdated journal + activate journal for recovery.
-                        failures.push(update.package_id.clone());
-                        // Abort remaining updates so a Failed activate journal cannot
-                        // let the next plugin deactivate/upgrade then fail reactivate.
-                        break;
+                    ActiveUpdatePlan::OrchestrateActiveAutoload => {
+                        if args.verbose {
+                            println!(
+                                "  Reactivating {} after upgrade (active-autoload update)",
+                                update.package_id
+                            );
+                        }
+                        if let Err(e) = activate_autoload_package(
+                            root,
+                            &update.package_id,
+                            runtime.candidate_runner,
+                            pre_snapshot_id.clone(),
+                        ) {
+                            eprintln!(
+                                "Failed to reactivate {} after upgrade: {}",
+                                update.package_id, e
+                            );
+                            eprintln!(
+                                "Package was upgraded but is inactive. Run `numan activate {}`.",
+                                update.package_id
+                            );
+                            failures.push(update.package_id.clone());
+                            break;
+                        }
                     }
                 }
 
@@ -387,7 +532,19 @@ pub fn execute_reviewed(
                         "Attempting to restore previous activation for {}...",
                         update.package_id
                     );
-                    if let Err(restore_err) = hooks.lifecycle.activate(root, &update.package_id) {
+                    let restore_res = match plan {
+                        ActiveUpdatePlan::OrchestrateActivePlugin => {
+                            hooks.lifecycle.activate(root, &update.package_id)
+                        }
+                        ActiveUpdatePlan::OrchestrateActiveAutoload => activate_autoload_package(
+                            root,
+                            &update.package_id,
+                            runtime.candidate_runner,
+                            pre_snapshot_id.clone(),
+                        ),
+                        ActiveUpdatePlan::Plain => Ok(()),
+                    };
+                    if let Err(restore_err) = restore_res {
                         eprintln!(
                             "Failed to restore activation for {}: {}",
                             update.package_id, restore_err
@@ -424,6 +581,43 @@ pub fn execute_reviewed(
         );
     }
 
+    Ok(())
+}
+
+fn run_registry_sync(root: &Path, runtime: &UpdateRuntimeHooks<'_>) -> Result<()> {
+    if let Some(sync_fn) = runtime.sync {
+        return sync_fn(root);
+    }
+    if runtime.hooks.install.is_none() {
+        crate::cmd::registry::sync_registries_unlocked(root)?;
+    }
+    Ok(())
+}
+
+fn activate_autoload_package(
+    root: &Path,
+    pkg_id: &str,
+    runner: Option<&dyn CandidateRunner>,
+    pre_mutation_snapshot_id: Option<String>,
+) -> Result<()> {
+    let nu_paths = NuPaths::load(root)?;
+    let runner_owned;
+    let runner_ref: &dyn CandidateRunner = match runner {
+        Some(r) => r,
+        None => {
+            runner_owned = NuCandidateRunner::new(&nu_paths.nu_executable);
+            &runner_owned
+        }
+    };
+    let failed = crate::cmd::activate::activate_modules_unlocked(
+        root,
+        &[pkg_id.to_string()],
+        runner_ref,
+        pre_mutation_snapshot_id,
+    )?;
+    if failed {
+        bail!("autoload candidate validation failed for '{pkg_id}'");
+    }
     Ok(())
 }
 
@@ -465,7 +659,16 @@ fn warn_stale_lifecycle_journal(root: &Path) -> Result<()> {
 ///
 /// Without this, discovery treats the package as up to date and never
 /// reactivates it (Codex: resume LockfileUpdated journals).
+#[cfg(test)]
 fn resume_interrupted_reactivate(root: &Path, hooks: &UpdateHooks<'_>) -> Result<()> {
+    resume_interrupted_reactivate_with_runner(root, hooks, None)
+}
+
+fn resume_interrupted_reactivate_with_runner(
+    root: &Path,
+    hooks: &UpdateHooks<'_>,
+    runner: Option<&dyn CandidateRunner>,
+) -> Result<()> {
     let Some(journal) = PendingLifecycle::load(root)? else {
         return Ok(());
     };
@@ -481,37 +684,67 @@ fn resume_interrupted_reactivate(root: &Path, hooks: &UpdateHooks<'_>) -> Result
         // Package removed after the interrupt; leave journal for gc warning.
         return Ok(());
     };
-    if entry.package_type != "plugin" {
-        return Ok(());
-    }
+    match entry.package_type.as_str() {
+        "plugin" => {
+            if entry.activation.is_some() {
+                // User (or doctor) already reactivated; clear the lifecycle journal.
+                PendingLifecycle::clear(root)?;
+                return Ok(());
+            }
 
-    if entry.activation.is_some() {
-        // User (or doctor) already reactivated; clear the lifecycle journal.
-        PendingLifecycle::clear(root)?;
-        return Ok(());
+            println!(
+                "Resuming reactivation of {} after interrupted update...",
+                journal.package_id
+            );
+            hooks
+                .lifecycle
+                .activate(root, &journal.package_id)
+                .with_context(|| {
+                    format!(
+                        "Failed to resume reactivation of '{}'. {}",
+                        journal.package_id,
+                        hints::run(&format!("numan activate {}", journal.package_id))
+                    )
+                })?;
+            PendingLifecycle::clear(root)?;
+            println!(
+                "{} {} reactivated",
+                console::style("✓").green(),
+                journal.package_id
+            );
+            Ok(())
+        }
+        "module" | "script" | "completion" => {
+            let already_active = entry.module_activation.is_some()
+                || entry.script_activation.is_some()
+                || entry.completion_activation.is_some();
+            if already_active {
+                PendingLifecycle::clear(root)?;
+                return Ok(());
+            }
+            println!(
+                "Resuming reactivation of {} after interrupted update...",
+                journal.package_id
+            );
+            activate_autoload_package(root, &journal.package_id, runner, None).with_context(
+                || {
+                    format!(
+                        "Failed to resume reactivation of '{}'. {}",
+                        journal.package_id,
+                        hints::run(&format!("numan activate {}", journal.package_id))
+                    )
+                },
+            )?;
+            PendingLifecycle::clear(root)?;
+            println!(
+                "{} {} reactivated",
+                console::style("✓").green(),
+                journal.package_id
+            );
+            Ok(())
+        }
+        _ => Ok(()),
     }
-
-    println!(
-        "Resuming reactivation of {} after interrupted update...",
-        journal.package_id
-    );
-    hooks
-        .lifecycle
-        .activate(root, &journal.package_id)
-        .with_context(|| {
-            format!(
-                "Failed to resume reactivation of '{}'. {}",
-                journal.package_id,
-                hints::run(&format!("numan activate {}", journal.package_id))
-            )
-        })?;
-    PendingLifecycle::clear(root)?;
-    println!(
-        "{} {} reactivated",
-        console::style("✓").green(),
-        journal.package_id
-    );
-    Ok(())
 }
 
 fn packages_to_check(args: &UpdateArgs, lockfile: &Lockfile) -> Result<Vec<String>> {
@@ -617,45 +850,99 @@ fn resolve_nu_version_for_update(
         .unwrap_or_else(|| path_nu_version.clone())
 }
 
-/// Decide whether an active plugin/module may be updated.
-///
-/// - Active **module**: always refuse (deactivate first).
-/// - Active **plugin** matching current Nu identity with mutation enabled: orchestrate.
-/// - Active **plugin** matching identity without exact opt-in: refuse.
-/// - Active **plugin** with stale/mismatched Nu identity: refuse (preserve activation record).
+/// Decide whether an active plugin/module may be updated under default flags.
+#[cfg(test)]
 fn plan_active_update(
     entry: &LockfileEntry,
     pkg_id: &str,
     nu_paths: &NuPaths,
+) -> Result<ActiveUpdatePlan> {
+    plan_active_update_with_opts(entry, pkg_id, nu_paths, false)
+}
+
+/// Decide whether an active plugin or autoload package may be updated.
+///
+/// - Active **module/script/completion**: orchestrated when `allow_autoload_orchestration`
+///   is true and Nu identity matches; otherwise refused.
+/// - Active **plugin** matching current Nu identity with mutation enabled: orchestrate.
+/// - Active **plugin** matching identity without exact opt-in: refuse.
+/// - Active **plugin/autoload** with stale/mismatched Nu identity: refuse (preserve activation record).
+fn plan_active_update_with_opts(
+    entry: &LockfileEntry,
+    pkg_id: &str,
+    nu_paths: &NuPaths,
+    allow_autoload_orchestration: bool,
 ) -> Result<ActiveUpdatePlan> {
     if entry.hook_activation.is_some() {
         bail!(
             "Package '{pkg_id}' has active Nushell hooks. Run `numan hook disable {pkg_id}` before updating."
         );
     }
-    if entry.module_activation.is_some() {
-        bail!(
-            "Package '{}' is currently active as a module. \
-             Run `numan deactivate {}` first, then run update again.",
-            pkg_id,
-            pkg_id
-        );
+    if let Some(ma) = &entry.module_activation {
+        if !allow_autoload_orchestration {
+            bail!(
+                "Package '{}' is currently active as a module. \
+                 Run `numan deactivate {}` first, then run update again.",
+                pkg_id,
+                pkg_id
+            );
+        }
+        if ma.nu_executable_sha256 != nu_paths.nu_executable_hash
+            || ma.nu_version != nu_paths.nu_version
+        {
+            bail!(
+                "Package '{}' has a module activation record that does not match \
+                 the current Nu identity. {}\nThen run `numan deactivate {}` before updating.",
+                pkg_id,
+                hints::run(hints::CMD_INIT_REFRESH),
+                pkg_id
+            );
+        }
+        return Ok(ActiveUpdatePlan::OrchestrateActiveAutoload);
     }
-    if entry.script_activation.is_some() {
-        bail!(
-            "Package '{}' is currently active as a script. \
-             Run `numan deactivate {}` first, then run update again.",
-            pkg_id,
-            pkg_id
-        );
+    if let Some(sa) = &entry.script_activation {
+        if !allow_autoload_orchestration {
+            bail!(
+                "Package '{}' is currently active as a script. \
+                 Run `numan deactivate {}` first, then run update again.",
+                pkg_id,
+                pkg_id
+            );
+        }
+        if sa.nu_executable_sha256 != nu_paths.nu_executable_hash
+            || sa.nu_version != nu_paths.nu_version
+        {
+            bail!(
+                "Package '{}' has a script activation record that does not match \
+                 the current Nu identity. {}\nThen run `numan deactivate {}` before updating.",
+                pkg_id,
+                hints::run(hints::CMD_INIT_REFRESH),
+                pkg_id
+            );
+        }
+        return Ok(ActiveUpdatePlan::OrchestrateActiveAutoload);
     }
-    if entry.completion_activation.is_some() {
-        bail!(
-            "Package '{}' is currently active as a completion. \
-             Run `numan deactivate {}` first, then run update again.",
-            pkg_id,
-            pkg_id
-        );
+    if let Some(ca) = &entry.completion_activation {
+        if !allow_autoload_orchestration {
+            bail!(
+                "Package '{}' is currently active as a completion. \
+                 Run `numan deactivate {}` first, then run update again.",
+                pkg_id,
+                pkg_id
+            );
+        }
+        if ca.nu_executable_sha256 != nu_paths.nu_executable_hash
+            || ca.nu_version != nu_paths.nu_version
+        {
+            bail!(
+                "Package '{}' has a completion activation record that does not match \
+                 the current Nu identity. {}\nThen run `numan deactivate {}` before updating.",
+                pkg_id,
+                hints::run(hints::CMD_INIT_REFRESH),
+                pkg_id
+            );
+        }
+        return Ok(ActiveUpdatePlan::OrchestrateActiveAutoload);
     }
     if entry.activation.is_some() {
         let matching = entry.is_active_for(
@@ -703,9 +990,8 @@ mod tests {
     fn self_update_rejects_combined_package_name() {
         let args = UpdateArgs {
             package: Some("owner/pkg".to_string()),
-            check: false,
             self_update: true,
-            verbose: false,
+            ..UpdateArgs::default()
         };
         let root = PathBuf::from("/tmp/numan-self-update-unused-root");
         let lifecycle = CommandPluginLifecycle;
@@ -1545,5 +1831,112 @@ mod tests {
             "plain update crash must not spuriously activate"
         );
         assert!(PendingLifecycle::load(env.root()).unwrap().is_some());
+    }
+
+    #[test]
+    fn plan_active_update_with_opts_orchestrates_autoload_when_allowed() {
+        let paths = matching_nu_paths();
+        let mod_entry = LockfileEntry {
+            module_activation: Some(ModuleActivation {
+                entry_path: "/tmp/mod.nu".to_string(),
+                import_mode: ModuleImportMode::Module,
+                vendor_autoload_dir: "/tmp/vendor".to_string(),
+                managed_file_path: "/tmp/vendor/numan.nu".to_string(),
+                nu_executable_sha256: "abc".to_string(),
+                nu_version: "0.95.0".to_string(),
+                activated_at: "0".to_string(),
+            }),
+            ..base_entry()
+        };
+        assert_eq!(
+            plan_active_update_with_opts(&mod_entry, "owner/mod", &paths, true).unwrap(),
+            ActiveUpdatePlan::OrchestrateActiveAutoload
+        );
+
+        let script_entry = LockfileEntry {
+            script_activation: Some(ScriptActivation {
+                commands: Vec::new(),
+                vendor_autoload_dir: "/tmp/vendor".to_string(),
+                managed_file_path: "/tmp/vendor/numan.nu".to_string(),
+                nu_executable_sha256: "abc".to_string(),
+                nu_version: "0.95.0".to_string(),
+                activated_at: "0".to_string(),
+            }),
+            ..base_entry()
+        };
+        assert_eq!(
+            plan_active_update_with_opts(&script_entry, "owner/script", &paths, true).unwrap(),
+            ActiveUpdatePlan::OrchestrateActiveAutoload
+        );
+
+        let comp_entry = LockfileEntry {
+            completion_activation: Some(CompletionActivation {
+                targets: Vec::new(),
+                vendor_autoload_dir: "/tmp/vendor".to_string(),
+                managed_file_path: "/tmp/vendor/numan.nu".to_string(),
+                nu_executable_sha256: "abc".to_string(),
+                nu_version: "0.95.0".to_string(),
+                activated_at: "0".to_string(),
+            }),
+            ..base_entry()
+        };
+        assert_eq!(
+            plan_active_update_with_opts(&comp_entry, "owner/comp", &paths, true).unwrap(),
+            ActiveUpdatePlan::OrchestrateActiveAutoload
+        );
+    }
+
+    #[test]
+    fn plan_active_update_with_opts_refuses_stale_autoload_identity() {
+        let mut stale_paths = matching_nu_paths();
+        stale_paths.nu_version = "0.96.0".to_string();
+        let mod_entry = LockfileEntry {
+            module_activation: Some(ModuleActivation {
+                entry_path: "/tmp/mod.nu".to_string(),
+                import_mode: ModuleImportMode::Module,
+                vendor_autoload_dir: "/tmp/vendor".to_string(),
+                managed_file_path: "/tmp/vendor/numan.nu".to_string(),
+                nu_executable_sha256: "abc".to_string(),
+                nu_version: "0.95.0".to_string(),
+                activated_at: "0".to_string(),
+            }),
+            ..base_entry()
+        };
+        let err = plan_active_update_with_opts(&mod_entry, "owner/mod", &stale_paths, true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("does not match"), "{err}");
+    }
+
+    #[test]
+    fn update_all_invokes_sync_seam_before_discovery() {
+        use std::cell::Cell;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        Lockfile::empty().save(root).unwrap();
+
+        let synced = Cell::new(false);
+        let sync_fn = |_root: &Path| -> Result<()> {
+            synced.set(true);
+            Ok(())
+        };
+        let hooks = UpdateHooks {
+            lifecycle: &SuccessfulPluginLifecycle,
+            install: None,
+        };
+        let runtime = UpdateRuntimeHooks {
+            hooks: &hooks,
+            candidate_runner: None,
+            sync: Some(&sync_fn),
+        };
+        let args = UpdateArgs {
+            all: true,
+            yes: true,
+            ..UpdateArgs::default()
+        };
+        execute_reviewed_with_runtime(&args, root, &runtime, &|| Ok(())).unwrap();
+        assert!(synced.get(), "expected --all to invoke sync seam");
     }
 }

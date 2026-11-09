@@ -71,6 +71,11 @@ fn list_registries(root: &Path, out: &mut dyn Write) -> Result<()> {
 
 fn sync_registries(root: &Path) -> Result<()> {
     let _lock = acquire_mutation_lock(root)?;
+    sync_registries_unlocked(root)
+}
+
+/// Sync all enabled registries while the caller already holds `mutation.lock`.
+pub(crate) fn sync_registries_unlocked(root: &Path) -> Result<()> {
     let config = crate::config::Config::load(root)?;
     let mgr = RegistryManager::new(root)?;
 
