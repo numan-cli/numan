@@ -2,8 +2,6 @@
 
 [![CI](https://github.com/numan-cli/numan/actions/workflows/ci.yml/badge.svg)](https://github.com/numan-cli/numan/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-<a href="https://github.com/numan-cli/homebrew-numan"><img alt="Homebrew Package Version" src="https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnuman-cli%2Fhomebrew-numan%2Fmaster%2FFormula%2Fnuman.rb&search=version%20%22(%5B%5E%22%5D%2B)%22&replace=%241&label=homebrew&logo=homebrew&color=fbb040"></a>
-![WinGet Package Version](https://img.shields.io/winget/v/tonythethompson.numan)
 <img alt="Crates.io Version" src="https://img.shields.io/crates/v/numan-cli">
 <img alt="Crates.io Version" src="https://img.shields.io/crates/d/numan-cli">
 
@@ -139,23 +137,6 @@ cargo install --git https://github.com/numan-cli/numan
 ```
 
 Tracks the default branch. For a reproducible install, choose a published tag from [GitHub Releases](https://github.com/numan-cli/numan/releases) and pass `--tag vX.Y.Z`.
-
-### Homebrew (macOS / Linux)
-
-```bash
-brew tap numan-cli/numan https://github.com/numan-cli/homebrew-numan
-brew install numan
-```
-
-Uses the public [`homebrew-numan`](https://github.com/numan-cli/homebrew-numan) tap. Prefer the explicit HTTPS remote so `brew update` does not depend on SSH host keys. Formula digests update automatically after each GitHub Release (see [docs/PACKAGING.md](docs/PACKAGING.md)).
-
-### winget (Windows)
-
-```powershell
-winget install tonythethompson.numan
-```
-
-See [packaging/winget/README.md](packaging/winget/README.md) and [docs/PACKAGING.md](docs/PACKAGING.md).
 
 ### crates.io
 
