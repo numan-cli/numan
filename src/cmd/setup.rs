@@ -58,6 +58,8 @@ pub enum SetupCommands {
     Nu(NuSetupArgs),
     /// Setup nushell-loader integration and manage external shell CLI tools
     Loader(LoaderArgs),
+    /// Configure or run scheduled background extension auto-updates
+    Autoupdate(AutoupdateArgs),
 }
 
 #[derive(Debug, Args)]
@@ -249,10 +251,16 @@ pub struct LoaderArgs {
     pub install: bool,
 }
 
+pub use crate::cmd::setup_autoupdate::{
+    autoupdate_log_path, autoupdate_state_path, autoupdate_wrapper_path, execute_autoupdate,
+    format_schtasks_tr, read_autoupdate_state, AutoupdateArgs, AutoupdateState,
+};
+
 pub fn execute(cmd: SetupCommands, root: &Path) -> Result<()> {
     match cmd {
         SetupCommands::Nu(args) => execute_nu(&args, root),
         SetupCommands::Loader(args) => execute_loader(&args, root),
+        SetupCommands::Autoupdate(args) => execute_autoupdate(&args, root),
     }
 }
 

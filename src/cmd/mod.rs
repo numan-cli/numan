@@ -19,6 +19,7 @@ pub mod remove;
 pub mod search;
 pub mod self_update;
 pub mod setup;
+pub mod setup_autoupdate;
 pub mod setup_tools;
 pub mod snapshot;
 pub mod try_cmd;
