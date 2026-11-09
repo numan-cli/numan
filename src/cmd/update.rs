@@ -355,6 +355,19 @@ pub fn execute_reviewed_with_runtime(
             }
         };
 
+        if let ActiveUpdatePlan::OrchestrateActiveAutoload = plan {
+            if let Some(paths) = &cached_nu_paths {
+                if let Err(e) = paths.validate_drift() {
+                    eprintln!(
+                        "Failed to validate Nu identity for {}: {}",
+                        update.package_id, e
+                    );
+                    failures.push(update.package_id.clone());
+                    break;
+                }
+            }
+        }
+
         let needs_reactivate = matches!(
             plan,
             ActiveUpdatePlan::OrchestrateActivePlugin | ActiveUpdatePlan::OrchestrateActiveAutoload
@@ -408,16 +421,6 @@ pub fn execute_reviewed_with_runtime(
                 deactivated = true;
             }
             ActiveUpdatePlan::OrchestrateActiveAutoload => {
-                if let Some(paths) = &cached_nu_paths {
-                    if let Err(e) = paths.validate_drift() {
-                        eprintln!(
-                            "Failed to validate Nu identity for {}: {}",
-                            update.package_id, e
-                        );
-                        failures.push(update.package_id.clone());
-                        break;
-                    }
-                }
                 let snap = create_snapshot(
                     root,
                     SnapshotReason::PreMutation,

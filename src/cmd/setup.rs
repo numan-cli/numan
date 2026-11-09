@@ -1647,7 +1647,15 @@ fn xml_escape(input: &str) -> String {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn systemd_escape_arg(input: &str) -> String {
-    input.replace('\\', "\\\\").replace('"', "\\\"")
+    input
+        .replace('%', "%%")
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn format_schtasks_tr(wrapper_path: &Path) -> String {
+    format!("\"{}\"", wrapper_path.display())
 }
 
 #[cfg(target_os = "windows")]
@@ -1658,7 +1666,7 @@ fn enable_windows_schtasks(root: &Path, wrapper_path: &Path, interval: &str) -> 
     } else {
         "DAILY"
     };
-    let tr = wrapper_path.to_string_lossy().into_owned();
+    let tr = format_schtasks_tr(wrapper_path);
     let mut cmd = std::process::Command::new("schtasks");
     cmd.args(["/Create", "/F", "/TN", &task_name, "/SC", sc, "/TR", &tr]);
     if sc == "DAILY" {
@@ -1846,15 +1854,17 @@ fn disable_linux_systemd(root: &Path) -> Result<()> {
     if !timer_path.exists() && !service_path.exists() {
         return Ok(());
     }
-    let disable = std::process::Command::new("systemctl")
-        .args(["--user", "disable", "--now", &timer_name])
-        .output()
-        .with_context(|| {
-            format!("Failed to execute 'systemctl --user disable --now {timer_name}'")
-        })?;
-    if !disable.status.success() {
-        let stderr = String::from_utf8_lossy(&disable.stderr);
-        bail!("Failed to disable {timer_name}: {}", stderr.trim());
+    if timer_path.exists() {
+        let disable = std::process::Command::new("systemctl")
+            .args(["--user", "disable", "--now", &timer_name])
+            .output()
+            .with_context(|| {
+                format!("Failed to execute 'systemctl --user disable --now {timer_name}'")
+            })?;
+        if !disable.status.success() {
+            let stderr = String::from_utf8_lossy(&disable.stderr);
+            bail!("Failed to disable {timer_name}: {}", stderr.trim());
+        }
     }
     for path in [&timer_path, &service_path] {
         if path.exists() {
@@ -2134,6 +2144,27 @@ fn disable_autoupdate_locked(
     Ok(())
 }
 
+fn run_autoupdate_now(args: &AutoupdateArgs, root: &Path) -> Result<()> {
+    let allow_mutation = args.allow_active_plugin_mutation
+        || read_autoupdate_state(root)
+            .ok()
+            .flatten()
+            .is_some_and(|s| s.allow_active_plugin_mutation);
+    let prev_env = std::env::var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION").ok();
+    if allow_mutation {
+        std::env::set_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION", "1");
+    }
+    let update_args = crate::cmd::update::UpdateArgs::unattended_all();
+    let result = crate::cmd::update::execute(&update_args, root);
+    if allow_mutation {
+        match prev_env {
+            Some(v) => std::env::set_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION", v),
+            None => std::env::remove_var("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION"),
+        }
+    }
+    result
+}
+
 pub(crate) fn execute_autoupdate_with_scheduler(
     args: &AutoupdateArgs,
     root: &Path,
@@ -2159,8 +2190,7 @@ pub(crate) fn execute_autoupdate_with_scheduler(
     }
 
     if args.run_now {
-        let update_args = crate::cmd::update::UpdateArgs::unattended_all();
-        return crate::cmd::update::execute(&update_args, root);
+        return run_autoupdate_now(args, root);
     }
 
     // Default or `--status`: display status.
@@ -3000,5 +3030,16 @@ esac\n";
         assert_eq!(*scheduler.disabled_calls.lock().unwrap(), 1);
         let state = read_autoupdate_state(&root).unwrap().unwrap();
         assert!(!state.enabled);
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn setup_autoupdate_windows_schtasks_quotes_tr() {
+        let path_with_spaces = Path::new(r"C:\Users\Jane Doe\.numan\bin\numan-autoupdate.cmd");
+        let tr = format_schtasks_tr(path_with_spaces);
+        assert_eq!(
+            tr, r#""C:\Users\Jane Doe\.numan\bin\numan-autoupdate.cmd""#,
+            "TR value must be wrapped in literal double quotes"
+        );
     }
 }
