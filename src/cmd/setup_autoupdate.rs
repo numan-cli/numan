@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use crate::cmd::update::{self, UpdateArgs};
 use crate::core::integrity::compute_sha256;
-use crate::util::atomic::write_bytes_atomic;
-use crate::util::fs_safety::setup_subcommand_lock;
+use crate::util::atomic::{write_bytes_atomic, write_json_atomic};
+use crate::util::fs_safety::{assert_not_symlink, setup_subcommand_lock};
 use crate::util::output::{eprintln, println};
 
 /// Options for `numan setup autoupdate` scheduled background extension updates.
@@ -144,9 +144,7 @@ fn enable_macos_launchd(root: &Path, wrapper_path: &Path, interval: &str) -> Res
         "hourly" => 3600,
         _ => 86400,
     };
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME environment variable is not set")?;
+    let home = dirs::home_dir().context("Could not determine home directory")?;
     let agents_dir = home.join("Library").join("LaunchAgents");
     std::fs::create_dir_all(&agents_dir).with_context(|| {
         format!(
@@ -155,6 +153,7 @@ fn enable_macos_launchd(root: &Path, wrapper_path: &Path, interval: &str) -> Res
         )
     })?;
     let plist_path = agents_dir.join(format!("{label}.plist"));
+    assert_not_symlink(&plist_path, "launchd plist")?;
     let wrapper_str = wrapper_path.to_string_lossy();
     let escaped_wrapper = xml_escape(&wrapper_str);
     let plist_content = format!(
@@ -200,18 +199,27 @@ fn enable_macos_launchd(root: &Path, wrapper_path: &Path, interval: &str) -> Res
 fn disable_macos_launchd(root: &Path) -> Result<()> {
     let root_id = autoupdate_root_id(root);
     let label = format!("dev.numan.autoupdate.{root_id}");
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME environment variable is not set")?;
+    let home = dirs::home_dir().context("Could not determine home directory")?;
     let plist_path = home
         .join("Library")
         .join("LaunchAgents")
         .join(format!("{label}.plist"));
     if plist_path.is_file() {
-        let _ = std::process::Command::new("launchctl")
+        assert_not_symlink(&plist_path, "launchd plist")?;
+        let unload = std::process::Command::new("launchctl")
             .args(["unload", &plist_path.to_string_lossy()])
-            .output();
-        let _ = std::fs::remove_file(&plist_path);
+            .output()
+            .with_context(|| format!("Failed to execute 'launchctl unload' for {label}"))?;
+        if !unload.status.success() {
+            let stderr = String::from_utf8_lossy(&unload.stderr);
+            bail!(
+                "Failed to unload launchd agent '{}': {}",
+                plist_path.display(),
+                stderr.trim()
+            );
+        }
+        std::fs::remove_file(&plist_path)
+            .with_context(|| format!("Failed to remove '{}'", plist_path.display()))?;
     }
     Ok(())
 }
@@ -225,6 +233,8 @@ fn write_systemd_units(
 ) -> Result<()> {
     let service_path = units_dir.join(format!("{unit_prefix}.service"));
     let timer_path = units_dir.join(format!("{unit_prefix}.timer"));
+    assert_not_symlink(&service_path, "systemd service unit")?;
+    assert_not_symlink(&timer_path, "systemd timer unit")?;
     let service_content = format!(
         r#"[Unit]
 Description=Numan unattended package auto-update
@@ -269,10 +279,10 @@ fn enable_linux_systemd(root: &Path, wrapper_path: &Path, interval: &str) -> Res
         "hourly" => "hourly",
         _ => "daily",
     };
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME environment variable is not set")?;
-    let units_dir = home.join(".config").join("systemd").join("user");
+    let config_dir = dirs::config_dir()
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .context("Could not determine user config directory")?;
+    let units_dir = config_dir.join("systemd").join("user");
     std::fs::create_dir_all(&units_dir).with_context(|| {
         format!(
             "Failed to create systemd user units directory at '{}'",
@@ -331,7 +341,9 @@ fn stop_systemd_timer_if_present(timer_name: &str, timer_path: &Path) -> Result<
 fn remove_systemd_units_and_reload(paths: &[&Path]) -> Result<()> {
     for path in paths {
         if path.is_file() {
-            let _ = std::fs::remove_file(path);
+            assert_not_symlink(path, "systemd unit")?;
+            std::fs::remove_file(path)
+                .with_context(|| format!("Failed to remove '{}'", path.display()))?;
         }
     }
     let reload = std::process::Command::new("systemctl")
@@ -349,10 +361,10 @@ fn remove_systemd_units_and_reload(paths: &[&Path]) -> Result<()> {
 fn disable_linux_systemd(root: &Path) -> Result<()> {
     let root_id = autoupdate_root_id(root);
     let unit_prefix = format!("numan-autoupdate-{root_id}");
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME environment variable is not set")?;
-    let units_dir = home.join(".config").join("systemd").join("user");
+    let config_dir = dirs::config_dir()
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .context("Could not determine user config directory")?;
+    let units_dir = config_dir.join("systemd").join("user");
     let service_path = units_dir.join(format!("{unit_prefix}.service"));
     let timer_path = units_dir.join(format!("{unit_prefix}.timer"));
     if !service_path.exists() && !timer_path.exists() {
@@ -459,6 +471,7 @@ pub fn read_autoupdate_state(root: &Path) -> Result<Option<AutoupdateState>> {
     if !path.is_file() {
         return Ok(None);
     }
+    assert_not_symlink(&path, "autoupdate state file")?;
     let bytes = std::fs::read(&path)
         .with_context(|| format!("Failed to read auto-update state from '{}'", path.display()))?;
     let state = serde_json::from_slice(&bytes).with_context(|| {
@@ -478,7 +491,8 @@ struct AutoupdateWrapperConfig<'a> {
     allow_active_plugin_mutation: bool,
 }
 
-fn write_autoupdate_wrapper(cfg: &AutoupdateWrapperConfig<'_>) -> Result<()> {
+fn ensure_wrapper_paths(cfg: &AutoupdateWrapperConfig<'_>) -> Result<()> {
+    assert_not_symlink(cfg.root, "Numan root directory")?;
     if let Some(parent) = cfg.wrapper_path.parent() {
         std::fs::create_dir_all(parent).with_context(|| {
             format!(
@@ -486,7 +500,25 @@ fn write_autoupdate_wrapper(cfg: &AutoupdateWrapperConfig<'_>) -> Result<()> {
                 parent.display()
             )
         })?;
+        assert_not_symlink(parent, "autoupdate wrapper directory")?;
     }
+    if let Some(log_parent) = cfg.log_path.parent() {
+        std::fs::create_dir_all(log_parent).with_context(|| {
+            format!(
+                "Failed to create log directory at '{}'",
+                log_parent.display()
+            )
+        })?;
+        assert_not_symlink(log_parent, "autoupdate log directory")?;
+    }
+    assert_not_symlink(cfg.wrapper_path, "autoupdate wrapper script")?;
+    assert_not_symlink(cfg.log_path, "autoupdate log file")?;
+    Ok(())
+}
+
+fn write_autoupdate_wrapper(cfg: &AutoupdateWrapperConfig<'_>) -> Result<()> {
+    ensure_wrapper_paths(cfg)?;
+
     let exe_str = cfg.numan_exe.to_string_lossy();
     let root_str = cfg.root.to_string_lossy();
     let log_str = cfg.log_path.to_string_lossy();
@@ -516,6 +548,7 @@ fn write_autoupdate_wrapper(cfg: &AutoupdateWrapperConfig<'_>) -> Result<()> {
 
     #[cfg(not(target_os = "windows"))]
     {
+        let escape_sq = |s: &str| s.replace('\'', "'\"'\"'");
         let plugin_env_line = if cfg.allow_active_plugin_mutation {
             "export NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1\n"
         } else {
@@ -525,10 +558,15 @@ fn write_autoupdate_wrapper(cfg: &AutoupdateWrapperConfig<'_>) -> Result<()> {
             "#!/usr/bin/env sh\n\
              # Numan automated background update wrapper\n\
              set -eu\n\
-             export NUMAN_ROOT=\"{root_str}\"\n\
+             export NUMAN_ROOT='{}'\n\
              {plugin_env_line}\
-             echo \"[$(date)] Running numan background auto-update\" >> \"{log_str}\"\n\
-             exec \"{exe_str}\" --root \"{root_str}\" update --all --yes >> \"{log_str}\" 2>&1\n"
+             echo \"[$(date)] Running numan background auto-update\" >> '{}'\n\
+             exec '{}' --root '{}' update --all --yes >> '{}' 2>&1\n",
+            escape_sq(&root_str),
+            escape_sq(&log_str),
+            escape_sq(&exe_str),
+            escape_sq(&root_str),
+            escape_sq(&log_str)
         );
         write_bytes_atomic(cfg.wrapper_path, content.as_bytes()).with_context(|| {
             format!(
@@ -560,12 +598,13 @@ fn validate_autoupdate_action_flags(args: &AutoupdateArgs) -> Result<()> {
 }
 
 fn write_autoupdate_state(root: &Path, state: &AutoupdateState) -> Result<()> {
-    let state_bytes = serde_json::to_vec_pretty(state)
-        .context("Failed to serialize auto-update state to JSON")?;
     let path = autoupdate_state_path(root);
-    write_bytes_atomic(&path, &state_bytes)
-        .with_context(|| format!("Failed to write auto-update state to '{}'", path.display()))?;
-    Ok(())
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+        assert_not_symlink(parent, "autoupdate state directory")?;
+    }
+    assert_not_symlink(&path, "autoupdate state file")?;
+    write_json_atomic(&path, state)
 }
 
 fn enable_autoupdate_locked(
@@ -623,6 +662,7 @@ fn enable_autoupdate_locked(
 }
 
 fn disable_autoupdate_locked(root: &Path, scheduler: &dyn AutoupdateScheduler) -> Result<()> {
+    assert_not_symlink(root, "Numan root directory")?;
     scheduler.disable(root).with_context(|| {
         format!(
             "Failed to unregister task from scheduler '{}'",
@@ -631,8 +671,17 @@ fn disable_autoupdate_locked(root: &Path, scheduler: &dyn AutoupdateScheduler) -
     })?;
 
     let wrapper_path = autoupdate_wrapper_path(root);
+    if let Some(parent) = wrapper_path.parent() {
+        assert_not_symlink(parent, "autoupdate wrapper directory")?;
+    }
+    assert_not_symlink(&wrapper_path, "autoupdate wrapper script")?;
     if wrapper_path.is_file() {
-        let _ = std::fs::remove_file(&wrapper_path);
+        std::fs::remove_file(&wrapper_path).with_context(|| {
+            format!(
+                "Failed to remove autoupdate wrapper '{}'",
+                wrapper_path.display()
+            )
+        })?;
     }
 
     let prior_state = read_autoupdate_state(root)?;
@@ -688,6 +737,9 @@ pub(crate) fn execute_autoupdate_with_scheduler(
     scheduler: &dyn AutoupdateScheduler,
 ) -> Result<()> {
     validate_autoupdate_action_flags(args)?;
+    let abs_root = std::path::absolute(root)
+        .with_context(|| format!("Failed to resolve root path '{}'", root.display()))?;
+    let root = abs_root.as_path();
 
     if args.run_now {
         return run_autoupdate_now(args, root);
