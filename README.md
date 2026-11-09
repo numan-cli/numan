@@ -48,6 +48,7 @@ These workflows are covered by unit tests, hermetic integration tests, and real-
 - **Module autoloads**: numan writes managed vendor autoload files with ownership markers and validates candidate files before promotion.
 - **Lifecycle management**: Update, remove, and garbage collection operations recover safely through lifecycle journals.
 - **Shell tool integration & loader**: `numan setup loader` configures cached initialization for third-party shell CLI tools (Starship, Zoxide, Carapace, Atuin, Mise, Direnv, Oh-My-Posh), detects installed tools, isolates configurations in `loader-config.nu`, and downloads missing prebuilt binaries into `$NUMAN_ROOT/tools/bin/`.
+- **Scheduled background auto-updates**: `numan setup autoupdate` configures platform-native scheduled updates (systemd user timer on Linux, launchd agent on macOS, Task Scheduler on Windows) running unattended `numan update --all --yes` with safe rollback and journal-based crash recovery.
 - **nupm interoperability**: Use `numan nupm status`, `inspect`, `import`, and `diff` to inspect, migrate, and detect drift in existing [nupm](https://github.com/nushell/nupm) installations.
 - **Health checks**: `numan doctor` diagnoses installation health and applies safe repairs by default. Use `--scan` for report-only mode.
 - **Shell completions**: Install completions for Bash, Fish, Zsh, PowerShell, and Nushell with `numan completions` (use `--print` to emit the script).
@@ -302,6 +303,7 @@ session keeps the hooks loaded when it started.
 ```bash
 numan update --check              # see available package upgrades
 numan update                      # apply package upgrades
+numan update --all --yes          # unattended batch update for all installed packages
 numan update --self --check       # standalone: report if a newer binary is available
 numan update --self               # standalone: download, checksum-verify, replace binary
 numan remove owner/package-name
@@ -373,7 +375,7 @@ Global flag: `--root <path>` — override the numan root directory (all commands
 | `numan hook enable [pkg...]` | Explicitly enable declared Nushell hook bindings |
 | `numan hook disable [pkg...]` | Disable hook bindings; no IDs disables all |
 | `numan hook list` | Show active hook bindings |
-| `numan update [--check] [pkg]` | Upgrade installed packages |
+| `numan update [--check] [--all] [-y/--yes] [pkg]` | Upgrade installed packages (supports batch unattended mode) |
 | `numan update --self [--check]` | Upgrade the numan binary (GitHub Release self-replace, or print brew/winget/cargo command) |
 | `numan remove [--force] <pkg>` | Remove from lockfile and delete payload |
 | `numan gc [--dry-run]` | Delete orphaned package directories |
@@ -387,6 +389,7 @@ Global flag: `--root <path>` — override the numan root directory (all commands
 | `numan setup nu path` | Use the Nushell already on PATH (removes managed install) |
 | `numan setup nu use <path>` | Register a specific existing Nushell binary |
 | `numan setup loader` | Setup nushell-loader integration and third-party shell CLI tools |
+| `numan setup autoupdate` | Configure platform-native background extension auto-updates (systemd, launchd, schtasks) |
 | `numan use <version>` | Switch the active managed Nu to a pinned version (no auto-install; errors with a hint to run `numan setup nu <version>` if missing). Cross-minor switches deactivate Numan-active plugins/modules for the leaving Nu and restore that minor's remembered set when you switch back. |
 | `numan use latest` | Switch the active managed Nu to the latest installed version (same leave/restore behavior as `use <version>`) |
 | `numan use list` | List installed managed Nu versions and mark the active one |
@@ -405,7 +408,7 @@ Global flag: `--root <path>` — override the numan root directory (all commands
 | `install` | `--force` reinstall; `-v` / `--verbose` |
 | `activate` | `--verbose`; `--list` status only; `--check` integrity only |
 | `deactivate` | `--verbose` |
-| `update` | `--check` report only; `--self` update the numan binary; `-v` / `--verbose` |
+| `update` | `--check` report only; `--all` update all installed packages; `-y` / `--yes` non-interactive auto-confirm; `--self` update the numan binary; `-v` / `--verbose` |
 | `remove` | `--force` remove despite active activation |
 | `gc` | `--dry-run` preview only |
 | `registry add` | `--key <base64-public-key>` (required for custom registries; official is auto-configured on `init`) |
@@ -415,8 +418,30 @@ Global flag: `--root <path>` — override the numan root directory (all commands
 | `doctor` | `--scan` report only; `--json` machine output; `--nupm-home <path>` (repairs by default) |
 | `setup nu` | `--force` re-download; `--skip-path` don't update PATH; `--yes` skip prompt |
 | `setup loader` | `--status` check health/cache; `--detect` scan PATH tools; `--add <tool>` add preset/custom; `--remove <tool>` remove tool; `--clean` purge caches; `--install` / `--install-missing` download binaries; `--force` overwrite engine; `--configure` append to `config.nu` |
+| `setup autoupdate` | `--enable` register scheduled task; `--disable` unregister task; `--status` display scheduler health; `--run-now` execute immediate update; `--interval daily|hourly`; `--allow-active-plugin-mutation` permit active plugin updates |
 
 Run `numan <command> --help` for full flag documentation.
+
+---
+
+## Scheduled background auto-updates
+
+Numan can configure platform-native OS schedulers to periodically update all installed packages in the background unattended:
+
+```bash
+numan setup autoupdate --status                                         # view scheduler health and last run timestamp
+numan setup autoupdate --enable --interval daily                        # schedule daily background updates
+numan setup autoupdate --enable --interval hourly --allow-active-plugin-mutation  # hourly with active plugin updates
+numan setup autoupdate --run-now                                        # execute an immediate scheduled update run
+numan setup autoupdate --disable                                        # unregister scheduled task and clean up wrapper
+```
+
+Platform implementations:
+- **Linux:** User-level `systemd` service and timer unit (`~/.config/systemd/user/numan-autoupdate-*.timer`).
+- **macOS:** User-level `launchd` LaunchAgent (`~/Library/LaunchAgents/dev.numan.autoupdate.*.plist`).
+- **Windows:** Windows Task Scheduler job (`schtasks /Create /TN NumanAutoUpdate /SC DAILY...`).
+
+The scheduled job executes `numan update --all --yes` through a generated wrapper script, writing logs to `$NUMAN_ROOT/autoupdate.log`. State and execution timestamps are tracked in `$NUMAN_ROOT/autoupdate-state.json`.
 
 ---
 
