@@ -1840,33 +1840,26 @@ fn enable_linux_systemd(root: &Path, wrapper_path: &Path, interval: &str) -> Res
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn disable_linux_systemd(root: &Path) -> Result<()> {
-    let Some(config_dir) =
-        dirs::config_dir().or_else(|| dirs::home_dir().map(|h| h.join(".config")))
-    else {
-        return Ok(());
-    };
-    let systemd_dir = config_dir.join("systemd").join("user");
-    let unit_stem = format!("numan-autoupdate-{}", autoupdate_root_id(root));
-    let timer_name = format!("{unit_stem}.timer");
-    let service_path = systemd_dir.join(format!("{unit_stem}.service"));
-    let timer_path = systemd_dir.join(&timer_name);
-    if !timer_path.exists() && !service_path.exists() {
+fn stop_systemd_timer_if_present(timer_name: &str, timer_path: &Path) -> Result<()> {
+    if !timer_path.exists() {
         return Ok(());
     }
-    if timer_path.exists() {
-        let disable = std::process::Command::new("systemctl")
-            .args(["--user", "disable", "--now", &timer_name])
-            .output()
-            .with_context(|| {
-                format!("Failed to execute 'systemctl --user disable --now {timer_name}'")
-            })?;
-        if !disable.status.success() {
-            let stderr = String::from_utf8_lossy(&disable.stderr);
-            bail!("Failed to disable {timer_name}: {}", stderr.trim());
-        }
+    let disable = std::process::Command::new("systemctl")
+        .args(["--user", "disable", "--now", timer_name])
+        .output()
+        .with_context(|| {
+            format!("Failed to execute 'systemctl --user disable --now {timer_name}'")
+        })?;
+    if !disable.status.success() {
+        let stderr = String::from_utf8_lossy(&disable.stderr);
+        bail!("Failed to disable {timer_name}: {}", stderr.trim());
     }
-    for path in [&timer_path, &service_path] {
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn remove_systemd_units_and_reload(paths: &[&Path]) -> Result<()> {
+    for path in paths {
         if path.exists() {
             assert_not_symlink(path, "systemd unit")?;
             std::fs::remove_file(path)
@@ -1882,6 +1875,25 @@ fn disable_linux_systemd(root: &Path) -> Result<()> {
         bail!("Failed to reload user systemd daemon: {}", stderr.trim());
     }
     Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn disable_linux_systemd(root: &Path) -> Result<()> {
+    let Some(config_dir) =
+        dirs::config_dir().or_else(|| dirs::home_dir().map(|h| h.join(".config")))
+    else {
+        return Ok(());
+    };
+    let systemd_dir = config_dir.join("systemd").join("user");
+    let unit_stem = format!("numan-autoupdate-{}", autoupdate_root_id(root));
+    let timer_name = format!("{unit_stem}.timer");
+    let service_path = systemd_dir.join(format!("{unit_stem}.service"));
+    let timer_path = systemd_dir.join(&timer_name);
+    if !timer_path.exists() && !service_path.exists() {
+        return Ok(());
+    }
+    stop_systemd_timer_if_present(&timer_name, &timer_path)?;
+    remove_systemd_units_and_reload(&[&timer_path, &service_path])
 }
 
 impl AutoupdateScheduler for OsAutoupdateScheduler {
