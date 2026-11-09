@@ -7,11 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-09
+
 ### Added
 
-- **First-class script package activation (#14)**: script packages whose registry entry declares `activation: {kind: "nu-script", entry_points: [{name, path}, ...]}` can now be activated with `numan activate`. Each declared name becomes a command in the Numan-managed autoload file that runs the package-relative `.nu` target under the activating Nu executable, forwarding arguments, stdout/stderr, and exit status (pipeline input is not forwarded; see the design spec). Command names are validated, collisions across active script packages are rejected (never shadowed), and install remains inert — package code runs only when a user invokes a declared command. Scripts without a declaration stay install-only; `numan info` shows declared entry points before activation.
-
-- **First-class completion package activation (#15)**: completion packages whose registry entry declares `activation: {kind: "nu-completion", targets: [{command, path, kind}, ...]}` can now be activated with `numan activate`. Each declared target is composed into the Numan-managed autoload file as a `use "<path>" *` contribution under an ownership comment; target ownership is exclusive across active completion packages (conflicts are rejected, never shadowed), and install remains inert — completion providers are never invoked at install or activation time, and `command-backed` providers run only when Nushell requests a completion. `numan info` shows declared targets and flags `command-backed` targets as able to execute code during completion. Completion packages without a declaration stay install-only. This is distinct from `numan completions <shell>`, which generates shell completions for Numan itself.
+- **Unattended batch update (`numan update --all`) (#166)**: updates all installed packages in a single command. With `--yes` (`-y`), runs non-interactively, auto-confirming all prompts and returning exit code 0 when all packages are successfully updated or already up to date.
+- **Background autoupdate scheduler (`numan setup autoupdate`) (#166)**: platform-native scheduled extension auto-updates using host schedulers:
+  - Linux: `systemd` user service and timer unit (`~/.config/systemd/user/numan-autoupdate-*.timer`)
+  - macOS: `launchd` user agent plist (`~/Library/LaunchAgents/dev.numan.autoupdate.*.plist`)
+  - Windows: Task Scheduler task via `schtasks` (`NumanAutoUpdate`)
+  - Supports `--enable [--interval daily|hourly] [--allow-active-plugin-mutation]`, `--disable`, `--status`, and `--run-now`.
+- **First-class script package activation (#14, #164)**: script packages whose registry entry declares `activation: {kind: "nu-script", entry_points: [{name, path}, ...]}` can now be activated with `numan activate`. Each declared name becomes a command in the Numan-managed autoload file that runs the package-relative `.nu` target under the activating Nu executable, forwarding arguments, stdout/stderr, and exit status (pipeline input is not forwarded; see the design spec). Command names are validated, collisions across active script packages are rejected (never shadowed), and install remains inert — package code runs only when a user invokes a declared command. Scripts without a declaration stay install-only; `numan info` shows declared entry points before activation.
+- **First-class completion package activation (#15, #165)**: completion packages whose registry entry declares `activation: {kind: "nu-completion", targets: [{command, path, kind}, ...]}` can now be activated with `numan activate`. Each declared target is composed into the Numan-managed autoload file as a `use "<path>" *` contribution under an ownership comment; target ownership is exclusive across active completion packages (conflicts are rejected, never shadowed), and install remains inert — completion providers are never invoked at install or activation time, and `command-backed` providers run only when Nushell requests a completion. `numan info` shows declared targets and flags `command-backed` targets as able to execute code during completion. Completion packages without a declaration stay install-only. This is distinct from `numan completions <shell>`, which generates shell completions for Numan itself.
 
 ## [0.3.0] - 2026-10-24
 
@@ -238,7 +245,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Release binaries for Linux, Windows, and macOS
 - Real-Nu acceptance CI job
 
-[Unreleased]: https://github.com/numan-cli/numan/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/numan-cli/numan/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/numan-cli/numan/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/numan-cli/numan/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/numan-cli/numan/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/numan-cli/numan/compare/v0.2.0...v0.2.1

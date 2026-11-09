@@ -533,6 +533,7 @@ For the cross-repository plan toward 1.0 across `numan`, `numan-registry`, and
 | Cut **0.2.1** (`update --self`, install-only honesty, `try` script fallback) | ✅ [v0.2.1](https://github.com/numan-cli/numan/releases/tag/v0.2.1) |
 | Cut **0.2.2** (ARM release assets, `try` UX redesign, intake provenance/tiers, Nu 0.114 extract cap fix) | ✅ [v0.2.2](https://github.com/numan-cli/numan/releases/tag/v0.2.2) |
 | Cut **0.3.0** (TUI workbench, overlay activation, hook profiles, invisible activation, `numan migrate`) | ✅ [v0.3.0](https://github.com/numan-cli/numan/releases/tag/v0.3.0) |
+| Cut **0.4.0** (script and completion package activation, batch update, background autoupdate scheduler) | ✅ [v0.4.0](https://github.com/numan-cli/numan/releases/tag/v0.4.0) |
 
 **1.0** when the [unified gate](docs/plans/consolidated-multi-repo-roadmap.md#unified-10-gate) is green and there are no open P0/P1 issues on the core install/activate/update/remove lifecycle.
 
