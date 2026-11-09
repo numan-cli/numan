@@ -2050,6 +2050,90 @@ fn validate_autoupdate_action_flags(args: &AutoupdateArgs) -> Result<()> {
     Ok(())
 }
 
+fn write_autoupdate_state(root: &Path, state: &AutoupdateState) -> Result<()> {
+    let state_path = autoupdate_state_path(root);
+    if let Some(state_parent) = state_path.parent() {
+        std::fs::create_dir_all(state_parent)?;
+        assert_not_symlink(state_parent, "autoupdate state directory")?;
+    }
+    assert_not_symlink(&state_path, "autoupdate state file")?;
+    crate::util::atomic::write_json_atomic(&state_path, state)
+}
+
+fn enable_autoupdate_locked(
+    args: &AutoupdateArgs,
+    root: &Path,
+    numan_exe: &Path,
+    scheduler: &dyn AutoupdateScheduler,
+    interval: &str,
+) -> Result<()> {
+    let wrapper_path = autoupdate_wrapper_path(root);
+    let log_path = autoupdate_log_path(root);
+    write_autoupdate_wrapper(
+        root,
+        numan_exe,
+        &wrapper_path,
+        &log_path,
+        args.allow_active_plugin_mutation,
+    )?;
+    scheduler.enable(root, &wrapper_path, interval)?;
+    let state = AutoupdateState {
+        schema_version: 1,
+        enabled: true,
+        interval: interval.to_string(),
+        scheduler: scheduler.scheduler_name().to_string(),
+        wrapper_path: wrapper_path.to_string_lossy().into_owned(),
+        log_path: log_path.to_string_lossy().into_owned(),
+        updated_at: crate::util::format_timestamp(),
+        allow_active_plugin_mutation: args.allow_active_plugin_mutation,
+    };
+    write_autoupdate_state(root, &state)?;
+    println!(
+        "Enabled scheduled background auto-updates (interval: {}, scheduler: {}).",
+        interval,
+        scheduler.scheduler_name()
+    );
+    println!("  Wrapper: {}", wrapper_path.display());
+    println!("  Log:     {}", log_path.display());
+    Ok(())
+}
+
+fn disable_autoupdate_locked(
+    root: &Path,
+    scheduler: &dyn AutoupdateScheduler,
+    interval: &str,
+) -> Result<()> {
+    assert_not_symlink(root, "Numan root directory")?;
+    scheduler.disable(root)?;
+    let wrapper_path = autoupdate_wrapper_path(root);
+    if let Some(parent) = wrapper_path.parent() {
+        assert_not_symlink(parent, "autoupdate wrapper directory")?;
+    }
+    assert_not_symlink(&wrapper_path, "autoupdate wrapper script")?;
+    if wrapper_path.is_file() {
+        std::fs::remove_file(&wrapper_path).with_context(|| {
+            format!(
+                "Failed to remove autoupdate wrapper '{}'",
+                wrapper_path.display()
+            )
+        })?;
+    }
+    let log_path = autoupdate_log_path(root);
+    let state = AutoupdateState {
+        schema_version: 1,
+        enabled: false,
+        interval: interval.to_string(),
+        scheduler: scheduler.scheduler_name().to_string(),
+        wrapper_path: wrapper_path.to_string_lossy().into_owned(),
+        log_path: log_path.to_string_lossy().into_owned(),
+        updated_at: crate::util::format_timestamp(),
+        allow_active_plugin_mutation: false,
+    };
+    write_autoupdate_state(root, &state)?;
+    println!("Disabled scheduled background auto-updates.");
+    Ok(())
+}
+
 pub(crate) fn execute_autoupdate_with_scheduler(
     args: &AutoupdateArgs,
     root: &Path,
@@ -2064,81 +2148,13 @@ pub(crate) fn execute_autoupdate_with_scheduler(
 
     if args.enable {
         return setup_subcommand_lock(root, "autoupdate enable", || {
-            let wrapper_path = autoupdate_wrapper_path(root);
-            let log_path = autoupdate_log_path(root);
-            write_autoupdate_wrapper(
-                root,
-                numan_exe,
-                &wrapper_path,
-                &log_path,
-                args.allow_active_plugin_mutation,
-            )?;
-            scheduler.enable(root, &wrapper_path, &interval)?;
-            let state = AutoupdateState {
-                schema_version: 1,
-                enabled: true,
-                interval: interval.clone(),
-                scheduler: scheduler.scheduler_name().to_string(),
-                wrapper_path: wrapper_path.to_string_lossy().into_owned(),
-                log_path: log_path.to_string_lossy().into_owned(),
-                updated_at: crate::util::format_timestamp(),
-                allow_active_plugin_mutation: args.allow_active_plugin_mutation,
-            };
-            let state_path = autoupdate_state_path(root);
-            if let Some(state_parent) = state_path.parent() {
-                std::fs::create_dir_all(state_parent)?;
-                assert_not_symlink(state_parent, "autoupdate state directory")?;
-            }
-            assert_not_symlink(&state_path, "autoupdate state file")?;
-            crate::util::atomic::write_json_atomic(&state_path, &state)?;
-            println!(
-                "Enabled scheduled background auto-updates (interval: {}, scheduler: {}).",
-                interval,
-                scheduler.scheduler_name()
-            );
-            println!("  Wrapper: {}", wrapper_path.display());
-            println!("  Log:     {}", log_path.display());
-            Ok(())
+            enable_autoupdate_locked(args, root, numan_exe, scheduler, &interval)
         });
     }
 
     if args.disable {
         return setup_subcommand_lock(root, "autoupdate disable", || {
-            assert_not_symlink(root, "Numan root directory")?;
-            scheduler.disable(root)?;
-            let wrapper_path = autoupdate_wrapper_path(root);
-            if let Some(parent) = wrapper_path.parent() {
-                assert_not_symlink(parent, "autoupdate wrapper directory")?;
-            }
-            assert_not_symlink(&wrapper_path, "autoupdate wrapper script")?;
-            if wrapper_path.is_file() {
-                std::fs::remove_file(&wrapper_path).with_context(|| {
-                    format!(
-                        "Failed to remove autoupdate wrapper '{}'",
-                        wrapper_path.display()
-                    )
-                })?;
-            }
-            let log_path = autoupdate_log_path(root);
-            let state = AutoupdateState {
-                schema_version: 1,
-                enabled: false,
-                interval: interval.clone(),
-                scheduler: scheduler.scheduler_name().to_string(),
-                wrapper_path: wrapper_path.to_string_lossy().into_owned(),
-                log_path: log_path.to_string_lossy().into_owned(),
-                updated_at: crate::util::format_timestamp(),
-                allow_active_plugin_mutation: false,
-            };
-            let state_path = autoupdate_state_path(root);
-            if let Some(state_parent) = state_path.parent() {
-                std::fs::create_dir_all(state_parent)?;
-                assert_not_symlink(state_parent, "autoupdate state directory")?;
-            }
-            assert_not_symlink(&state_path, "autoupdate state file")?;
-            crate::util::atomic::write_json_atomic(&state_path, &state)?;
-            println!("Disabled scheduled background auto-updates.");
-            Ok(())
+            disable_autoupdate_locked(root, scheduler, &interval)
         });
     }
 

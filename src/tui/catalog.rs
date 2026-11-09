@@ -98,6 +98,7 @@ const CLASSIFICATIONS: &[(&str, &str, &str)] = &[
     ("setup nu path", "External", "Phase 4"),
     ("setup nu use", "External", "Phase 4"),
     ("setup loader", "External+Network", "Phase 4"),
+    ("setup autoupdate", "External", "Phase 4 (status: Phase 1)"),
     ("nupm status", "ReadOnly", "Phase 1 - read-only"),
     ("nupm inspect", "ReadOnly", "Phase 1 - read-only"),
     ("nupm import", "RootMutation", "Phase 3"),
@@ -339,6 +340,9 @@ pub fn phase1_executable(display: &str, fields: &[FieldState]) -> bool {
         "use" => fields
             .iter()
             .any(|field| field.spec.id == "version" && field.value.trim() == "list"),
+        "setup autoupdate" => fields
+            .iter()
+            .any(|field| field.spec.id == "status" && field.enabled),
         _ => false,
     }
 }
@@ -568,7 +572,7 @@ mod tests {
     #[test]
     fn catalog_covers_every_clap_leaf_with_classification_and_fields() {
         let leaves = discovered_leaves();
-        assert_eq!(leaves.len(), 41, "leaf count changed: {leaves:?}");
+        assert_eq!(leaves.len(), 42, "leaf count changed: {leaves:?}");
         assert_eq!(catalog().len(), leaves.len());
         for leaf in &leaves {
             let found = spec(leaf).unwrap_or_else(|| panic!("no catalog spec for {leaf}"));
