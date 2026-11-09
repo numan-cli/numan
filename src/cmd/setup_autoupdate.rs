@@ -217,26 +217,14 @@ fn disable_macos_launchd(root: &Path) -> Result<()> {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn enable_linux_systemd(root: &Path, wrapper_path: &Path, interval: &str) -> Result<()> {
-    let root_id = autoupdate_root_id(root);
-    let unit_prefix = format!("numan-autoupdate-{root_id}");
-    let timer_on_calendar = match interval {
-        "hourly" => "hourly",
-        _ => "daily",
-    };
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME environment variable is not set")?;
-    let units_dir = home.join(".config").join("systemd").join("user");
-    std::fs::create_dir_all(&units_dir).with_context(|| {
-        format!(
-            "Failed to create systemd user units directory at '{}'",
-            units_dir.display()
-        )
-    })?;
+fn write_systemd_units(
+    units_dir: &Path,
+    unit_prefix: &str,
+    escaped_wrapper: &str,
+    timer_on_calendar: &str,
+) -> Result<()> {
     let service_path = units_dir.join(format!("{unit_prefix}.service"));
     let timer_path = units_dir.join(format!("{unit_prefix}.timer"));
-    let escaped_wrapper = systemd_escape_arg(&wrapper_path.to_string_lossy());
     let service_content = format!(
         r#"[Unit]
 Description=Numan unattended package auto-update
@@ -270,6 +258,35 @@ WantedBy=timers.target
             timer_path.display()
         )
     })?;
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn enable_linux_systemd(root: &Path, wrapper_path: &Path, interval: &str) -> Result<()> {
+    let root_id = autoupdate_root_id(root);
+    let unit_prefix = format!("numan-autoupdate-{root_id}");
+    let timer_on_calendar = match interval {
+        "hourly" => "hourly",
+        _ => "daily",
+    };
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("HOME environment variable is not set")?;
+    let units_dir = home.join(".config").join("systemd").join("user");
+    std::fs::create_dir_all(&units_dir).with_context(|| {
+        format!(
+            "Failed to create systemd user units directory at '{}'",
+            units_dir.display()
+        )
+    })?;
+    let escaped_wrapper = systemd_escape_arg(&wrapper_path.to_string_lossy());
+    write_systemd_units(
+        &units_dir,
+        &unit_prefix,
+        &escaped_wrapper,
+        timer_on_calendar,
+    )?;
+
     let reload = std::process::Command::new("systemctl")
         .args(["--user", "daemon-reload"])
         .output()
@@ -453,14 +470,16 @@ pub fn read_autoupdate_state(root: &Path) -> Result<Option<AutoupdateState>> {
     Ok(Some(state))
 }
 
-fn write_autoupdate_wrapper(
-    wrapper_path: &Path,
-    numan_exe: &Path,
-    root: &Path,
-    log_path: &Path,
+struct AutoupdateWrapperConfig<'a> {
+    wrapper_path: &'a Path,
+    numan_exe: &'a Path,
+    root: &'a Path,
+    log_path: &'a Path,
     allow_active_plugin_mutation: bool,
-) -> Result<()> {
-    if let Some(parent) = wrapper_path.parent() {
+}
+
+fn write_autoupdate_wrapper(cfg: &AutoupdateWrapperConfig<'_>) -> Result<()> {
+    if let Some(parent) = cfg.wrapper_path.parent() {
         std::fs::create_dir_all(parent).with_context(|| {
             format!(
                 "Failed to create wrapper directory at '{}'",
@@ -468,13 +487,13 @@ fn write_autoupdate_wrapper(
             )
         })?;
     }
-    let exe_str = numan_exe.to_string_lossy();
-    let root_str = root.to_string_lossy();
-    let log_str = log_path.to_string_lossy();
+    let exe_str = cfg.numan_exe.to_string_lossy();
+    let root_str = cfg.root.to_string_lossy();
+    let log_str = cfg.log_path.to_string_lossy();
 
     #[cfg(target_os = "windows")]
     {
-        let plugin_env_line = if allow_active_plugin_mutation {
+        let plugin_env_line = if cfg.allow_active_plugin_mutation {
             "set NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1\r\n"
         } else {
             ""
@@ -487,17 +506,17 @@ fn write_autoupdate_wrapper(
              echo [%%date%% %%time%%] Running numan background auto-update >> \"{log_str}\"\r\n\
              \"{exe_str}\" --root \"{root_str}\" update --all --yes >> \"{log_str}\" 2>&1\r\n"
         );
-        write_bytes_atomic(wrapper_path, content.as_bytes()).with_context(|| {
+        write_bytes_atomic(cfg.wrapper_path, content.as_bytes()).with_context(|| {
             format!(
                 "Failed to write wrapper script to '{}'",
-                wrapper_path.display()
+                cfg.wrapper_path.display()
             )
         })?;
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        let plugin_env_line = if allow_active_plugin_mutation {
+        let plugin_env_line = if cfg.allow_active_plugin_mutation {
             "export NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1\n"
         } else {
             ""
@@ -511,15 +530,15 @@ fn write_autoupdate_wrapper(
              echo \"[$(date)] Running numan background auto-update\" >> \"{log_str}\"\n\
              exec \"{exe_str}\" --root \"{root_str}\" update --all --yes >> \"{log_str}\" 2>&1\n"
         );
-        write_bytes_atomic(wrapper_path, content.as_bytes()).with_context(|| {
+        write_bytes_atomic(cfg.wrapper_path, content.as_bytes()).with_context(|| {
             format!(
                 "Failed to write wrapper script to '{}'",
-                wrapper_path.display()
+                cfg.wrapper_path.display()
             )
         })?;
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o755);
-        let _ = std::fs::set_permissions(wrapper_path, perms);
+        let _ = std::fs::set_permissions(cfg.wrapper_path, perms);
     }
     Ok(())
 }
@@ -559,13 +578,14 @@ fn enable_autoupdate_locked(
     let wrapper_path = autoupdate_wrapper_path(root);
     let log_path = autoupdate_log_path(root);
 
-    write_autoupdate_wrapper(
-        &wrapper_path,
+    let wrapper_cfg = AutoupdateWrapperConfig {
+        wrapper_path: &wrapper_path,
         numan_exe,
         root,
-        &log_path,
-        args.allow_active_plugin_mutation,
-    )?;
+        log_path: &log_path,
+        allow_active_plugin_mutation: args.allow_active_plugin_mutation,
+    };
+    write_autoupdate_wrapper(&wrapper_cfg)?;
 
     let abs_wrapper = std::path::absolute(&wrapper_path).unwrap_or_else(|_| wrapper_path.clone());
     scheduler
