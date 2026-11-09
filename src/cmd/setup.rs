@@ -255,24 +255,28 @@ pub struct LoaderArgs {
 #[derive(Debug, Args, Clone, Default)]
 pub struct AutoupdateArgs {
     /// Enable scheduled background auto-updates
-    #[arg(long, conflicts_with = "disable")]
+    #[arg(long, conflicts_with_all = ["disable", "status", "run_now"])]
     pub enable: bool,
 
     /// Disable and unregister scheduled background auto-updates
-    #[arg(long, conflicts_with = "enable")]
+    #[arg(long, conflicts_with_all = ["enable", "status", "run_now"])]
     pub disable: bool,
 
     /// Display current auto-update configuration and recent log tail
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["enable", "disable", "run_now"])]
     pub status: bool,
 
     /// Run an immediate unattended update of all packages (`numan update --all --yes`)
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["enable", "disable", "status"])]
     pub run_now: bool,
 
     /// Schedule interval (`daily` or `hourly`)
     #[arg(long, default_value = "daily", value_name = "INTERVAL")]
     pub interval: String,
+
+    /// Opt into background active-plugin mutation (`NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1`)
+    #[arg(long)]
+    pub allow_active_plugin_mutation: bool,
 
     /// Skip confirmation prompts
     #[arg(short = 'y', long)]
@@ -288,6 +292,8 @@ pub struct AutoupdateState {
     pub wrapper_path: String,
     pub log_path: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub allow_active_plugin_mutation: bool,
 }
 
 pub fn execute(cmd: SetupCommands, root: &Path) -> Result<()> {
@@ -1624,6 +1630,250 @@ pub(crate) trait AutoupdateScheduler {
 
 struct OsAutoupdateScheduler;
 
+fn autoupdate_root_id(root: &Path) -> String {
+    let digest = crate::core::integrity::compute_sha256(root.to_string_lossy().as_bytes());
+    digest[..12].to_string()
+}
+
+#[cfg(target_os = "macos")]
+fn xml_escape(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn systemd_escape_arg(input: &str) -> String {
+    input.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(target_os = "windows")]
+fn enable_windows_schtasks(root: &Path, wrapper_path: &Path, interval: &str) -> Result<()> {
+    let task_name = format!("NumanAutoUpdate-{}", autoupdate_root_id(root));
+    let sc = if interval == "hourly" {
+        "HOURLY"
+    } else {
+        "DAILY"
+    };
+    let tr = wrapper_path.to_string_lossy().into_owned();
+    let mut cmd = std::process::Command::new("schtasks");
+    cmd.args(["/Create", "/F", "/TN", &task_name, "/SC", sc, "/TR", &tr]);
+    if sc == "DAILY" {
+        cmd.args(["/ST", "03:00"]);
+    }
+    let output = cmd
+        .output()
+        .with_context(|| format!("Failed to execute 'schtasks /Create' for {task_name}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "Failed to register Windows scheduled task '{}': {}",
+            task_name,
+            stderr.trim()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn disable_windows_schtasks(root: &Path) -> Result<()> {
+    let task_name = format!("NumanAutoUpdate-{}", autoupdate_root_id(root));
+    let query = std::process::Command::new("schtasks")
+        .args(["/Query", "/TN", &task_name])
+        .output()
+        .with_context(|| format!("Failed to query Windows scheduled task '{task_name}'"))?;
+    if !query.status.success() {
+        return Ok(());
+    }
+    let output = std::process::Command::new("schtasks")
+        .args(["/Delete", "/F", "/TN", &task_name])
+        .output()
+        .with_context(|| format!("Failed to delete Windows scheduled task '{task_name}'"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "Failed to delete Windows scheduled task '{}': {}",
+            task_name,
+            stderr.trim()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn enable_macos_launchd(root: &Path, wrapper_path: &Path, interval: &str) -> Result<()> {
+    let home = dirs::home_dir().context("Could not determine home directory")?;
+    let agents_dir = home.join("Library").join("LaunchAgents");
+    std::fs::create_dir_all(&agents_dir)?;
+    let label = format!("com.numan.autoupdate.{}", autoupdate_root_id(root));
+    let plist_path = agents_dir.join(format!("{label}.plist"));
+    let seconds = if interval == "hourly" { 3600 } else { 86400 };
+    let escaped_wrapper = xml_escape(&wrapper_path.to_string_lossy());
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{}</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>{}</integer>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
+"#,
+        xml_escape(&label),
+        escaped_wrapper,
+        seconds
+    );
+    assert_not_symlink(&plist_path, "launchd plist")?;
+    write_bytes_atomic(&plist_path, plist.as_bytes())?;
+    let _ = std::process::Command::new("launchctl")
+        .args(["unload", &plist_path.to_string_lossy()])
+        .output();
+    let output = std::process::Command::new("launchctl")
+        .args(["load", "-w", &plist_path.to_string_lossy()])
+        .output()
+        .with_context(|| format!("Failed to execute 'launchctl load' for {label}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "Failed to load launchd agent '{}': {}",
+            plist_path.display(),
+            stderr.trim()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn disable_macos_launchd(root: &Path) -> Result<()> {
+    let Some(home) = dirs::home_dir() else {
+        return Ok(());
+    };
+    let label = format!("com.numan.autoupdate.{}", autoupdate_root_id(root));
+    let plist_path = home
+        .join("Library")
+        .join("LaunchAgents")
+        .join(format!("{label}.plist"));
+    if !plist_path.exists() {
+        return Ok(());
+    }
+    let output = std::process::Command::new("launchctl")
+        .args(["unload", "-w", &plist_path.to_string_lossy()])
+        .output()
+        .with_context(|| format!("Failed to execute 'launchctl unload' for {label}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "Failed to unload launchd agent '{}': {}",
+            plist_path.display(),
+            stderr.trim()
+        );
+    }
+    assert_not_symlink(&plist_path, "launchd plist")?;
+    std::fs::remove_file(&plist_path)
+        .with_context(|| format!("Failed to remove '{}'", plist_path.display()))?;
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn enable_linux_systemd(root: &Path, wrapper_path: &Path, interval: &str) -> Result<()> {
+    let config_dir = dirs::config_dir()
+        .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
+        .context("Could not determine user config directory")?;
+    let systemd_dir = config_dir.join("systemd").join("user");
+    std::fs::create_dir_all(&systemd_dir)?;
+    let unit_stem = format!("numan-autoupdate-{}", autoupdate_root_id(root));
+    let service_name = format!("{unit_stem}.service");
+    let timer_name = format!("{unit_stem}.timer");
+    let service_path = systemd_dir.join(&service_name);
+    let timer_path = systemd_dir.join(&timer_name);
+    let escaped_wrapper = systemd_escape_arg(&wrapper_path.to_string_lossy());
+    let service_content = format!(
+        "[Unit]\nDescription=Numan background extension auto-update\n\n[Service]\nType=oneshot\nExecStart=\"{}\"\n",
+        escaped_wrapper
+    );
+    let timer_content = format!(
+        "[Unit]\nDescription=Schedule Numan background extension auto-update\n\n[Timer]\nOnCalendar={}\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n",
+        interval
+    );
+    assert_not_symlink(&service_path, "systemd service unit")?;
+    assert_not_symlink(&timer_path, "systemd timer unit")?;
+    write_bytes_atomic(&service_path, service_content.as_bytes())?;
+    write_bytes_atomic(&timer_path, timer_content.as_bytes())?;
+    let reload = std::process::Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .output()
+        .context("Failed to execute 'systemctl --user daemon-reload'")?;
+    if !reload.status.success() {
+        let stderr = String::from_utf8_lossy(&reload.stderr);
+        bail!("Failed to reload user systemd daemon: {}", stderr.trim());
+    }
+    let enable = std::process::Command::new("systemctl")
+        .args(["--user", "enable", "--now", &timer_name])
+        .output()
+        .with_context(|| {
+            format!("Failed to execute 'systemctl --user enable --now {timer_name}'")
+        })?;
+    if !enable.status.success() {
+        let stderr = String::from_utf8_lossy(&enable.stderr);
+        bail!("Failed to enable {timer_name}: {}", stderr.trim());
+    }
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn disable_linux_systemd(root: &Path) -> Result<()> {
+    let Some(config_dir) =
+        dirs::config_dir().or_else(|| dirs::home_dir().map(|h| h.join(".config")))
+    else {
+        return Ok(());
+    };
+    let systemd_dir = config_dir.join("systemd").join("user");
+    let unit_stem = format!("numan-autoupdate-{}", autoupdate_root_id(root));
+    let timer_name = format!("{unit_stem}.timer");
+    let service_path = systemd_dir.join(format!("{unit_stem}.service"));
+    let timer_path = systemd_dir.join(&timer_name);
+    if !timer_path.exists() && !service_path.exists() {
+        return Ok(());
+    }
+    let disable = std::process::Command::new("systemctl")
+        .args(["--user", "disable", "--now", &timer_name])
+        .output()
+        .with_context(|| {
+            format!("Failed to execute 'systemctl --user disable --now {timer_name}'")
+        })?;
+    if !disable.status.success() {
+        let stderr = String::from_utf8_lossy(&disable.stderr);
+        bail!("Failed to disable {timer_name}: {}", stderr.trim());
+    }
+    for path in [&timer_path, &service_path] {
+        if path.exists() {
+            assert_not_symlink(path, "systemd unit")?;
+            std::fs::remove_file(path)
+                .with_context(|| format!("Failed to remove '{}'", path.display()))?;
+        }
+    }
+    let reload = std::process::Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .output()
+        .context("Failed to execute 'systemctl --user daemon-reload'")?;
+    if !reload.status.success() {
+        let stderr = String::from_utf8_lossy(&reload.stderr);
+        bail!("Failed to reload user systemd daemon: {}", stderr.trim());
+    }
+    Ok(())
+}
+
 impl AutoupdateScheduler for OsAutoupdateScheduler {
     fn scheduler_name(&self) -> &'static str {
         #[cfg(target_os = "windows")]
@@ -1644,176 +1894,42 @@ impl AutoupdateScheduler for OsAutoupdateScheduler {
         }
     }
 
-    fn enable(&self, _root: &Path, wrapper_path: &Path, interval: &str) -> Result<()> {
+    fn enable(&self, root: &Path, wrapper_path: &Path, interval: &str) -> Result<()> {
         #[cfg(target_os = "windows")]
         {
-            let sc = if interval == "hourly" {
-                "HOURLY"
-            } else {
-                "DAILY"
-            };
-            let tr = format!("\"{}\"", wrapper_path.display());
-            let mut cmd = std::process::Command::new("schtasks");
-            cmd.args([
-                "/Create",
-                "/F",
-                "/TN",
-                "NumanAutoUpdate",
-                "/SC",
-                sc,
-                "/TR",
-                &tr,
-            ]);
-            if sc == "DAILY" {
-                cmd.args(["/ST", "03:00"]);
-            }
-            let output = cmd
-                .output()
-                .context("Failed to execute 'schtasks /Create' for NumanAutoUpdate")?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                bail!(
-                    "Failed to register Windows scheduled task 'NumanAutoUpdate': {}",
-                    stderr.trim()
-                );
-            }
-            Ok(())
+            enable_windows_schtasks(root, wrapper_path, interval)
         }
         #[cfg(target_os = "macos")]
         {
-            let home = dirs::home_dir().context("Could not determine home directory")?;
-            let agents_dir = home.join("Library").join("LaunchAgents");
-            std::fs::create_dir_all(&agents_dir)?;
-            let plist_path = agents_dir.join("com.numan.autoupdate.plist");
-            let seconds = if interval == "hourly" { 3600 } else { 86400 };
-            let plist = format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.numan.autoupdate</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{}</string>
-    </array>
-    <key>StartInterval</key>
-    <integer>{}</integer>
-    <key>RunAtLoad</key>
-    <false/>
-</dict>
-</plist>
-"#,
-                wrapper_path.display(),
-                seconds
-            );
-            write_bytes_atomic(&plist_path, plist.as_bytes())?;
-            let _ = std::process::Command::new("launchctl")
-                .args(["unload", &plist_path.to_string_lossy()])
-                .output();
-            let output = std::process::Command::new("launchctl")
-                .args(["load", "-w", &plist_path.to_string_lossy()])
-                .output()
-                .context("Failed to execute 'launchctl load' for com.numan.autoupdate")?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                bail!(
-                    "Failed to load launchd agent '{}': {}",
-                    plist_path.display(),
-                    stderr.trim()
-                );
-            }
-            Ok(())
+            enable_macos_launchd(root, wrapper_path, interval)
         }
         #[cfg(all(unix, not(target_os = "macos")))]
         {
-            let config_dir = dirs::config_dir()
-                .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
-                .context("Could not determine user config directory")?;
-            let systemd_dir = config_dir.join("systemd").join("user");
-            std::fs::create_dir_all(&systemd_dir)?;
-            let service_path = systemd_dir.join("numan-autoupdate.service");
-            let timer_path = systemd_dir.join("numan-autoupdate.timer");
-            let service_content = format!(
-                "[Unit]\nDescription=Numan background extension auto-update\n\n[Service]\nType=oneshot\nExecStart=\"{}\"\n",
-                wrapper_path.display()
-            );
-            let timer_content = format!(
-                "[Unit]\nDescription=Schedule Numan background extension auto-update\n\n[Timer]\nOnCalendar={}\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n",
-                interval
-            );
-            write_bytes_atomic(&service_path, service_content.as_bytes())?;
-            write_bytes_atomic(&timer_path, timer_content.as_bytes())?;
-            let reload = std::process::Command::new("systemctl")
-                .args(["--user", "daemon-reload"])
-                .output()
-                .context("Failed to execute 'systemctl --user daemon-reload'")?;
-            if !reload.status.success() {
-                let stderr = String::from_utf8_lossy(&reload.stderr);
-                bail!("Failed to reload user systemd daemon: {}", stderr.trim());
-            }
-            let enable = std::process::Command::new("systemctl")
-                .args(["--user", "enable", "--now", "numan-autoupdate.timer"])
-                .output()
-                .context(
-                    "Failed to execute 'systemctl --user enable --now numan-autoupdate.timer'",
-                )?;
-            if !enable.status.success() {
-                let stderr = String::from_utf8_lossy(&enable.stderr);
-                bail!("Failed to enable numan-autoupdate.timer: {}", stderr.trim());
-            }
-            Ok(())
+            enable_linux_systemd(root, wrapper_path, interval)
         }
         #[cfg(not(any(target_os = "windows", unix)))]
         {
-            let _ = (wrapper_path, interval);
+            let _ = (root, wrapper_path, interval);
             bail!("Scheduled auto-update is not supported on this operating system.")
         }
     }
 
-    fn disable(&self, _root: &Path) -> Result<()> {
+    fn disable(&self, root: &Path) -> Result<()> {
         #[cfg(target_os = "windows")]
         {
-            let _ = std::process::Command::new("schtasks")
-                .args(["/Delete", "/F", "/TN", "NumanAutoUpdate"])
-                .output();
-            Ok(())
+            disable_windows_schtasks(root)
         }
         #[cfg(target_os = "macos")]
         {
-            if let Some(home) = dirs::home_dir() {
-                let plist_path = home
-                    .join("Library")
-                    .join("LaunchAgents")
-                    .join("com.numan.autoupdate.plist");
-                if plist_path.exists() {
-                    let _ = std::process::Command::new("launchctl")
-                        .args(["unload", "-w", &plist_path.to_string_lossy()])
-                        .output();
-                    let _ = std::fs::remove_file(&plist_path);
-                }
-            }
-            Ok(())
+            disable_macos_launchd(root)
         }
         #[cfg(all(unix, not(target_os = "macos")))]
         {
-            let _ = std::process::Command::new("systemctl")
-                .args(["--user", "disable", "--now", "numan-autoupdate.timer"])
-                .output();
-            if let Some(config_dir) =
-                dirs::config_dir().or_else(|| dirs::home_dir().map(|h| h.join(".config")))
-            {
-                let systemd_dir = config_dir.join("systemd").join("user");
-                let _ = std::fs::remove_file(systemd_dir.join("numan-autoupdate.timer"));
-                let _ = std::fs::remove_file(systemd_dir.join("numan-autoupdate.service"));
-            }
-            let _ = std::process::Command::new("systemctl")
-                .args(["--user", "daemon-reload"])
-                .output();
-            Ok(())
+            disable_linux_systemd(root)
         }
         #[cfg(not(any(target_os = "windows", unix)))]
         {
+            let _ = root;
             Ok(())
         }
     }
@@ -1863,24 +1979,43 @@ fn write_autoupdate_wrapper(
     numan_exe: &Path,
     wrapper_path: &Path,
     log_path: &Path,
+    allow_active_plugin_mutation: bool,
 ) -> Result<()> {
+    assert_not_symlink(root, "Numan root directory")?;
     if let Some(parent) = wrapper_path.parent() {
         std::fs::create_dir_all(parent)?;
+        assert_not_symlink(parent, "autoupdate wrapper directory")?;
     }
     if let Some(log_parent) = log_path.parent() {
         std::fs::create_dir_all(log_parent)?;
+        assert_not_symlink(log_parent, "autoupdate log directory")?;
     }
+    assert_not_symlink(wrapper_path, "autoupdate wrapper script")?;
+    assert_not_symlink(log_path, "autoupdate log file")?;
+
     let content = if cfg!(windows) {
+        let plugin_env = if allow_active_plugin_mutation {
+            "set \"NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1\"\r\n"
+        } else {
+            ""
+        };
         format!(
-            "@echo off\r\nsetlocal\r\nset \"NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1\"\r\n\"{}\" --root \"{}\" update --all --yes >> \"{}\" 2>&1\r\nendlocal\r\n",
+            "@echo off\r\nsetlocal\r\n{}\"{}\" --root \"{}\" update --all --yes >> \"{}\" 2>&1\r\nendlocal\r\n",
+            plugin_env,
             numan_exe.display(),
             root.display(),
             log_path.display()
         )
     } else {
         let escape_sq = |s: &str| s.replace('\'', "'\"'\"'");
+        let plugin_env = if allow_active_plugin_mutation {
+            "export NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1\n"
+        } else {
+            ""
+        };
         format!(
-            "#!/bin/sh\nexport NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1\nexec '{}' --root '{}' update --all --yes >> '{}' 2>&1\n",
+            "#!/bin/sh\n{}exec '{}' --root '{}' update --all --yes >> '{}' 2>&1\n",
+            plugin_env,
             escape_sq(&numan_exe.to_string_lossy()),
             escape_sq(&root.to_string_lossy()),
             escape_sq(&log_path.to_string_lossy())
@@ -1904,60 +2039,107 @@ pub fn execute_autoupdate(args: &AutoupdateArgs, root: &Path) -> Result<()> {
     execute_autoupdate_with_scheduler(args, root, &numan_exe, &OsAutoupdateScheduler)
 }
 
+fn validate_autoupdate_action_flags(args: &AutoupdateArgs) -> Result<()> {
+    let selected = [args.enable, args.disable, args.status, args.run_now]
+        .into_iter()
+        .filter(|&flag| flag)
+        .count();
+    if selected > 1 {
+        bail!("--enable, --disable, --status, and --run-now are mutually exclusive.");
+    }
+    Ok(())
+}
+
 pub(crate) fn execute_autoupdate_with_scheduler(
     args: &AutoupdateArgs,
     root: &Path,
     numan_exe: &Path,
     scheduler: &dyn AutoupdateScheduler,
 ) -> Result<()> {
+    validate_autoupdate_action_flags(args)?;
     let interval = validate_autoupdate_interval(&args.interval)?;
+    let abs_root = std::path::absolute(root)
+        .with_context(|| format!("Failed to resolve root path '{}'", root.display()))?;
+    let root = abs_root.as_path();
 
     if args.enable {
-        let wrapper_path = autoupdate_wrapper_path(root);
-        let log_path = autoupdate_log_path(root);
-        write_autoupdate_wrapper(root, numan_exe, &wrapper_path, &log_path)?;
-        scheduler.enable(root, &wrapper_path, &interval)?;
-        let state = AutoupdateState {
-            schema_version: 1,
-            enabled: true,
-            interval: interval.clone(),
-            scheduler: scheduler.scheduler_name().to_string(),
-            wrapper_path: wrapper_path.to_string_lossy().into_owned(),
-            log_path: log_path.to_string_lossy().into_owned(),
-            updated_at: crate::util::format_timestamp(),
-        };
-        let state_path = autoupdate_state_path(root);
-        crate::util::atomic::write_json_atomic(&state_path, &state)?;
-        println!(
-            "Enabled scheduled background auto-updates (interval: {}, scheduler: {}).",
-            interval,
-            scheduler.scheduler_name()
-        );
-        println!("  Wrapper: {}", wrapper_path.display());
-        println!("  Log:     {}", log_path.display());
-        return Ok(());
+        return setup_subcommand_lock(root, "autoupdate enable", || {
+            let wrapper_path = autoupdate_wrapper_path(root);
+            let log_path = autoupdate_log_path(root);
+            write_autoupdate_wrapper(
+                root,
+                numan_exe,
+                &wrapper_path,
+                &log_path,
+                args.allow_active_plugin_mutation,
+            )?;
+            scheduler.enable(root, &wrapper_path, &interval)?;
+            let state = AutoupdateState {
+                schema_version: 1,
+                enabled: true,
+                interval: interval.clone(),
+                scheduler: scheduler.scheduler_name().to_string(),
+                wrapper_path: wrapper_path.to_string_lossy().into_owned(),
+                log_path: log_path.to_string_lossy().into_owned(),
+                updated_at: crate::util::format_timestamp(),
+                allow_active_plugin_mutation: args.allow_active_plugin_mutation,
+            };
+            let state_path = autoupdate_state_path(root);
+            if let Some(state_parent) = state_path.parent() {
+                std::fs::create_dir_all(state_parent)?;
+                assert_not_symlink(state_parent, "autoupdate state directory")?;
+            }
+            assert_not_symlink(&state_path, "autoupdate state file")?;
+            crate::util::atomic::write_json_atomic(&state_path, &state)?;
+            println!(
+                "Enabled scheduled background auto-updates (interval: {}, scheduler: {}).",
+                interval,
+                scheduler.scheduler_name()
+            );
+            println!("  Wrapper: {}", wrapper_path.display());
+            println!("  Log:     {}", log_path.display());
+            Ok(())
+        });
     }
 
     if args.disable {
-        scheduler.disable(root)?;
-        let wrapper_path = autoupdate_wrapper_path(root);
-        if wrapper_path.is_file() {
-            let _ = std::fs::remove_file(&wrapper_path);
-        }
-        let log_path = autoupdate_log_path(root);
-        let state = AutoupdateState {
-            schema_version: 1,
-            enabled: false,
-            interval,
-            scheduler: scheduler.scheduler_name().to_string(),
-            wrapper_path: wrapper_path.to_string_lossy().into_owned(),
-            log_path: log_path.to_string_lossy().into_owned(),
-            updated_at: crate::util::format_timestamp(),
-        };
-        let state_path = autoupdate_state_path(root);
-        crate::util::atomic::write_json_atomic(&state_path, &state)?;
-        println!("Disabled scheduled background auto-updates.");
-        return Ok(());
+        return setup_subcommand_lock(root, "autoupdate disable", || {
+            assert_not_symlink(root, "Numan root directory")?;
+            scheduler.disable(root)?;
+            let wrapper_path = autoupdate_wrapper_path(root);
+            if let Some(parent) = wrapper_path.parent() {
+                assert_not_symlink(parent, "autoupdate wrapper directory")?;
+            }
+            assert_not_symlink(&wrapper_path, "autoupdate wrapper script")?;
+            if wrapper_path.is_file() {
+                std::fs::remove_file(&wrapper_path).with_context(|| {
+                    format!(
+                        "Failed to remove autoupdate wrapper '{}'",
+                        wrapper_path.display()
+                    )
+                })?;
+            }
+            let log_path = autoupdate_log_path(root);
+            let state = AutoupdateState {
+                schema_version: 1,
+                enabled: false,
+                interval: interval.clone(),
+                scheduler: scheduler.scheduler_name().to_string(),
+                wrapper_path: wrapper_path.to_string_lossy().into_owned(),
+                log_path: log_path.to_string_lossy().into_owned(),
+                updated_at: crate::util::format_timestamp(),
+                allow_active_plugin_mutation: false,
+            };
+            let state_path = autoupdate_state_path(root);
+            if let Some(state_parent) = state_path.parent() {
+                std::fs::create_dir_all(state_parent)?;
+                assert_not_symlink(state_parent, "autoupdate state directory")?;
+            }
+            assert_not_symlink(&state_path, "autoupdate state file")?;
+            crate::util::atomic::write_json_atomic(&state_path, &state)?;
+            println!("Disabled scheduled background auto-updates.");
+            Ok(())
+        });
     }
 
     if args.run_now {
@@ -1969,40 +2151,47 @@ pub(crate) fn execute_autoupdate_with_scheduler(
     execute_autoupdate_status(root, scheduler.scheduler_name())
 }
 
+fn print_autoupdate_state_summary(state: &AutoupdateState) {
+    let status_label = if state.enabled { "enabled" } else { "disabled" };
+    let plugin_label = if state.allow_active_plugin_mutation {
+        "enabled"
+    } else {
+        "disabled"
+    };
+    println!("  Status:     {status_label}");
+    println!("  Interval:   {}", state.interval);
+    println!("  Scheduler:  {}", state.scheduler);
+    println!("  Wrapper:    {}", state.wrapper_path);
+    println!("  Log file:   {}", state.log_path);
+    println!("  Active plugin mutation: {plugin_label}");
+    println!("  Updated at: {}", state.updated_at);
+}
+
+fn print_recent_autoupdate_log(log_path: &Path) {
+    let Ok(content) = std::fs::read_to_string(log_path) else {
+        return;
+    };
+    let tail: Vec<&str> = content.lines().rev().take(10).collect();
+    if tail.is_empty() {
+        return;
+    }
+    println!("  Recent log lines:");
+    for line in tail.into_iter().rev() {
+        println!("    {line}");
+    }
+}
+
 fn execute_autoupdate_status(root: &Path, default_scheduler: &str) -> Result<()> {
     println!("Numan Auto-Update Status:");
     match read_autoupdate_state(root)? {
-        Some(state) => {
-            println!(
-                "  Status:     {}",
-                if state.enabled { "enabled" } else { "disabled" }
-            );
-            println!("  Interval:   {}", state.interval);
-            println!("  Scheduler:  {}", state.scheduler);
-            println!("  Wrapper:    {}", state.wrapper_path);
-            println!("  Log file:   {}", state.log_path);
-            println!("  Updated at: {}", state.updated_at);
-        }
+        Some(state) => print_autoupdate_state_summary(&state),
         None => {
             println!("  Status:     not configured (run 'numan setup autoupdate --enable')");
-            println!("  Scheduler:  {}", default_scheduler);
+            println!("  Scheduler:  {default_scheduler}");
             println!("  Log file:   {}", autoupdate_log_path(root).display());
         }
     }
-
-    let log_path = autoupdate_log_path(root);
-    if log_path.is_file() {
-        if let Ok(content) = std::fs::read_to_string(&log_path) {
-            let tail: Vec<&str> = content.lines().rev().take(10).collect();
-            if !tail.is_empty() {
-                println!("  Recent log lines:");
-                for line in tail.into_iter().rev() {
-                    println!("    {}", line);
-                }
-            }
-        }
-    }
-
+    print_recent_autoupdate_log(&autoupdate_log_path(root));
     Ok(())
 }
 
@@ -2691,6 +2880,7 @@ esac\n";
             status: false,
             run_now: false,
             interval: "hourly".to_string(),
+            allow_active_plugin_mutation: false,
             yes: true,
         };
 
@@ -2699,20 +2889,67 @@ esac\n";
         let wrapper = autoupdate_wrapper_path(&root);
         assert!(wrapper.is_file(), "wrapper script must be written");
         let wrapper_content = std::fs::read_to_string(&wrapper).unwrap();
-        assert!(wrapper_content.contains("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1"));
+        assert!(
+            !wrapper_content.contains("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1"),
+            "active plugin mutation must require explicit --allow-active-plugin-mutation"
+        );
         assert!(wrapper_content.contains("update --all --yes"));
 
         let calls = scheduler.enabled_calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, wrapper);
+        assert_eq!(calls[0].0, std::path::absolute(&wrapper).unwrap());
         assert_eq!(calls[0].1, "hourly");
 
         let state = read_autoupdate_state(&root)
             .unwrap()
             .expect("autoupdate state must be persisted");
         assert!(state.enabled);
+        assert!(!state.allow_active_plugin_mutation);
         assert_eq!(state.interval, "hourly");
         assert_eq!(state.scheduler, "fake-scheduler");
+    }
+
+    #[test]
+    fn setup_autoupdate_enable_with_plugin_mutation_sets_env_in_wrapper() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        let fake_exe = dir.path().join("numan-bin");
+        let scheduler = FakeAutoupdateScheduler::new();
+
+        let args = AutoupdateArgs {
+            enable: true,
+            interval: "daily".to_string(),
+            allow_active_plugin_mutation: true,
+            yes: true,
+            ..Default::default()
+        };
+
+        execute_autoupdate_with_scheduler(&args, &root, &fake_exe, &scheduler).unwrap();
+
+        let wrapper = autoupdate_wrapper_path(&root);
+        let wrapper_content = std::fs::read_to_string(&wrapper).unwrap();
+        assert!(wrapper_content.contains("NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1"));
+        let state = read_autoupdate_state(&root).unwrap().unwrap();
+        assert!(state.allow_active_plugin_mutation);
+    }
+
+    #[test]
+    fn setup_autoupdate_rejects_conflicting_action_flags() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("numan-root");
+        let fake_exe = dir.path().join("numan-bin");
+        let scheduler = FakeAutoupdateScheduler::new();
+
+        let args = AutoupdateArgs {
+            enable: true,
+            run_now: true,
+            interval: "daily".to_string(),
+            ..Default::default()
+        };
+        let err = execute_autoupdate_with_scheduler(&args, &root, &fake_exe, &scheduler)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("mutually exclusive"), "{err}");
     }
 
     #[test]

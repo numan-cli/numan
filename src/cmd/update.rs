@@ -97,7 +97,7 @@ enum ActiveUpdatePlan {
 pub type UpdateInstallFn = dyn Fn(&str, Option<&str>, &InstallOptions<'_>) -> Result<InstallResult>;
 
 /// Injectable registry sync seam for update tests (production uses `registry::sync_registries_unlocked`).
-pub type UpdateSyncFn = dyn Fn(&Path) -> Result<()>;
+pub type UpdateSyncFn<'a> = dyn Fn(&Path) -> Result<()> + 'a;
 
 /// Injectable seams for update orchestration (tests inject fakes).
 pub struct UpdateHooks<'a> {
@@ -110,7 +110,7 @@ pub struct UpdateHooks<'a> {
 pub struct UpdateRuntimeHooks<'a> {
     pub hooks: &'a UpdateHooks<'a>,
     pub candidate_runner: Option<&'a dyn CandidateRunner>,
-    pub sync: Option<&'a UpdateSyncFn>,
+    pub sync: Option<&'a UpdateSyncFn<'a>>,
 }
 
 pub fn execute(args: &UpdateArgs, root: &Path) -> Result<()> {
@@ -167,8 +167,7 @@ pub fn execute_reviewed_with_runtime(
     }
 
     let should_sync = args.sync || (args.all && !args.no_sync);
-    let allow_autoload_orchestration =
-        (args.all && args.yes) || active_plugin_mutation::is_enabled();
+    let allow_autoload_orchestration = args.all && args.yes;
 
     if args.check {
         warn_stale_lifecycle_journal(root)?;
@@ -409,6 +408,16 @@ pub fn execute_reviewed_with_runtime(
                 deactivated = true;
             }
             ActiveUpdatePlan::OrchestrateActiveAutoload => {
+                if let Some(paths) = &cached_nu_paths {
+                    if let Err(e) = paths.validate_drift() {
+                        eprintln!(
+                            "Failed to validate Nu identity for {}: {}",
+                            update.package_id, e
+                        );
+                        failures.push(update.package_id.clone());
+                        break;
+                    }
+                }
                 let snap = create_snapshot(
                     root,
                     SnapshotReason::PreMutation,
@@ -584,6 +593,12 @@ pub fn execute_reviewed_with_runtime(
     Ok(())
 }
 
+/// Sync enabled registries before discovery or installation.
+///
+/// When [`UpdateRuntimeHooks::sync`] is provided, it overrides registry sync.
+/// When `runtime.sync` is `None` and [`UpdateHooks::install`] is `Some(...)`
+/// (an offline test install fake), network registry sync is skipped by default
+/// so hermetic unit tests never hit the network.
 fn run_registry_sync(root: &Path, runtime: &UpdateRuntimeHooks<'_>) -> Result<()> {
     if let Some(sync_fn) = runtime.sync {
         return sync_fn(root);
@@ -601,13 +616,15 @@ fn activate_autoload_package(
     pre_mutation_snapshot_id: Option<String>,
 ) -> Result<()> {
     let nu_paths = NuPaths::load(root)?;
-    let runner_owned;
-    let runner_ref: &dyn CandidateRunner = match runner {
-        Some(r) => r,
-        None => {
-            runner_owned = NuCandidateRunner::new(&nu_paths.nu_executable);
-            &runner_owned
-        }
+    let default_runner = if runner.is_none() {
+        Some(NuCandidateRunner::new(&nu_paths.nu_executable))
+    } else {
+        None
+    };
+    let runner_ref: &dyn CandidateRunner = match (runner, default_runner.as_ref()) {
+        (Some(r), _) => r,
+        (None, Some(owned)) => owned,
+        (None, None) => unreachable!(),
     };
     let failed = crate::cmd::activate::activate_modules_unlocked(
         root,
@@ -617,6 +634,17 @@ fn activate_autoload_package(
     )?;
     if failed {
         bail!("autoload candidate validation failed for '{pkg_id}'");
+    }
+    let lockfile = Lockfile::load(root)?;
+    let is_active = lockfile.packages.get(pkg_id).is_some_and(|entry| {
+        entry.module_activation.is_some()
+            || entry.script_activation.is_some()
+            || entry.completion_activation.is_some()
+    });
+    if !is_active {
+        bail!(
+            "Package '{pkg_id}' could not be reactivated after update (not activatable or missing entry metadata)"
+        );
     }
     Ok(())
 }
@@ -654,6 +682,22 @@ fn warn_stale_lifecycle_journal(root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Reconcile any interrupted `pending-autoload.json` journal under the root
+/// mutation lock before resuming or starting autoload update orchestration.
+fn reconcile_interrupted_autoload_if_needed(root: &Path) -> Result<()> {
+    if crate::state::autoload_journal::PendingAutoload::load(root)?.is_none() {
+        return Ok(());
+    }
+    let nu_paths = NuPaths::load(root)?;
+    let mut lockfile = Lockfile::load(root)?;
+    super::print_autoload_recovery(crate::state::autoload_recovery::reconcile_pending_autoload(
+        root,
+        &nu_paths,
+        &mut lockfile,
+    )?);
+    Ok(())
+}
+
 /// Resume activation after an interrupted orchestrated update
 /// (`LockfileUpdated` + `needs_reactivate`).
 ///
@@ -669,6 +713,7 @@ fn resume_interrupted_reactivate_with_runner(
     hooks: &UpdateHooks<'_>,
     runner: Option<&dyn CandidateRunner>,
 ) -> Result<()> {
+    reconcile_interrupted_autoload_if_needed(root)?;
     let Some(journal) = PendingLifecycle::load(root)? else {
         return Ok(());
     };
@@ -878,7 +923,9 @@ fn plan_active_update_with_opts(
             "Package '{pkg_id}' has active Nushell hooks. Run `numan hook disable {pkg_id}` before updating."
         );
     }
-    if let Some(ma) = &entry.module_activation {
+    let expected_vendor_dir = nu_paths.vendor_autoload_dir.as_deref();
+    let expected_managed_file = crate::cmd::activate::resolve_managed_file_path(nu_paths).ok();
+    if entry.module_activation.is_some() {
         if !allow_autoload_orchestration {
             bail!(
                 "Package '{}' is currently active as a module. \
@@ -887,9 +934,16 @@ fn plan_active_update_with_opts(
                 pkg_id
             );
         }
-        if ma.nu_executable_sha256 != nu_paths.nu_executable_hash
-            || ma.nu_version != nu_paths.nu_version
-        {
+        let matching = match (expected_vendor_dir, expected_managed_file.as_deref()) {
+            (Some(vendor), Some(managed)) => entry.is_module_active_for(
+                &nu_paths.nu_executable_hash,
+                &nu_paths.nu_version,
+                vendor,
+                managed,
+            ),
+            _ => false,
+        };
+        if !matching {
             bail!(
                 "Package '{}' has a module activation record that does not match \
                  the current Nu identity. {}\nThen run `numan deactivate {}` before updating.",
@@ -900,7 +954,7 @@ fn plan_active_update_with_opts(
         }
         return Ok(ActiveUpdatePlan::OrchestrateActiveAutoload);
     }
-    if let Some(sa) = &entry.script_activation {
+    if entry.script_activation.is_some() {
         if !allow_autoload_orchestration {
             bail!(
                 "Package '{}' is currently active as a script. \
@@ -909,9 +963,16 @@ fn plan_active_update_with_opts(
                 pkg_id
             );
         }
-        if sa.nu_executable_sha256 != nu_paths.nu_executable_hash
-            || sa.nu_version != nu_paths.nu_version
-        {
+        let matching = match (expected_vendor_dir, expected_managed_file.as_deref()) {
+            (Some(vendor), Some(managed)) => entry.is_script_active_for(
+                &nu_paths.nu_executable_hash,
+                &nu_paths.nu_version,
+                vendor,
+                managed,
+            ),
+            _ => false,
+        };
+        if !matching {
             bail!(
                 "Package '{}' has a script activation record that does not match \
                  the current Nu identity. {}\nThen run `numan deactivate {}` before updating.",
@@ -922,7 +983,7 @@ fn plan_active_update_with_opts(
         }
         return Ok(ActiveUpdatePlan::OrchestrateActiveAutoload);
     }
-    if let Some(ca) = &entry.completion_activation {
+    if entry.completion_activation.is_some() {
         if !allow_autoload_orchestration {
             bail!(
                 "Package '{}' is currently active as a completion. \
@@ -931,9 +992,16 @@ fn plan_active_update_with_opts(
                 pkg_id
             );
         }
-        if ca.nu_executable_sha256 != nu_paths.nu_executable_hash
-            || ca.nu_version != nu_paths.nu_version
-        {
+        let matching = match (expected_vendor_dir, expected_managed_file.as_deref()) {
+            (Some(vendor), Some(managed)) => entry.is_completion_active_for(
+                &nu_paths.nu_executable_hash,
+                &nu_paths.nu_version,
+                vendor,
+                managed,
+            ),
+            _ => false,
+        };
+        if !matching {
             bail!(
                 "Package '{}' has a completion activation record that does not match \
                  the current Nu identity. {}\nThen run `numan deactivate {}` before updating.",
@@ -1083,8 +1151,8 @@ mod tests {
             nu_executable_hash: "abc".to_string(),
             platform: "x86_64-pc-windows-msvc".to_string(),
             data_dir: None,
-            vendor_autoload_dirs: vec![],
-            vendor_autoload_dir: None,
+            vendor_autoload_dirs: vec!["/tmp/vendor".to_string()],
+            vendor_autoload_dir: Some("/tmp/vendor".to_string()),
         }
     }
 
@@ -1905,6 +1973,31 @@ mod tests {
         let err = plan_active_update_with_opts(&mod_entry, "owner/mod", &stale_paths, true)
             .unwrap_err()
             .to_string();
+        assert!(err.contains("does not match"), "{err}");
+
+        let mut wrong_vendor = matching_nu_paths();
+        wrong_vendor.vendor_autoload_dir = Some("/tmp/other-vendor".to_string());
+        let err = plan_active_update_with_opts(&mod_entry, "owner/mod", &wrong_vendor, true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("does not match"), "{err}");
+
+        let wrong_managed = LockfileEntry {
+            module_activation: Some(ModuleActivation {
+                entry_path: "/tmp/mod.nu".to_string(),
+                import_mode: ModuleImportMode::Module,
+                vendor_autoload_dir: "/tmp/vendor".to_string(),
+                managed_file_path: "/tmp/other/numan.nu".to_string(),
+                nu_executable_sha256: "abc".to_string(),
+                nu_version: "0.95.0".to_string(),
+                activated_at: "0".to_string(),
+            }),
+            ..base_entry()
+        };
+        let err =
+            plan_active_update_with_opts(&wrong_managed, "owner/mod", &matching_nu_paths(), true)
+                .unwrap_err()
+                .to_string();
         assert!(err.contains("does not match"), "{err}");
     }
 
