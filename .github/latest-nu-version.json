@@ -1,7 +1,7 @@
 {
-  "latest_version": "0.116.1",
-  "checked_at": "2026-10-18T15:41:18.535762+00:00",
-  "published_at": "2026-10-04T15:26:13Z",
-  "github_url": "https://github.com/nushell/nushell/releases/tag/0.116.1",
-  "blog_url": "https://www.nushell.sh/blog/2026-10-04-nushell_v0_116_1.html"
+  "latest_version": "0.117.0",
+  "checked_at": "2026-11-10T11:58:13.633651+00:00",
+  "published_at": "2026-11-10T00:39:45Z",
+  "github_url": "https://github.com/nushell/nushell/releases/tag/0.117.0",
+  "blog_url": "https://www.nushell.sh/blog/2026-11-09-nushell_v0_117_0.html"
 }
