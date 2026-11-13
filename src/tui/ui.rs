@@ -1033,20 +1033,28 @@ fn render_overlay(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                     ];
 
                     if editing {
-                        let before_cursor: String =
-                            form.edit_buffer.chars().take(form.edit_cursor).collect();
-                        let cursor_width = form
-                            .edit_buffer
-                            .chars()
-                            .nth(form.edit_cursor)
-                            .map(|c| Span::raw(c.to_string()).width())
-                            .unwrap_or(1)
-                            .max(1);
                         let cursor_end = Line::from(spans.clone()).width()
-                            + Span::raw(before_cursor).width()
-                            + cursor_width;
+                            + Span::raw(
+                                form.edit_buffer
+                                    .chars()
+                                    .take(form.edit_cursor)
+                                    .collect::<String>(),
+                            )
+                            .width()
+                            + form
+                                .edit_buffer
+                                .chars()
+                                .nth(form.edit_cursor)
+                                .map(|c| Span::raw(c.to_string()).width())
+                                .unwrap_or(1)
+                                .max(1);
                         spans.extend(render_cursor_spans("", &form.edit_buffer, form.edit_cursor));
-                        edited_row = Some((index, Line::from(spans.clone()), cursor_end));
+                        edited_row = Some((
+                            index,
+                            cursor_end,
+                            form.edit_buffer.clone(),
+                            form.edit_cursor,
+                        ));
                     } else if field.spec.kind == FieldKind::Bool {
                         spans.push(Span::raw(if field.enabled { "[x]" } else { "[ ]" }));
                     } else if !picker_opts.is_empty() {
@@ -1131,20 +1139,55 @@ fn render_overlay(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 parts[0],
             );
 
-            if let Some((index, line, cursor_end)) = edited_row {
+            if let Some((index, cursor_end, edit_buffer, edit_cursor)) = edited_row {
                 let row = index as u32 * 2;
-                if row >= field_scroll && row - field_scroll < u32::from(parts[0].height) {
-                    let horizontal_scroll = cursor_end.saturating_sub(usize::from(parts[0].width));
-                    frame.render_widget(
-                        Paragraph::new(line)
-                            .scroll((0, horizontal_scroll.min(u16::MAX as usize) as u16)),
-                        Rect::new(
-                            parts[0].x,
-                            parts[0].y + (row - field_scroll) as u16,
-                            parts[0].width,
-                            1,
-                        ),
+                let width = usize::from(parts[0].width);
+                if cursor_end > width
+                    && width > 0
+                    && row >= field_scroll
+                    && row - field_scroll < u32::from(parts[0].height)
+                {
+                    let chars: Vec<char> = edit_buffer.chars().collect();
+                    let cur = edit_cursor.min(chars.len());
+                    let at = if cur < chars.len() {
+                        chars[cur].to_string()
+                    } else {
+                        " ".to_string()
+                    };
+                    let at_width = Span::raw(&at).width().max(1);
+                    let after: String = if cur < chars.len() {
+                        chars[cur + 1..].iter().collect()
+                    } else {
+                        String::new()
+                    };
+                    let mut tail_chars = Vec::new();
+                    let mut used = 1 + at_width; // 1 for leading ellipsis
+                    for &ch in chars[..cur].iter().rev() {
+                        let cw = Span::raw(ch.to_string()).width();
+                        if used + cw > width {
+                            break;
+                        }
+                        used += cw;
+                        tail_chars.push(ch);
+                    }
+                    tail_chars.reverse();
+                    let before_tail: String = tail_chars.into_iter().collect();
+                    let mut scrolled = vec![Span::styled("…", theme::muted())];
+                    if !before_tail.is_empty() {
+                        scrolled.push(Span::raw(before_tail));
+                    }
+                    scrolled.push(Span::styled(at, theme::cursor()));
+                    if !after.is_empty() {
+                        scrolled.push(Span::raw(after));
+                    }
+                    let row_rect = Rect::new(
+                        parts[0].x,
+                        parts[0].y + (row - field_scroll) as u16,
+                        parts[0].width,
+                        1,
                     );
+                    frame.render_widget(Clear, row_rect);
+                    frame.render_widget(Line::from(scrolled), row_rect);
                 }
             }
 
