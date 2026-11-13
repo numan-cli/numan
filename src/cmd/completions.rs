@@ -9,6 +9,7 @@ use clap_complete_nushell::Nushell;
 use crate::cli::Cli;
 use crate::util::atomic::write_bytes_atomic;
 use crate::util::fs_safety::{assert_managed_file_owned, assert_not_symlink, OWNERSHIP_MARKER};
+use crate::util::output::println;
 
 /// Install (default) or print shell completion scripts
 #[derive(clap::Parser)]

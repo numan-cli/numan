@@ -11,6 +11,7 @@ pub enum OutputEvent {
 type Sink = Box<dyn Fn(OutputEvent)>;
 thread_local! {
     static SINK: RefCell<Option<Sink>> = const { RefCell::new(None) };
+    static TEE: RefCell<Vec<Vec<String>>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Restore the previous sink even when a lifecycle operation unwinds.
@@ -23,6 +24,32 @@ pub fn with_sink<T>(sink: impl Fn(OutputEvent) + 'static, run: impl FnOnce() -> 
     }
     let _restore = Restore(SINK.with(|slot| slot.replace(Some(Box::new(sink)))));
     run()
+}
+
+/// Collect `output::println` / `output::eprintln` messages emitted on the current
+/// thread while preserving any outer thread-local sink.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub fn tee_messages<T>(run: impl FnOnce() -> T) -> (T, Vec<String>) {
+    struct PopGuard {
+        armed: bool,
+    }
+    impl Drop for PopGuard {
+        fn drop(&mut self) {
+            if self.armed {
+                TEE.with(|stack| {
+                    let _ = stack.borrow_mut().pop();
+                });
+            }
+        }
+    }
+    TEE.with(|stack| stack.borrow_mut().push(Vec::new()));
+    let mut guard = PopGuard { armed: true };
+    let value = run();
+    guard.armed = false;
+    let captured = TEE
+        .with(|stack| stack.borrow_mut().pop())
+        .unwrap_or_default();
+    (value, captured)
 }
 
 pub fn is_captured() -> bool {
@@ -39,6 +66,11 @@ pub fn download(received: u64, total: Option<u64>) {
 
 pub(crate) fn line(args: fmt::Arguments<'_>, error: bool) {
     let text = redact_uuids(&args.to_string());
+    TEE.with(|stack| {
+        for frame in stack.borrow_mut().iter_mut() {
+            frame.push(text.clone());
+        }
+    });
     SINK.with(|slot| {
         if let Some(sink) = slot.borrow().as_ref() {
             sink(OutputEvent::Message { text, error });
@@ -129,5 +161,40 @@ mod tests {
                 total: Some(10)
             }
         ));
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn tee_messages_collects_while_forwarding_to_outer_sink_and_unwinds_cleanly() {
+        let forwarded = Arc::new(Mutex::new(Vec::new()));
+        let saved = forwarded.clone();
+        with_sink(
+            move |event| {
+                if let OutputEvent::Message { text, .. } = event {
+                    saved.lock().unwrap().push(text);
+                }
+            },
+            || {
+                let (_, captured) = tee_messages(|| {
+                    line(format_args!("first line"), false);
+                    line(format_args!("second line"), true);
+                });
+                assert_eq!(captured, vec!["first line", "second line"]);
+                let _ = std::panic::catch_unwind(|| {
+                    let _ = tee_messages(|| {
+                        line(format_args!("before panic"), false);
+                        panic!("tee unwind");
+                    });
+                });
+                let (_, after) = tee_messages(|| {
+                    line(format_args!("clean after unwind"), false);
+                });
+                assert_eq!(after, vec!["clean after unwind"]);
+            },
+        );
+        let all = forwarded.lock().unwrap();
+        assert!(all.contains(&"first line".to_string()));
+        assert!(all.contains(&"second line".to_string()));
+        assert!(all.contains(&"clean after unwind".to_string()));
     }
 }

@@ -109,6 +109,35 @@ pub fn execute_with_candidate_runner_and_unregistrar(
     runner: Option<&dyn CandidateRunner>,
     unregistrar: &dyn Fn(&str, &str, &str) -> Result<()>,
 ) -> Result<()> {
+    execute_reviewed_with_candidate_runner_and_unregistrar(args, root, runner, unregistrar, &|| {
+        Ok(())
+    })
+}
+
+/// Validate the reviewed scope under the mutation lock before deactivation.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub fn execute_reviewed(
+    args: &DeactivateArgs,
+    root: &Path,
+    validate: &dyn Fn() -> Result<()>,
+) -> Result<()> {
+    execute_reviewed_with_candidate_runner_and_unregistrar(
+        args,
+        root,
+        None,
+        &run_plugin_rm,
+        validate,
+    )
+}
+
+/// Full testability reviewed entry point — injectable module candidate runner, plugin unregistrar, and lock-held validator.
+pub fn execute_reviewed_with_candidate_runner_and_unregistrar(
+    args: &DeactivateArgs,
+    root: &Path,
+    runner: Option<&dyn CandidateRunner>,
+    unregistrar: &dyn Fn(&str, &str, &str) -> Result<()>,
+    validate: &dyn Fn() -> Result<()>,
+) -> Result<()> {
     // 1. Load cached Nu identity
     let nu_paths = NuPaths::load(root)?;
 
@@ -116,6 +145,7 @@ pub fn execute_with_candidate_runner_and_unregistrar(
     //    mutation lock. This prevents stale pre-recovery state from causing an
     //    early error or no-op return.
     let planning_lock = acquire_mutation_lock(root)?;
+    validate()?;
     let mut lockfile = Lockfile::load(root)?;
     prepare_deactivate_recovery(&nu_paths, root)?;
     reconcile_plugin_deactivate_journal(root, &nu_paths, &mut lockfile, unregistrar)?;
@@ -150,6 +180,7 @@ pub fn execute_with_candidate_runner_and_unregistrar(
 
     // 6. Reacquire the root mutation lock after consent.
     let _lock = acquire_mutation_lock(root)?;
+    validate()?;
 
     // Reload lockfile under the lock
     let mut lockfile = Lockfile::load(root)?;

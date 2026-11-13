@@ -29,6 +29,8 @@ use anyhow::{bail, Context, Result};
 use std::fs::File;
 use std::path::{Component, Path, PathBuf};
 
+use crate::util::output::eprintln;
+
 // ── Mutation lock ─────────────────────────────────────────────────────────────
 
 /// RAII guard holding an exclusive advisory lock on

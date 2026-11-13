@@ -28,6 +28,7 @@ use crate::state::snapshot::{
     create_snapshot, load_snapshot, verify_payloads, ManagedAutoloadProjection, Snapshot,
     SnapshotPaths, SnapshotReason, SnapshotRelation, SnapshotSidecar, SnapshotTrigger,
 };
+use crate::util::output::eprintln;
 
 const HOOK_AUTOLOAD_FILE: &str = "numan-hooks.nu";
 

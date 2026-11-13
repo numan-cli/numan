@@ -15,7 +15,7 @@ use crate::util::output::{eprintln, println};
 pub struct GcArgs {
     /// Report what would be removed without deleting anything
     #[arg(long)]
-    dry_run: bool,
+    pub dry_run: bool,
 }
 
 pub fn execute(args: &GcArgs, root: &Path) -> Result<()> {
@@ -35,7 +35,11 @@ pub fn execute(args: &GcArgs, root: &Path) -> Result<()> {
         );
     }
 
-    let _lock = acquire_mutation_lock(root)?;
+    let _lock = if args.dry_run {
+        None
+    } else {
+        Some(acquire_mutation_lock(root)?)
+    };
 
     let lockfile = Lockfile::load(root)?;
 
@@ -72,7 +76,9 @@ pub fn execute(args: &GcArgs, root: &Path) -> Result<()> {
     let packages_dir = root.join("packages");
     if !packages_dir.exists() {
         println!("Nothing to collect.");
-        PendingLifecycle::clear(root)?;
+        if !args.dry_run {
+            PendingLifecycle::clear(root)?;
+        }
         return Ok(());
     }
 
@@ -87,7 +93,9 @@ pub fn execute(args: &GcArgs, root: &Path) -> Result<()> {
 
     if orphans.is_empty() {
         println!("No orphaned packages found.");
-        PendingLifecycle::clear(root)?;
+        if !args.dry_run {
+            PendingLifecycle::clear(root)?;
+        }
         return Ok(());
     }
 

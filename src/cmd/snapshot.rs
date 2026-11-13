@@ -40,12 +40,14 @@ pub enum SnapshotCommands {
     },
 }
 
-#[allow(dead_code)] // caller is the TUI executor in an upper stack layer
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub(crate) fn execute_to(cmd: &SnapshotCommands, root: &Path, out: &mut dyn Write) -> Result<()> {
+    let is_tty = !crate::util::output::is_captured() && std::io::stdin().is_terminal();
     match cmd {
         SnapshotCommands::List => list(root, out),
         SnapshotCommands::Inspect { id } => inspect(root, id, out),
-        _ => anyhow::bail!("snapshot command is not read-only"),
+        SnapshotCommands::Delete { id, yes } => delete_with_tty_to(root, id, *yes, is_tty, out),
+        SnapshotCommands::Rollback { id, yes } => rollback_with_tty_to(root, id, *yes, is_tty, out),
     }
 }
 
@@ -267,6 +269,16 @@ fn delete(root: &Path, id: &str, yes: bool) -> Result<()> {
 }
 
 fn delete_with_tty(root: &Path, id: &str, yes: bool, is_tty: bool) -> Result<()> {
+    delete_with_tty_to(root, id, yes, is_tty, &mut std::io::stdout())
+}
+
+fn delete_with_tty_to(
+    root: &Path,
+    id: &str,
+    yes: bool,
+    is_tty: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
     // Destructive: permanently removes the rollback history for this snapshot.
     // Refuse unattended (non-TTY) sessions without explicit --yes; interactive
     // sessions keep the confirmation prompt below.
@@ -278,7 +290,12 @@ fn delete_with_tty(root: &Path, id: &str, yes: bool, is_tty: bool) -> Result<()>
     )?;
     let _lock = acquire_mutation_lock(root)?;
     delete_snapshot(root, id)?;
-    println!("{} Deleted snapshot {}", console::style("✓").green(), id);
+    writeln!(
+        out,
+        "{} Deleted snapshot {}",
+        console::style("✓").green(),
+        id
+    )?;
     Ok(())
 }
 
@@ -287,6 +304,16 @@ fn rollback(root: &Path, id: &str, yes: bool) -> Result<()> {
 }
 
 fn rollback_with_tty(root: &Path, id: &str, yes: bool, is_tty: bool) -> Result<()> {
+    rollback_with_tty_to(root, id, yes, is_tty, &mut std::io::stdout())
+}
+
+fn rollback_with_tty_to(
+    root: &Path,
+    id: &str,
+    yes: bool,
+    is_tty: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
     // Destructive: rewrites Numan-managed state to a past snapshot. Refuse
     // unattended sessions without explicit --yes; interactive sessions keep
     // the confirmation prompt (a pre-rollback snapshot is still taken first).
@@ -308,23 +335,25 @@ fn rollback_with_tty(root: &Path, id: &str, yes: bool, is_tty: bool) -> Result<(
     // Snapshot UUIDs are public CLI identifiers required for follow-up actions,
     // not secrets or diagnostic log data.
     // codeql[rust/cleartext-logging]
-    println!(
+    writeln!(
+        out,
         "{} Rolled back to snapshot {}",
         console::style("✓").green(),
         report.target_snapshot_id
-    );
+    )?;
     // This user-facing rollback summary contains only a count, not sensitive data.
     // codeql[rust/cleartext-logging]
-    println!("  packages restored: {}", report.packages_restored);
+    writeln!(out, "  packages restored: {}", report.packages_restored)?;
     // The action is reported without printing the managed file path.
-    println!("  autoload:          {}", report.autoload_action);
+    writeln!(out, "  autoload:          {}", report.autoload_action)?;
     // Snapshot UUIDs are public CLI identifiers required for follow-up actions,
     // not secrets or diagnostic log data.
     // codeql[rust/cleartext-logging]
-    println!(
+    writeln!(
+        out,
         "  pre-rollback snapshot: {} (roll back to this to undo)",
         report.pre_rollback_snapshot_id
-    );
+    )?;
 
     Ok(())
 }

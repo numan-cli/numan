@@ -109,34 +109,50 @@ struct Prepared {
 }
 
 pub fn execute(command: OverlayCommands, root: &Path) -> Result<()> {
+    execute_to(command, root, &mut std::io::stdout())
+}
+
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub(crate) fn execute_to(
+    command: OverlayCommands,
+    root: &Path,
+    out: &mut dyn std::io::Write,
+) -> Result<()> {
     match command {
         OverlayCommands::Use(args) => {
             let (_, path, name) = resolve_package(root, &args)?;
-            eprintln!("Source numan_init.nu (run `numan init --refresh`) and use the Nu-side `numan overlay use` command. The external CLI has not recorded activation.");
-            println!(
+            crate::util::output::eprintln!(
+                "Source numan_init.nu (run `numan init --refresh`) and use the Nu-side `numan overlay use` command. The external CLI has not recorded activation."
+            );
+            writeln!(
+                out,
                 "overlay use {} as {}",
                 nu_literal(&path)?,
                 nu_literal(&name)?
-            );
+            )?;
         }
         OverlayCommands::Hide(args) => {
-            eprintln!("Use the Nu-side `numan overlay hide` command to confirm this shell's state. No activation record was changed.");
-            println!("{}", external_hide_code(root, &args.target)?);
+            crate::util::output::eprintln!(
+                "Use the Nu-side `numan overlay hide` command to confirm this shell's state. No activation record was changed."
+            );
+            writeln!(out, "{}", external_hide_code(root, &args.target)?)?;
         }
-        OverlayCommands::Prepare(args) => print_json(&prepare(root, &args)?)?,
-        OverlayCommands::PrepareHide(args) => print_json(&prepare_hide(root, &args)?)?,
-        OverlayCommands::Reconcile(args) => print_json(&reconcile(root, &args, None, false)?)?,
+        OverlayCommands::Prepare(args) => print_json_to(&prepare(root, &args)?, out)?,
+        OverlayCommands::PrepareHide(args) => print_json_to(&prepare_hide(root, &args)?, out)?,
+        OverlayCommands::Reconcile(args) => {
+            print_json_to(&reconcile(root, &args, None, false)?, out)?
+        }
         OverlayCommands::Commit(args) => {
-            print_json(&reconcile(root, &args.shell, Some(&args.txn), false)?)?
+            print_json_to(&reconcile(root, &args.shell, Some(&args.txn), false)?, out)?
         }
         OverlayCommands::Abort(args) => {
-            print_json(&reconcile(root, &args.shell, Some(&args.txn), true)?)?
+            print_json_to(&reconcile(root, &args.shell, Some(&args.txn), true)?, out)?
         }
         OverlayCommands::List(args) => {
             if args.session.is_some() {
-                print_json(&reconcile(root, &args, None, false)?)?;
+                print_json_to(&reconcile(root, &args, None, false)?, out)?;
             } else {
-                list_overlays_to(root, &mut std::io::stdout())?;
+                list_overlays_to(root, out)?;
             }
         }
     }
@@ -174,8 +190,8 @@ pub(crate) fn list_overlays_to(root: &Path, out: &mut dyn std::io::Write) -> Res
     Ok(())
 }
 
-fn print_json(value: &impl Serialize) -> Result<()> {
-    println!("{}", serde_json::to_string(value)?);
+fn print_json_to(value: &impl Serialize, out: &mut dyn std::io::Write) -> Result<()> {
+    writeln!(out, "{}", serde_json::to_string(value)?)?;
     Ok(())
 }
 

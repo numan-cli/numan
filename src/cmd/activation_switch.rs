@@ -17,6 +17,7 @@ use crate::nu::version_manager;
 use crate::state::activation_profile::{self, ActivationProfile, MinorActivationSet, ProfileKind};
 use crate::state::lockfile::Lockfile;
 use crate::util::hints::CMD_INIT_REFRESH;
+use crate::util::output::{eprintln, println};
 
 use super::plugin_lifecycle::{activate_one_plugin, deactivate_one_plugin};
 
