@@ -47,74 +47,82 @@ pub struct CommandSpec {
     pub fields: Vec<FieldSpec>,
 }
 
-/// path, tier, phase/availability label
+/// path, tier, availability / mode description
 const CLASSIFICATIONS: &[(&str, &str, &str)] = &[
-    ("tui", "ReadOnly", "This section"),
-    ("search", "ReadOnly", "Phase 1 - read-only"),
-    ("info", "ReadOnly", "Phase 1 - read-only"),
+    ("tui", "ReadOnly", "Blocked inside TUI"),
+    ("search", "ReadOnly", "ReadOnly"),
+    ("info", "ReadOnly", "ReadOnly"),
     (
         "install",
         "RootMutation+Network",
-        "Phase 2 (force: Phase 3)",
+        "Reviewed (--force supported)",
     ),
     (
         "update",
         "RootMutation+Network",
-        "Phase 2 single (all/self: Phase 3-4)",
+        "Reviewed (--check --no-sync: ReadOnly; --self: CLI)",
     ),
-    ("remove", "Destructive", "Phase 2 (force: Phase 3)"),
-    ("gc", "Destructive", "Phase 3"),
-    ("activate", "RootMutation", "Phase 2 single (all: Phase 3)"),
-    ("deactivate", "RootMutation", "Phase 2"),
-    ("list", "ReadOnly", "Phase 1 - read-only"),
-    ("init", "RootMutation", "Phase 3"),
-    ("migrate", "RootMutation", "Phase 3"),
+    ("remove", "Destructive", "Reviewed (--force supported)"),
+    ("gc", "Destructive", "Reviewed (--dry-run: ReadOnly)"),
     (
-        "completions",
-        "External",
-        "Phase 1 --print (install: Phase 4)",
+        "activate",
+        "RootMutation",
+        "Reviewed (--list/--check: ReadOnly)",
     ),
+    ("deactivate", "RootMutation", "Reviewed (native [d])"),
+    ("list", "ReadOnly", "ReadOnly"),
+    ("init", "RootMutation", "Reviewed"),
+    ("migrate", "RootMutation", "Reviewed (--dry-run: ReadOnly)"),
+    ("completions", "External", "Reviewed (--print: ReadOnly)"),
     (
         "doctor",
         "ReadOnly/External",
-        "Phase 1 scan (repair: Phase 4)",
+        "ReadOnly --scan; Reviewed repair",
     ),
-    ("try", "RootMutation+Network", "Phase 2"),
-    ("use", "RootMutation", "Phase 3 (list: Phase 1)"),
-    ("hook enable", "RootMutation", "Phase 3"),
-    ("hook disable", "RootMutation", "Phase 3"),
-    ("hook list", "ReadOnly", "Phase 1 - read-only"),
-    ("registry list", "ReadOnly", "Phase 1 - read-only"),
-    ("registry sync", "Network", "Native today (Shift+R)"),
-    ("registry add", "RootMutation+Network", "Phase 3"),
-    ("registry remove", "Destructive", "Phase 3"),
-    ("registry packages", "ReadOnly", "Phase 1 - read-only"),
-    ("snapshot list", "ReadOnly", "Phase 1 - read-only"),
-    ("snapshot inspect", "ReadOnly", "Phase 1 - read-only"),
-    ("snapshot delete", "Destructive", "Phase 3"),
-    ("snapshot rollback", "Destructive", "Phase 3"),
-    ("setup nu", "External+Network", "Phase 4"),
-    ("setup nu remove", "External", "Phase 4"),
-    ("setup nu path", "External", "Phase 4"),
-    ("setup nu use", "External", "Phase 4"),
-    ("setup loader", "External+Network", "Phase 4"),
-    ("setup autoupdate", "External", "Phase 4 (status: Phase 1)"),
-    ("nupm status", "ReadOnly", "Phase 1 - read-only"),
-    ("nupm inspect", "ReadOnly", "Phase 1 - read-only"),
-    ("nupm import", "RootMutation", "Phase 3"),
-    ("nupm diff", "ReadOnly", "Phase 1 - read-only"),
+    ("try", "RootMutation+Network", "Reviewed"),
+    ("use", "RootMutation", "Reviewed (list: ReadOnly)"),
+    ("hook enable", "RootMutation", "Reviewed"),
+    ("hook disable", "RootMutation", "Reviewed"),
+    ("hook list", "ReadOnly", "ReadOnly"),
+    ("registry list", "ReadOnly", "ReadOnly"),
+    ("registry sync", "Network", "Reviewed (Shift+R)"),
+    ("registry add", "RootMutation+Network", "Reviewed"),
+    ("registry remove", "Destructive", "Reviewed"),
+    ("registry packages", "ReadOnly", "ReadOnly"),
+    ("snapshot list", "ReadOnly", "ReadOnly"),
+    ("snapshot inspect", "ReadOnly", "ReadOnly"),
+    ("snapshot delete", "Destructive", "Reviewed"),
+    ("snapshot rollback", "Destructive", "Reviewed"),
+    ("setup nu", "External+Network", "Reviewed"),
+    ("setup nu remove", "External", "Reviewed"),
+    ("setup nu path", "External", "Reviewed"),
+    ("setup nu use", "External", "Reviewed"),
+    (
+        "setup loader",
+        "External+Network",
+        "Reviewed (--status: ReadOnly)",
+    ),
+    (
+        "setup autoupdate",
+        "External",
+        "Reviewed (--status: ReadOnly)",
+    ),
+    ("nupm status", "ReadOnly", "ReadOnly"),
+    ("nupm inspect", "ReadOnly", "ReadOnly"),
+    ("nupm import", "RootMutation", "Reviewed"),
+    ("nupm diff", "ReadOnly", "ReadOnly"),
     (
         "overlay use",
         "RootMutation+Shell",
-        "Phase 3 (shell exception)",
+        "Reviewed (shell guidance)",
     ),
     (
         "overlay hide",
         "RootMutation+Shell",
-        "Phase 3 (shell exception)",
+        "Reviewed (shell guidance)",
     ),
-    ("overlay list", "ReadOnly", "Phase 1 - read-only"),
-    ("overlay reconcile", "RootMutation", "Phase 3"),
+    ("overlay list", "ReadOnly", "ReadOnly (--session: Reviewed)"),
+    ("overlay reconcile", "RootMutation", "Reviewed"),
 ];
 
 /// Summaries for leaves whose Clap variant carries no `about` text.
@@ -311,38 +319,55 @@ pub fn build_argv(spec: &CommandSpec, fields: &[FieldState]) -> Vec<String> {
     argv
 }
 
-/// Whether this command may execute read-only in the TUI (Phase 1).
+fn has_flag(fields: &[FieldState], long: &str) -> bool {
+    fields.iter().any(|field| {
+        field.enabled && (field.spec.long.as_deref() == Some(long) || field.spec.id == long)
+    })
+}
+
+fn has_value(fields: &[FieldState], long: &str) -> bool {
+    fields.iter().any(|field| {
+        (field.spec.long.as_deref() == Some(long) || field.spec.id == long)
+            && !field.value.trim().is_empty()
+    })
+}
+
+/// Whether this command may execute read-only in the TUI without review.
 /// Conditional commands depend on current field values.
 pub fn phase1_executable(display: &str, fields: &[FieldState]) -> bool {
     match display {
         "search" | "info" | "list" | "registry list" | "registry packages" | "snapshot list"
         | "snapshot inspect" | "nupm status" | "nupm inspect" | "nupm diff" | "hook list" => true,
-        "overlay list" => fields
-            .iter()
-            .all(|field| field.spec.id != "session" || field.value.trim().is_empty()),
-        "completions" => fields
-            .iter()
-            .any(|field| field.spec.id == "print" && field.enabled),
-        "doctor" => fields
-            .iter()
-            .any(|field| (field.spec.id == "scan" || field.spec.id == "json") && field.enabled),
-        "activate" => fields
-            .iter()
-            .any(|field| (field.spec.id == "list" || field.spec.id == "check") && field.enabled),
+        "overlay list" => !has_value(fields, "session"),
+        "completions" => has_flag(fields, "print"),
+        "doctor" => has_flag(fields, "scan"),
+        "activate" => has_flag(fields, "list") || has_flag(fields, "check"),
         "update" => {
-            let enabled = |id: &str| {
-                fields
-                    .iter()
-                    .any(|field| field.spec.id == id && field.enabled)
-            };
-            enabled("check") && !enabled("self")
+            has_flag(fields, "check")
+                && !has_flag(fields, "sync")
+                && (!has_flag(fields, "all") || has_flag(fields, "no-sync"))
         }
+        "gc" => has_flag(fields, "dry-run"),
+        "migrate" => has_flag(fields, "dry-run"),
         "use" => fields
             .iter()
             .any(|field| field.spec.id == "version" && field.value.trim() == "list"),
-        "setup autoupdate" => fields
-            .iter()
-            .any(|field| field.spec.id == "status" && field.enabled),
+        "setup loader" => {
+            has_flag(fields, "status")
+                && !has_flag(fields, "force")
+                && !has_flag(fields, "configure")
+                && !has_flag(fields, "detect")
+                && !has_flag(fields, "clean")
+                && !has_flag(fields, "install")
+                && !has_value(fields, "add")
+                && !has_value(fields, "remove")
+        }
+        "setup autoupdate" => {
+            has_flag(fields, "status")
+                && !has_flag(fields, "enable")
+                && !has_flag(fields, "disable")
+                && !has_flag(fields, "run-now")
+        }
         _ => false,
     }
 }
@@ -362,20 +387,13 @@ pub fn execution_mode(display: &str, fields: &[FieldState]) -> ExecutionMode {
     if display == "tui" {
         return ExecutionMode::Blocked("The TUI cannot open inside itself.");
     }
-    if display == "update" {
+    if display == "update" && has_flag(fields, "self") && !has_flag(fields, "check") {
         // Replacing the running binary from inside the TUI is unsafe (the
         // executable is locked on Windows) and surprising mid-session; the
         // read-only --check form stays executable.
-        let enabled = |long: &str| {
-            fields
-                .iter()
-                .any(|field| field.enabled && field.spec.long.as_deref() == Some(long))
-        };
-        if enabled("self") && !enabled("check") {
-            return ExecutionMode::Blocked(
-                "Self-update replaces the running numan binary; run `numan update --self` in a terminal instead.",
-            );
-        }
+        return ExecutionMode::Blocked(
+            "Self-update replaces the running numan binary; run `numan update --self` in a terminal instead.",
+        );
     }
     if spec(display).is_some_and(|found| found.tier == "Unclassified") {
         return ExecutionMode::Blocked("No catalog classification for this command.");
@@ -663,5 +681,79 @@ mod tests {
             assert!(validate_preview(root, bad).is_err(), "{bad}");
         }
         assert!(validate_preview(root, "numan --root /tmp/numan-root list").is_ok());
+    }
+
+    #[test]
+    fn conditional_execution_modes_match_cli_semantics() {
+        let check = |display: &str, args: &[&str]| {
+            let found = spec(display).unwrap();
+            let argv: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
+            let fields = fields_from_argv(found, &argv);
+            execution_mode(display, &fields)
+        };
+
+        // doctor only executes ReadOnly when --scan is passed; non-scan may repair.
+        assert_eq!(check("doctor", &[]), ExecutionMode::Reviewed);
+        assert_eq!(check("doctor", &["--json"]), ExecutionMode::Reviewed);
+        assert_eq!(check("doctor", &["--scan"]), ExecutionMode::ReadOnly);
+        assert_eq!(
+            check("doctor", &["--scan", "--json"]),
+            ExecutionMode::ReadOnly
+        );
+
+        // gc --dry-run & migrate --dry-run are strictly read-only.
+        assert_eq!(check("gc", &[]), ExecutionMode::Reviewed);
+        assert_eq!(check("gc", &["--dry-run"]), ExecutionMode::ReadOnly);
+        assert_eq!(check("migrate", &[]), ExecutionMode::Reviewed);
+        assert_eq!(check("migrate", &["--dry-run"]), ExecutionMode::ReadOnly);
+
+        // setup loader is read-only only for pure --status (no mutating/install flags).
+        assert_eq!(check("setup loader", &[]), ExecutionMode::Reviewed);
+        assert_eq!(
+            check("setup loader", &["--status"]),
+            ExecutionMode::ReadOnly
+        );
+        assert_eq!(
+            check("setup loader", &["--status", "--detect"]),
+            ExecutionMode::Reviewed
+        );
+        assert_eq!(
+            check("setup loader", &["--status", "--clean"]),
+            ExecutionMode::Reviewed
+        );
+        assert_eq!(
+            check("setup loader", &["--status", "--add", "starship"]),
+            ExecutionMode::Reviewed
+        );
+
+        // setup autoupdate is read-only for --status without enable/disable/run-now.
+        assert_eq!(check("setup autoupdate", &[]), ExecutionMode::Reviewed);
+        assert_eq!(
+            check("setup autoupdate", &["--status"]),
+            ExecutionMode::ReadOnly
+        );
+
+        // update --check is read-only unless it syncs registries.
+        assert_eq!(check("update", &["--check"]), ExecutionMode::ReadOnly);
+        assert_eq!(
+            check("update", &["--check", "--sync"]),
+            ExecutionMode::Reviewed
+        );
+        assert_eq!(
+            check("update", &["--all", "--check"]),
+            ExecutionMode::Reviewed
+        );
+        assert_eq!(
+            check("update", &["--all", "--check", "--no-sync"]),
+            ExecutionMode::ReadOnly
+        );
+        assert_eq!(
+            check("update", &["--self", "--check"]),
+            ExecutionMode::ReadOnly
+        );
+        assert!(matches!(
+            check("update", &["--self"]),
+            ExecutionMode::Blocked(_)
+        ));
     }
 }

@@ -251,6 +251,20 @@ pub struct LoaderArgs {
     pub install: bool,
 }
 
+impl LoaderArgs {
+    /// True when only `--status` was requested without any mutating/install flags.
+    pub fn is_pure_status(&self) -> bool {
+        self.status
+            && !self.force
+            && !self.configure
+            && !self.detect
+            && !self.clean
+            && !self.install
+            && self.add.is_none()
+            && self.remove.is_none()
+    }
+}
+
 pub use crate::cmd::setup_autoupdate::{
     autoupdate_log_path, autoupdate_state_path, autoupdate_wrapper_path, execute_autoupdate,
     format_schtasks_tr, read_autoupdate_state, AutoupdateArgs, AutoupdateState,
@@ -756,14 +770,18 @@ fn remove_managed_nu_if_present(root: &Path) -> Result<()> {
 }
 
 pub fn execute_loader(args: &LoaderArgs, root: &Path) -> Result<()> {
+    let probe = || {
+        let nu_exe = find_nu_executable_with_root(root)?;
+        probe_nu_config_path(&nu_exe)
+    };
+    if args.is_pure_status() {
+        return execute_loader_with_probe_and_root(args, Some(root), probe);
+    }
     // Public entry holds the root mutation lock (same boundary as setup nu /
     // numan use). The probe helper below stays unlocked so unit tests can
     // inject a fake config path without contending on the advisory lock.
     setup_subcommand_lock(root, "nushell-loader install", || {
-        execute_loader_with_probe_and_root(args, Some(root), || {
-            let nu_exe = find_nu_executable_with_root(root)?;
-            probe_nu_config_path(&nu_exe)
-        })
+        execute_loader_with_probe_and_root(args, Some(root), probe)
     })
 }
 
@@ -793,6 +811,10 @@ where
         .context("Nu config path has no parent directory")?;
     let loader_path = config_dir.join("loader.nu");
     let loader_config_path = config_dir.join("loader-config.nu");
+
+    if args.is_pure_status() {
+        return execute_loader_status(&loader_path, &loader_config_path, &config_path, root);
+    }
 
     std::fs::create_dir_all(config_dir).with_context(|| {
         format!(

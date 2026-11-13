@@ -10,6 +10,7 @@ use crate::core::integrity;
 use crate::core::platform::{Arch, Env, Os, Platform};
 use crate::install::download::download_file;
 use crate::install::extract::{extract_archive, ArchiveFormat, ExtractConfig};
+use crate::util::output::{eprintln, println};
 
 const RELEASES_LATEST: &str = "https://api.github.com/repos/numan-cli/numan/releases/latest";
 const USER_AGENT: &str = "numan-cli (https://github.com/numan-cli/numan)";

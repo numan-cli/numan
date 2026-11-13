@@ -15,27 +15,38 @@ use crate::util::output::{eprintln, println};
 pub struct GcArgs {
     /// Report what would be removed without deleting anything
     #[arg(long)]
-    dry_run: bool,
+    pub dry_run: bool,
 }
 
 pub fn execute(args: &GcArgs, root: &Path) -> Result<()> {
     if let Some(journal) = check_stale_journal(root)? {
-        eprintln!(
-            "Note: Cleaning up after interrupted '{}' operation on '{}'.",
-            match journal.op {
-                crate::state::lifecycle_journal::LifecycleOp::Update => "update",
-                crate::state::lifecycle_journal::LifecycleOp::Remove => "remove",
-                crate::state::lifecycle_journal::LifecycleOp::NupmImport => "nupm import",
-                crate::state::lifecycle_journal::LifecycleOp::NupmImportManifest => {
-                    "nupm manifest import"
-                }
-                crate::state::lifecycle_journal::LifecycleOp::Rollback => "snapshot rollback",
-            },
-            journal.package_id
-        );
+        let op_name = match journal.op {
+            crate::state::lifecycle_journal::LifecycleOp::Update => "update",
+            crate::state::lifecycle_journal::LifecycleOp::Remove => "remove",
+            crate::state::lifecycle_journal::LifecycleOp::NupmImport => "nupm import",
+            crate::state::lifecycle_journal::LifecycleOp::NupmImportManifest => {
+                "nupm manifest import"
+            }
+            crate::state::lifecycle_journal::LifecycleOp::Rollback => "snapshot rollback",
+        };
+        if args.dry_run {
+            eprintln!(
+                "Note: Found interrupted '{op_name}' operation on '{}' (dry-run; journal preserved).",
+                journal.package_id
+            );
+        } else {
+            eprintln!(
+                "Note: Cleaning up after interrupted '{op_name}' operation on '{}'.",
+                journal.package_id
+            );
+        }
     }
 
-    let _lock = acquire_mutation_lock(root)?;
+    let _lock = if args.dry_run {
+        None
+    } else {
+        Some(acquire_mutation_lock(root)?)
+    };
 
     let lockfile = Lockfile::load(root)?;
 
@@ -72,7 +83,9 @@ pub fn execute(args: &GcArgs, root: &Path) -> Result<()> {
     let packages_dir = root.join("packages");
     if !packages_dir.exists() {
         println!("Nothing to collect.");
-        PendingLifecycle::clear(root)?;
+        if !args.dry_run {
+            PendingLifecycle::clear(root)?;
+        }
         return Ok(());
     }
 
@@ -87,7 +100,9 @@ pub fn execute(args: &GcArgs, root: &Path) -> Result<()> {
 
     if orphans.is_empty() {
         println!("No orphaned packages found.");
-        PendingLifecycle::clear(root)?;
+        if !args.dry_run {
+            PendingLifecycle::clear(root)?;
+        }
         return Ok(());
     }
 

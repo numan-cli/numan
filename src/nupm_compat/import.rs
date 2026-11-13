@@ -28,6 +28,7 @@ use crate::util::atomic::write_bytes_atomic;
 use crate::util::format_timestamp;
 use crate::util::fs_safety::{acquire_mutation_lock, assert_not_symlink, MutationLock};
 use crate::util::hints::{self, CMD_INIT, CMD_INIT_REFRESH, CMD_NUPM_INSPECT};
+use crate::util::output::eprintln;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportResult {

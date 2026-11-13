@@ -47,12 +47,12 @@ pub struct UpdateArgs {
 
     /// Report available updates without installing
     #[arg(long)]
-    check: bool,
+    pub check: bool,
 
     /// Update the numan binary itself from GitHub Releases (or print the
     /// package-manager upgrade command for Homebrew / winget / cargo installs)
     #[arg(long = "self")]
-    self_update: bool,
+    pub self_update: bool,
 
     /// Verbose output
     #[arg(short, long)]

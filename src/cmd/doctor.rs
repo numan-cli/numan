@@ -38,6 +38,7 @@ use crate::util::hints::{
     ACTIVE_PLUGIN_MUTATION_GATED_FIX, CMD_ACTIVATE, CMD_DEACTIVATE, CMD_DOCTOR_FIX, CMD_INIT,
     CMD_INIT_REFRESH, CMD_REGISTRY_SYNC, CMD_SETUP_NU, CMD_USE,
 };
+use crate::util::output::eprintln;
 use crate::util::stdio_redirect::StdoutToStderr;
 
 const SCHEMA_VERSION: u32 = 1;
@@ -122,6 +123,10 @@ pub struct DoctorReport {
 #[derive(Default)]
 pub struct DoctorOptions {
     pub skip_network: bool,
+    /// TUI workers already capture nested handler output via thread-local sink;
+    /// skip process-wide FD 1->2 redirection to protect the active terminal.
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
+    pub skip_stdio_redirect: bool,
     /// Override init repair (tests inject fakes; production uses `init::execute`).
     pub init_repair: Option<fn(&InitArgs, &Path) -> Result<()>>,
     /// Override activate repair (tests inject fakes; production uses `activate::execute`).
@@ -1308,7 +1313,7 @@ fn apply_repairs(
 
     // Nested repair handlers may println!; redirect only when those handlers
     // are about to run so healthy --json scans avoid mutating process stdio.
-    let _stdout_guard = if args.json && needs_lock {
+    let _stdout_guard = if !options.skip_stdio_redirect && args.json && needs_lock {
         Some(
             StdoutToStderr::redirect()
                 .context("Failed to redirect stdout while emitting doctor JSON")?,
@@ -2079,6 +2084,7 @@ mod tests {
             root,
             DoctorOptions {
                 skip_network: true,
+                skip_stdio_redirect: false,
                 init_repair: Some(test_init_repair),
                 activate_repair: None,
                 deactivate_repair: None,
@@ -2137,6 +2143,7 @@ mod tests {
             root,
             DoctorOptions {
                 skip_network: true,
+                skip_stdio_redirect: false,
                 init_repair: None,
                 activate_repair: None,
                 deactivate_repair: None,

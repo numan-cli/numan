@@ -8,6 +8,7 @@ use crate::cmd::init::{self, InitArgs};
 use crate::cmd::setup::{self, NuSetupArgs};
 use crate::core::resolve::{Incompatibility, PackageIncompatibility};
 use crate::util::hints::{self, CMD_INIT_REFRESH};
+use crate::util::output::{self, println};
 
 /// Print blast-radius warning and optionally install managed Nu + refresh paths.
 ///
@@ -23,7 +24,7 @@ pub fn offer_managed_nu_pin(
         root,
         current_nu,
         diagnosis,
-        std::io::stdin().is_terminal(),
+        !output::is_captured() && std::io::stdin().is_terminal(),
         || {
             let mut input = String::new();
             std::io::stdin()
@@ -189,5 +190,25 @@ mod tests {
             })
             .unwrap();
         assert!(!result);
+    }
+
+    #[test]
+    fn captured_output_forces_non_interactive_pin_offer() {
+        let dir = tempfile::tempdir().unwrap();
+        let diagnosis = diagnosis_with_pin("0.113.1");
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let saved = events.clone();
+        let result = crate::util::output::with_sink(
+            move |ev| {
+                if let crate::util::output::OutputEvent::Message { text, .. } = ev {
+                    saved.lock().unwrap().push(text);
+                }
+            },
+            || offer_managed_nu_pin(dir.path(), "0.112.0", &diagnosis),
+        )
+        .unwrap();
+        assert!(!result);
+        let combined = events.lock().unwrap().join("\n");
+        assert!(combined.contains("To switch Nu, run:"), "{combined}");
     }
 }

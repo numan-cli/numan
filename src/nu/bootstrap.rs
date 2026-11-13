@@ -17,6 +17,7 @@ use crate::state::snapshot::{create_snapshot, SnapshotReason, SnapshotTrigger};
 use crate::util::atomic::write_bytes_atomic;
 #[cfg(unix)]
 use crate::util::fs_safety::assert_not_symlink;
+use crate::util::output::{eprintln, println};
 
 const RELEASES_LATEST: &str = "https://api.github.com/repos/nushell/nushell/releases/latest";
 const RELEASES_TAGS_BASE: &str = "https://api.github.com/repos/nushell/nushell/releases/tags/";

@@ -9,6 +9,7 @@ use crate::install::download::download_file;
 use crate::install::extract::{extract_archive, ArchiveFormat, ExtractConfig};
 use crate::nu::bootstrap::persist_path_dir;
 use crate::util::fs_safety::assert_not_symlink;
+use crate::util::output::println;
 
 const USER_AGENT: &str = "numan-cli (https://github.com/tonythethompson/numan)";
 
