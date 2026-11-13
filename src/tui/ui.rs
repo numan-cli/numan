@@ -115,14 +115,15 @@ fn push_chip(
     label: String,
     style: Style,
 ) -> Option<Rect> {
-    let w = label.chars().count() as u16;
+    let span = Span::styled(label, style);
+    let w = span.width() as u16;
     if cursor_x.saturating_add(w) > max_x {
-        spans.push(Span::styled(label, style));
+        spans.push(span);
         *cursor_x = cursor_x.saturating_add(w);
         return None;
     }
     let rect = Rect::new(*cursor_x, y, w, 1);
-    spans.push(Span::styled(label, style));
+    spans.push(span);
     *cursor_x = cursor_x.saturating_add(w);
     Some(rect)
 }
@@ -1112,9 +1113,7 @@ fn render_overlay(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 .min(max_scroll);
             let scroll_u16 = field_scroll.min(u32::from(u16::MAX)) as u16;
             frame.render_widget(
-                Paragraph::new(Text::from(lines))
-                    .wrap(Wrap { trim: false })
-                    .scroll((scroll_u16, 0)),
+                Paragraph::new(Text::from(lines)).scroll((scroll_u16, 0)),
                 parts[0],
             );
 

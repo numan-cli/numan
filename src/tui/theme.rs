@@ -86,7 +86,7 @@ pub fn status_tone(status: &str) -> Tone {
         Tone::Warn
     } else if matches!(
         lower.as_str(),
-        "incompatible" | "error" | "blocked" | "missing" | "corrupt" | "none"
+        "incompatible" | "error" | "blocked" | "missing" | "corrupt"
     ) || lower.contains("error")
         || lower.contains("fail")
     {
@@ -178,25 +178,6 @@ pub fn ok() -> Style {
     }
 }
 
-/// Risk-tier styling for command badges. Tier is also printed as text, so
-/// color is a redundant cue, never the only signal.
-pub fn tier(tier: &str) -> Style {
-    if no_color() {
-        return Style::default();
-    }
-    if tier.contains("Destructive") {
-        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-    } else if tier.contains("External") {
-        Style::default().fg(Color::Magenta)
-    } else if tier.contains("Network") {
-        Style::default().fg(Color::Yellow)
-    } else if tier.contains("ReadOnly") {
-        Style::default().fg(Color::Green)
-    } else {
-        Style::default().fg(Color::Cyan)
-    }
-}
-
 pub fn cursor() -> Style {
     Style::default().add_modifier(Modifier::REVERSED)
 }
@@ -221,16 +202,6 @@ pub fn status(text: &str) -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn tier_styles_distinguish_destructive_from_read_only() {
-        if no_color() {
-            return; // color cues are disabled; text labels carry the tier
-        }
-        assert_ne!(tier("Destructive"), tier("ReadOnly"));
-        assert_ne!(tier("Destructive"), tier("RootMutation+Network"));
-        assert_eq!(tier("ReadOnly"), tier("ReadOnly"));
-    }
 
     #[test]
     fn status_styles_flag_failures() {

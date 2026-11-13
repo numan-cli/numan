@@ -1049,7 +1049,20 @@ impl App {
                             "--check".into(),
                         ]),
                     });
-                    if self.available_actions(row).contains(&Action::Deactivate) {
+                    let nu = self
+                        .data
+                        .as_ref()
+                        .and_then(|d| d.nu_valid.then_some(d.nu.as_ref()).flatten());
+                    let row_stub = Row {
+                        id: row.id.clone(),
+                        version: entry.version.clone(),
+                        kind: entry.package_type.clone(),
+                        state: operations::activation(entry, nu).into(),
+                        registry: row.registry.clone(),
+                        details: String::new(),
+                    };
+                    let acts = self.installed_actions(&row_stub, entry);
+                    if acts.contains(&Action::Deactivate) {
                         items.push(LauncherItem {
                             label: format!("Deactivate {}", row.id),
                             sub: "Selected package: review deactivation".into(),
@@ -1063,7 +1076,7 @@ impl App {
                                 None,
                             ),
                         });
-                    } else if operations::is_entry_activatable(entry) && row.state != "active" {
+                    } else if acts.contains(&Action::Activate) {
                         items.push(LauncherItem {
                             label: format!("Activate {}", row.id),
                             sub: "Selected package: review activation".into(),
@@ -1804,8 +1817,9 @@ impl App {
                 include_incompatible,
             } => {
                 self.navigate(view);
-                if include_incompatible && view == View::Discover {
-                    self.show_all = true;
+                if view == View::Discover {
+                    self.type_filter = TypeFilter::All;
+                    self.show_all = include_incompatible;
                 }
                 if let Some(target_id) = select_id {
                     if let Some(idx) = self.rows().iter().position(|r| r.id == target_id) {
@@ -2614,6 +2628,12 @@ impl App {
                                 }
                                 ModalClick::FieldRow(idx) => {
                                     if let Overlay::CommandForm(mut form) = overlay {
+                                        if let Some(EditTarget::Field(index)) = form.editing {
+                                            if let Some(field) = form.fields.get_mut(index) {
+                                                field.value = form.edit_buffer.clone();
+                                            }
+                                            form.error = None;
+                                        }
                                         form.editing = None;
                                         form.selected = *idx;
                                         return self.execute_form_row(form);

@@ -243,7 +243,7 @@ fn inventory(path: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
             let path = entry.unwrap().path();
             if path.is_dir() {
                 files.extend(inventory(&path));
-            } else {
+            } else if path.file_name().and_then(|n| n.to_str()) != Some("mutation.lock") {
                 files.insert(path.clone(), std::fs::read(path).unwrap());
             }
         }
@@ -1176,26 +1176,26 @@ fn snapshot_and_overlay_cli_capture_preserves_unredacted_uuids() {
         None,
     )
     .unwrap();
-    let uuid = snap.id.clone();
+    let snapshot_id = snap.id;
 
     let listed = quiet(|| {
         operations::execute_read_only(fixture.root(), &["snapshot".into(), "list".into()])
     })
     .unwrap();
     assert!(
-        listed.contains(&uuid),
-        "snapshot list must preserve full UUIDv7 '{uuid}', got:\n{listed}"
+        listed.contains(&snapshot_id),
+        "snapshot list must preserve full UUIDv7 identifier"
     );
     assert!(!listed.contains("[redacted UUID]"));
 
     let inspected = quiet(|| {
         operations::execute_read_only(
             fixture.root(),
-            &["snapshot".into(), "inspect".into(), uuid.clone()],
+            &["snapshot".into(), "inspect".into(), snapshot_id.clone()],
         )
     })
     .unwrap();
-    assert!(inspected.contains(&uuid));
+    assert!(inspected.contains(&snapshot_id));
 
     let overlay_use = quiet(|| {
         operations::execute_cli(

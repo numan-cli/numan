@@ -65,12 +65,13 @@ pub fn download(received: u64, total: Option<u64>) {
 }
 
 pub(crate) fn line(args: fmt::Arguments<'_>, error: bool) {
-    let text = redact_uuids(&args.to_string());
+    let raw = args.to_string();
     TEE.with(|stack| {
         for frame in stack.borrow_mut().iter_mut() {
-            frame.push(text.clone());
+            frame.push(raw.clone());
         }
     });
+    let text = redact_uuids(&raw);
     SINK.with(|slot| {
         if let Some(sink) = slot.borrow().as_ref() {
             sink(OutputEvent::Message { text, error });
@@ -180,21 +181,24 @@ mod tests {
                     line(format_args!("second line"), true);
                 });
                 assert_eq!(captured, vec!["first line", "second line"]);
+                let pre_depth = TEE.with(|stack| stack.borrow().len());
                 let _ = std::panic::catch_unwind(|| {
                     let _ = tee_messages(|| {
                         line(format_args!("before panic"), false);
                         panic!("tee unwind");
                     });
                 });
+                assert_eq!(TEE.with(|stack| stack.borrow().len()), pre_depth);
+                let sample_id = "0195b8c0-1234-7abc-8def-0123456789ab";
                 let (_, after) = tee_messages(|| {
-                    line(format_args!("clean after unwind"), false);
+                    line(format_args!("clean after unwind {sample_id}"), false);
                 });
-                assert_eq!(after, vec!["clean after unwind"]);
+                assert_eq!(after, vec![format!("clean after unwind {sample_id}")]);
             },
         );
         let all = forwarded.lock().unwrap();
         assert!(all.contains(&"first line".to_string()));
         assert!(all.contains(&"second line".to_string()));
-        assert!(all.contains(&"clean after unwind".to_string()));
+        assert!(all.contains(&"clean after unwind [redacted UUID]".to_string()));
     }
 }

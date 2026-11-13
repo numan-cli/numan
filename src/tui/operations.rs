@@ -197,7 +197,13 @@ pub fn load(root: &Path) -> Result<Data> {
         }
     }
     catalog.sort_by_key(|item| (item.package.id.to_string(), item.registry.clone()));
-    let mut snapshots = crate::state::snapshot::list_snapshots(root).unwrap_or_default();
+    let mut snapshots = match crate::state::snapshot::list_snapshots(root) {
+        Ok(list) => list,
+        Err(error) => {
+            warnings.push(format!("Snapshots: {error:#}"));
+            Vec::new()
+        }
+    };
     snapshots.reverse();
     let managed_autoload_file = nu
         .as_ref()
@@ -374,45 +380,44 @@ fn ensure_no_pending(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Excludes the lock file itself, downloads and snapshots. These are not review inputs.
-fn fingerprint(root: &Path) -> Result<String> {
-    fn hash_path(path: &Path, hash: &mut Sha256) -> Result<()> {
-        hash.update(path.to_string_lossy().as_bytes());
-        let metadata = match path.symlink_metadata() {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                hash.update(b"missing");
-                return Ok(());
-            }
-            Err(error) => return Err(error.into()),
-        };
-        if metadata.file_type().is_symlink() {
-            bail!("Refusing linked review input: {}", path.display());
+fn hash_review_path(path: &Path, hash: &mut Sha256) -> Result<()> {
+    hash.update(path.to_string_lossy().as_bytes());
+    let metadata = match path.symlink_metadata() {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            hash.update(b"missing");
+            return Ok(());
         }
-        if path.is_dir() {
-            let mut children: Vec<PathBuf> = std::fs::read_dir(path)?
-                .map(|e| e.map(|e| e.path()))
-                .collect::<std::io::Result<_>>()?;
-            children.sort();
-            for child in children {
-                hash_path(&child, hash)?;
-            }
-        } else {
-            let bytes = std::fs::read(path)?;
-            hash.update((bytes.len() as u64).to_le_bytes());
-            hash.update(bytes);
-        }
-        Ok(())
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() {
+        bail!("Refusing linked review input: {}", path.display());
     }
+    if path.is_dir() {
+        let mut children: Vec<PathBuf> = std::fs::read_dir(path)?
+            .map(|e| e.map(|e| e.path()))
+            .collect::<std::io::Result<_>>()?;
+        children.sort();
+        for child in children {
+            hash_review_path(&child, hash)?;
+        }
+    } else {
+        let bytes = std::fs::read(path)?;
+        hash.update((bytes.len() as u64).to_le_bytes());
+        hash.update(bytes);
+    }
+    Ok(())
+}
+
+fn fingerprint_non_lockfile(root: &Path) -> Result<String> {
     let mut hash = Sha256::new();
     for name in [
-        "lockfile",
         "config.toml",
         "nu_state",
         "registry",
         "state/activation-profile.json",
     ] {
-        hash_path(&root.join(name), &mut hash)?;
+        hash_review_path(&root.join(name), &mut hash)?;
     }
     for name in [
         "NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION",
@@ -421,6 +426,14 @@ fn fingerprint(root: &Path) -> Result<String> {
         hash.update(name.as_bytes());
         hash.update(std::env::var(name).unwrap_or_default().as_bytes());
     }
+    Ok(hex::encode(hash.finalize()))
+}
+
+/// Excludes the lock file itself, downloads and snapshots. These are not review inputs.
+fn fingerprint(root: &Path) -> Result<String> {
+    let mut hash = Sha256::new();
+    hash_review_path(&root.join("lockfile"), &mut hash)?;
+    hash.update(fingerprint_non_lockfile(root)?.as_bytes());
     Ok(hex::encode(hash.finalize()))
 }
 
@@ -709,18 +722,27 @@ pub fn prepare_batch_update(root: &Path) -> Result<Review> {
             .iter()
             .find(|item| item.registry == reg_name && item.package.id.to_string() == *id)
         else {
+            skipped.push(format!("{id} (missing from cached registry '{reg_name}')"));
             continue;
         };
-        let Ok(selected) = resolver.resolve(&item.package) else {
-            continue;
+        let selected = match resolver.resolve(&item.package) {
+            Ok(selected) => selected,
+            Err(error) => {
+                skipped.push(format!("{id} (no compatible version: {error})"));
+                continue;
+            }
         };
         let Ok(current) = entry.version.parse::<semver::Version>() else {
+            skipped.push(format!(
+                "{id} (invalid installed version '{}')",
+                entry.version
+            ));
             continue;
         };
         if selected.version <= current {
             continue;
         }
-        let digest = if selected.artifact.kind == "binary" {
+        let (url, digest) = if selected.artifact.kind == "binary" {
             let Some(artifact) = selected.artifact.targets.get(&platform.triple) else {
                 skipped.push(format!("{id} (no artifact for platform)"));
                 continue;
@@ -729,38 +751,66 @@ pub fn prepare_batch_update(root: &Path) -> Result<Review> {
                 skipped.push(format!("{id} (missing artifact URL)"));
                 continue;
             }
-            artifact.sha256.as_str()
+            (artifact.url.as_str(), artifact.sha256.as_str())
         } else {
             let Some(url) = selected.artifact.url.as_deref() else {
                 skipped.push(format!("{id} (needs CLI archive target)"));
                 continue;
             };
-            let _ = url;
+            if url.is_empty() {
+                skipped.push(format!("{id} (missing artifact URL)"));
+                continue;
+            }
             let Some(sha) = selected.artifact.sha256.as_deref() else {
                 skipped.push(format!("{id} (missing artifact SHA256)"));
                 continue;
             };
-            sha
+            (url, sha)
         };
         if digest.len() != 64 || !digest.bytes().all(|c| c.is_ascii_hexdigit()) {
             skipped.push(format!("{id} (invalid artifact SHA256)"));
             continue;
         }
-        let active = has_any_activation(entry);
-        if active && (entry.package_type != "plugin" || !opt_in) {
-            let why = if entry.package_type == "plugin" {
-                "active plugin: set NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 or deactivate first"
-            } else {
-                "active autoload package: deactivate first"
-            };
-            skipped.push(format!("{id} ({why})"));
+        if entry.hook_activation.is_some() {
+            skipped.push(format!(
+                "{id} (active hooks: run `numan hook disable {id}`)"
+            ));
             continue;
+        }
+        if let Err(error) =
+            crate::state::overlay_state::OverlayState::ensure_package_mutable(root, id)
+        {
+            skipped.push(format!("{id} ({error})"));
+            continue;
+        }
+        let active = has_any_activation(entry);
+        if active {
+            if entry.package_type != "plugin" {
+                skipped.push(format!("{id} (active autoload package: deactivate first)"));
+                continue;
+            }
+            if !opt_in {
+                skipped.push(format!(
+                    "{id} (active plugin: set NUMAN_ENABLE_ACTIVE_PLUGIN_MUTATION=1 or deactivate first)"
+                ));
+                continue;
+            }
+            if activation(entry, data.nu.as_ref()) != "active" {
+                skipped.push(format!("{id} (active plugin belongs to another Nu)"));
+                continue;
+            }
         }
         let next_ver = selected.version.to_string();
         effects.push(format!(
-            "Update {id}: {} -> {next_ver} (from {}, SHA256: {digest})",
+            "Update {id}: {} -> {next_ver} (from {}, URL: {url}, SHA256: {digest})",
             entry.version, item.registry
         ));
+        if active {
+            effects.push(
+                "  Active plugin: deactivate, replace, reactivate through existing lifecycle gate."
+                    .into(),
+            );
+        }
         if selected.is_provisional() {
             effects.push(format!(
                 "  NOT lifecycle tested ({id}): {}",
@@ -892,18 +942,25 @@ pub(super) fn execute_with_lifecycle(
             update::execute_reviewed(&args, root, &hooks, &validate)?;
         }
         Action::BatchUpdate => {
+            let expected_non_lockfile = fingerprint_non_lockfile(root)?;
             let hooks = update::UpdateHooks {
                 lifecycle: &plugin_lifecycle::CommandPluginLifecycle,
                 install: None,
             };
             for (idx, (id, from_ver, _)) in review.targets.iter().enumerate() {
-                let args = update::UpdateArgs::try_parse_from(["update", id, "--verbose"])?;
+                let args =
+                    update::UpdateArgs::try_parse_from(["update", id, "--no-sync", "--verbose"])?;
                 if idx == 0 {
                     update::execute_reviewed(&args, root, &hooks, &validate)?;
                 } else {
                     let item_validate = || -> Result<()> {
                         ensure_no_pending(root)?;
                         NuPaths::load(root)?.validate_drift()?;
+                        if fingerprint_non_lockfile(root)? != expected_non_lockfile {
+                            bail!(
+                                "State changed since review. Reload and confirm remaining updates."
+                            );
+                        }
                         let lockfile = Lockfile::load(root)?;
                         let actual = lockfile
                             .packages
@@ -1246,7 +1303,7 @@ pub fn execute_cli(root: &Path, argv: &[String]) -> Result<String> {
             }
             Some(Commands::Deactivate(args)) => {
                 ensure_no_pending(root)?;
-                crate::cmd::deactivate::execute(&args, root)?;
+                crate::cmd::deactivate::execute_reviewed(&args, root, &|| ensure_no_pending(root))?;
                 Ok(None)
             }
             Some(Commands::Hook(cmd)) => {
@@ -1284,7 +1341,13 @@ pub fn execute_cli(root: &Path, argv: &[String]) -> Result<String> {
                 if !args.dry_run {
                     ensure_no_pending(root)?;
                 }
-                crate::cmd::migrate::execute(&args, root, &mut out)?;
+                if let Err(err) = crate::cmd::migrate::execute(&args, root, &mut out) {
+                    let text = String::from_utf8_lossy(&out).trim_end().to_string();
+                    if text.is_empty() {
+                        return Err(err);
+                    }
+                    bail!("{err:#}\n{text}");
+                }
                 Ok(None)
             }
             Some(Commands::Completions(args)) => {

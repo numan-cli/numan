@@ -20,19 +20,26 @@ pub struct GcArgs {
 
 pub fn execute(args: &GcArgs, root: &Path) -> Result<()> {
     if let Some(journal) = check_stale_journal(root)? {
-        eprintln!(
-            "Note: Cleaning up after interrupted '{}' operation on '{}'.",
-            match journal.op {
-                crate::state::lifecycle_journal::LifecycleOp::Update => "update",
-                crate::state::lifecycle_journal::LifecycleOp::Remove => "remove",
-                crate::state::lifecycle_journal::LifecycleOp::NupmImport => "nupm import",
-                crate::state::lifecycle_journal::LifecycleOp::NupmImportManifest => {
-                    "nupm manifest import"
-                }
-                crate::state::lifecycle_journal::LifecycleOp::Rollback => "snapshot rollback",
-            },
-            journal.package_id
-        );
+        let op_name = match journal.op {
+            crate::state::lifecycle_journal::LifecycleOp::Update => "update",
+            crate::state::lifecycle_journal::LifecycleOp::Remove => "remove",
+            crate::state::lifecycle_journal::LifecycleOp::NupmImport => "nupm import",
+            crate::state::lifecycle_journal::LifecycleOp::NupmImportManifest => {
+                "nupm manifest import"
+            }
+            crate::state::lifecycle_journal::LifecycleOp::Rollback => "snapshot rollback",
+        };
+        if args.dry_run {
+            eprintln!(
+                "Note: Found interrupted '{op_name}' operation on '{}' (dry-run; journal preserved).",
+                journal.package_id
+            );
+        } else {
+            eprintln!(
+                "Note: Cleaning up after interrupted '{op_name}' operation on '{}'.",
+                journal.package_id
+            );
+        }
     }
 
     let _lock = if args.dry_run {
