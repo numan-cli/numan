@@ -1713,6 +1713,48 @@ impl App {
         }
     }
 
+    // Commit edits identically for keyboard and mouse row activation.
+    // A failed preview keeps the editor and its buffer intact.
+    fn commit_form_edit(&self, form: &mut CommandForm) -> bool {
+        let Some(target) = form.editing else {
+            return true;
+        };
+        match target {
+            EditTarget::Field(index) => {
+                if let Some(field) = form.fields.get_mut(index) {
+                    field.value = form.edit_buffer.clone();
+                }
+                form.editing = None;
+                form.error = None;
+            }
+            EditTarget::Preview => match catalog::validate_preview(&self.root, &form.edit_buffer) {
+                Ok((found, rest)) => {
+                    let display = found.display.clone();
+                    let fields = catalog::fields_from_argv(&found, &rest)
+                        .into_iter()
+                        .filter(|field| !field.spec.hidden)
+                        .collect();
+                    let notice =
+                        "Preview valid. Rebuilt form from the edited command; review invalidated.";
+                    *form = CommandForm {
+                        display,
+                        fields,
+                        selected: 0,
+                        editing: None,
+                        edit_buffer: String::new(),
+                        edit_cursor: 0,
+                        error: None,
+                        notice: Some(notice.into()),
+                    };
+                }
+                Err(error) => {
+                    form.error = Some(error);
+                }
+            },
+        }
+        form.editing.is_none()
+    }
+
     fn execute_form_row(&mut self, mut form: Box<CommandForm>) -> Option<Command> {
         if form.selected == form.fields.len() + 1 {
             match catalog::execution_mode(&form.display, &form.fields) {
@@ -2100,7 +2142,7 @@ impl App {
                 }
 
                 Overlay::CommandForm(mut form) => {
-                    if let Some(target) = form.editing {
+                    if form.editing.is_some() {
                         let len = form.edit_buffer.chars().count();
                         form.edit_cursor = form.edit_cursor.min(len);
                         match key.code {
@@ -2121,45 +2163,9 @@ impl App {
                             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 insert_char_at(&mut form.edit_buffer, &mut form.edit_cursor, c);
                             }
-                            KeyCode::Enter => match target {
-                                EditTarget::Field(index) => {
-                                    if let Some(field) = form.fields.get_mut(index) {
-                                        field.value = form.edit_buffer.clone();
-                                    }
-                                    form.editing = None;
-                                    form.error = None;
-                                }
-                                EditTarget::Preview => {
-                                    match catalog::validate_preview(
-                                        &self.root.clone(),
-                                        &form.edit_buffer.clone(),
-                                    ) {
-                                        Ok((found, rest)) => {
-                                            let display = found.display.clone();
-                                            let fields = catalog::fields_from_argv(&found, &rest)
-                                                .into_iter()
-                                                .filter(|field| !field.spec.hidden)
-                                                .collect();
-                                            form = Box::new(CommandForm {
-                                                display,
-                                                fields,
-                                                selected: 0,
-                                                editing: None,
-                                                edit_buffer: String::new(),
-                                                edit_cursor: 0,
-                                                error: None,
-                                                notice: Some(
-                                                    "Preview valid. Rebuilt form from the edited command; review invalidated."
-                                                        .into(),
-                                                ),
-                                            });
-                                        }
-                                        Err(error) => {
-                                            form.error = Some(error);
-                                        }
-                                    }
-                                }
-                            },
+                            KeyCode::Enter => {
+                                self.commit_form_edit(&mut form);
+                            }
                             _ => {}
                         }
                         self.overlay = Some(Overlay::CommandForm(form));
@@ -2628,14 +2634,17 @@ impl App {
                                 }
                                 ModalClick::FieldRow(idx) => {
                                     if let Overlay::CommandForm(mut form) = overlay {
-                                        if let Some(EditTarget::Field(index)) = form.editing {
-                                            if let Some(field) = form.fields.get_mut(index) {
-                                                field.value = form.edit_buffer.clone();
-                                            }
-                                            form.error = None;
+                                        let old_field_count = form.fields.len();
+                                        if !self.commit_form_edit(&mut form) {
+                                            self.overlay = Some(Overlay::CommandForm(form));
+                                            return None;
                                         }
-                                        form.editing = None;
-                                        form.selected = *idx;
+                                        // Preview edits can change the command's field count.
+                                        form.selected = if *idx >= old_field_count {
+                                            form.fields.len() + (*idx - old_field_count).min(1)
+                                        } else {
+                                            (*idx).min(form.fields.len())
+                                        };
                                         return self.execute_form_row(form);
                                     }
                                     self.overlay = Some(overlay);

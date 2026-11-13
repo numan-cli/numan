@@ -1012,6 +1012,7 @@ fn render_overlay(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 Constraint::Length(3),
             ])
             .split(inner);
+            let mut edited_row = None;
             let mut lines: Vec<Line<'static>> = form
                 .fields
                 .iter()
@@ -1032,7 +1033,20 @@ fn render_overlay(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                     ];
 
                     if editing {
+                        let before_cursor: String =
+                            form.edit_buffer.chars().take(form.edit_cursor).collect();
+                        let cursor_width = form
+                            .edit_buffer
+                            .chars()
+                            .nth(form.edit_cursor)
+                            .map(|c| Span::raw(c.to_string()).width())
+                            .unwrap_or(1)
+                            .max(1);
+                        let cursor_end = Line::from(spans.clone()).width()
+                            + Span::raw(before_cursor).width()
+                            + cursor_width;
                         spans.extend(render_cursor_spans("", &form.edit_buffer, form.edit_cursor));
+                        edited_row = Some((index, Line::from(spans.clone()), cursor_end));
                     } else if field.spec.kind == FieldKind::Bool {
                         spans.push(Span::raw(if field.enabled { "[x]" } else { "[ ]" }));
                     } else if !picker_opts.is_empty() {
@@ -1116,6 +1130,23 @@ fn render_overlay(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 Paragraph::new(Text::from(lines)).scroll((scroll_u16, 0)),
                 parts[0],
             );
+
+            if let Some((index, line, cursor_end)) = edited_row {
+                let row = index as u32 * 2;
+                if row >= field_scroll && row - field_scroll < u32::from(parts[0].height) {
+                    let horizontal_scroll = cursor_end.saturating_sub(usize::from(parts[0].width));
+                    frame.render_widget(
+                        Paragraph::new(line)
+                            .scroll((0, horizontal_scroll.min(u16::MAX as usize) as u16)),
+                        Rect::new(
+                            parts[0].x,
+                            parts[0].y + (row - field_scroll) as u16,
+                            parts[0].width,
+                            1,
+                        ),
+                    );
+                }
+            }
 
             // Record visible clickable rects for field/preview/execute rows.
             for idx in 0..=form.fields.len() + 1 {

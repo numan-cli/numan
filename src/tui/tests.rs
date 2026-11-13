@@ -1878,3 +1878,102 @@ fn responsive_layout_mouse_hits_spinner_gauge_and_ascii_borders() {
     assert_eq!(ascii.horizontal_top, "-");
     assert_eq!(ascii.top_left, "+");
 }
+
+#[test]
+fn form_mouse_validates_preview_before_dispatching_rebuilt_command() {
+    use super::app::{EditTarget, ModalClick};
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::new(dir.path());
+    let mut terminal = Terminal::new(TestBackend::new(100, 35)).unwrap();
+    app.open_command_form("list");
+    let Some(Overlay::CommandForm(form)) = &app.overlay else {
+        unreachable!()
+    };
+    let valid_preview = app.command_preview(form);
+    for (preview, valid) in [
+        (format!("{valid_preview}; bad"), false),
+        (valid_preview, true),
+    ] {
+        app.open_command_form("info");
+        if let Some(Overlay::CommandForm(form)) = &mut app.overlay {
+            form.selected = form.fields.len();
+            form.editing = Some(EditTarget::Preview);
+            form.edit_buffer = preview.clone();
+            form.edit_cursor = preview.chars().count();
+        }
+        terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+        let execute = match &app.overlay {
+            Some(Overlay::CommandForm(form)) => form.fields.len() + 1,
+            _ => unreachable!(),
+        };
+        let rect = app
+            .regions
+            .modal_buttons
+            .iter()
+            .find_map(|(rect, click)| {
+                matches!(click, ModalClick::FieldRow(index) if *index == execute).then_some(*rect)
+            })
+            .unwrap();
+        let command = app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        if valid {
+            assert!(matches!(command, Some(Command::ExecuteCli(argv)) if argv == vec!["list"]));
+            assert!(app.overlay.is_none());
+        } else {
+            assert!(command.is_none());
+            let Some(Overlay::CommandForm(form)) = &app.overlay else {
+                panic!("editor lost");
+            };
+            assert_eq!(form.editing, Some(EditTarget::Preview));
+            assert_eq!(form.edit_buffer, preview);
+            assert!(form.error.is_some());
+        }
+    }
+}
+
+#[test]
+fn form_field_cursor_scrolls_without_moving_hit_targets() {
+    use super::app::{EditTarget, ModalClick};
+    use ratatui::style::Modifier;
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::new(dir.path());
+    app.open_command_form("info");
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    let targets = app.regions.modal_buttons.clone();
+    for cursor in [160, 0, 80, 159] {
+        if let Some(Overlay::CommandForm(form)) = &mut app.overlay {
+            form.editing = Some(EditTarget::Field(0));
+            form.edit_buffer = "界".repeat(160);
+            form.edit_cursor = cursor;
+        }
+        terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+        let rect = app
+            .regions
+            .modal_buttons
+            .iter()
+            .find_map(|(rect, click)| matches!(click, ModalClick::FieldRow(0)).then_some(*rect))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!(
+            (rect.x..rect.x + rect.width).any(|x| {
+                let cell = &buffer[(x, rect.y)];
+                cell.modifier.contains(Modifier::REVERSED)
+                    && cell.symbol() == if cursor == 160 { " " } else { "界" }
+            }),
+            "cursor {cursor} hidden"
+        );
+        assert_eq!(
+            app.regions
+                .modal_buttons
+                .iter()
+                .map(|(r, _)| *r)
+                .collect::<Vec<_>>(),
+            targets.iter().map(|(r, _)| *r).collect::<Vec<_>>()
+        );
+    }
+}
